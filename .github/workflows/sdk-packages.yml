@@ -144,6 +144,10 @@ jobs:
       id-token: write
       contents: read
     environment: rubygems
+    # owner-binding input is not yet published in rubygems/* actions
+    # (all releases lack `owner`); first push done manually, this job
+    # stays fail-soft until an action release supports owner.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
