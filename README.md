@@ -142,3 +142,28 @@ gofmt -w . && go vet ./...
 ```
 
 Protocol details: [PROTOCOL.md](PROTOCOL.md).
+
+## Billing (PayPal + Stripe)
+
+Self-hosted payments for paid tiers, zero third-party Go dependencies:
+
+- **User site**: `https://<domain>/pricing` — pick a plan, pay by card
+  (Stripe Checkout) or PayPal; the API key is shown on success
+- **Providers are enabled purely by environment variables** (empty = off):
+
+```sh
+STRIPE_SECRET_KEY=sk_live_...        # from https://dashboard.stripe.com/apikeys
+STRIPE_WEBHOOK_SECRET=whsec_...      # webhook endpoint: https://<domain>/webhooks/stripe
+PAYPAL_CLIENT_ID=...                 # from https://developer.paypal.com (app credentials)
+PAYPAL_SECRET=...
+PAYPAL_ENV=sandbox                   # or live
+PAYPAL_WEBHOOK_ID=...                # webhook URL: https://<domain>/webhooks/paypal
+TIER_STARTER_PRICE_CENTS=300         # optional overrides (default starter=$3, pro=$9)
+TIER_PRO_PRICE_CENTS=900
+```
+
+- Activation: first payment mints the account + API key for the email;
+  renewals/upgrades keep the same key and change the tier
+- Admin: `/stats` reports `billing: {stripe, paypal}` enablement
+- Webhook signature verification: Stripe HMAC-SHA256 (tolerance 5m),
+  PayPal via the verify-webhook-signature API

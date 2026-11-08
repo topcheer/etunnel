@@ -1,0 +1,600 @@
+package server
+
+// Billing: PayPal + Stripe integration, zero third-party dependencies.
+//
+// User site:  GET  /pricing                      - plan picker (email + pay)
+//             POST /api/billing/checkout         - create a payment session
+//             GET  /billing/success              - post-pay landing (shows key)
+// Webhooks:   POST /webhooks/stripe              - signature-verified activation
+//             POST /webhooks/paypal              - verified backup activation
+// Admin:      payment status folded into /stats.
+//
+// Activation = AccountStore.Create/SetTier(email, tier): the API key is the
+// product; first purchase mints it, renewals keep it and bump the tier.
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// BillingConfig holds provider credentials; empty fields disable a provider.
+type BillingConfig struct {
+	StripeSecretKey     string // sk_live_... / sk_test_...
+	StripeWebhookSecret string // whsec_...
+	PayPalClientID      string
+	PayPalSecret        string
+	PayPalEnv           string // "live" or "sandbox" (default live)
+	PayPalWebhookID     string // for webhook verification
+	PublicBaseURL       string // e.g. https://t.example.com (defaults to https://<Domain>)
+}
+
+func billingFromEnv(domain string) BillingConfig {
+	base := os.Getenv("ETUNNEL_PUBLIC_URL")
+	if base == "" {
+		base = "https://" + domain
+	}
+	return BillingConfig{
+		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		PayPalClientID:      os.Getenv("PAYPAL_CLIENT_ID"),
+		PayPalSecret:        os.Getenv("PAYPAL_SECRET"),
+		PayPalEnv:           os.Getenv("PAYPAL_ENV"),
+		PayPalWebhookID:     os.Getenv("PAYPAL_WEBHOOK_ID"),
+		PublicBaseURL:       base,
+	}
+}
+
+// tierPrice is the monthly price in cents for purchasable tiers.
+// Overridable via TIER_<ID>_PRICE_CENTS env (e.g. TIER_PRO_PRICE_CENTS=900).
+func (s *Server) tierPriceCents(tierID string) (int64, bool) {
+	if v := os.Getenv("TIER_" + strings.ToUpper(tierID) + "_PRICE_CENTS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil && n > 0 {
+			return n, true
+		}
+	}
+	builtin := map[string]int64{"starter": 300, "pro": 900}
+	n, ok := builtin[tierID]
+	return n, ok
+}
+
+// --------------------------------------------------------------------------
+// routes
+
+func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
+	type row struct {
+		ID, Name, Price string
+		TTL             string
+		Custom          int
+		BandwidthMbps   int
+		Buyable         bool
+	}
+	var rows []row
+	ids := make([]string, 0, len(s.cfg.Tiers))
+	for id := range s.cfg.Tiers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		t := s.cfg.Tiers[id]
+		cents, buyable := s.tierPriceCents(id)
+		p := ""
+		if buyable {
+			p = fmt.Sprintf("$%d.%02d/mo", cents/100, cents%100)
+		}
+		rows = append(rows, row{ID: id, Name: t.Name, Price: p,
+			TTL: t.TTL.String(), Custom: t.CustomDomains,
+			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
+	}
+	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
+<title>{{.Domain}} — pricing</title>
+<style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:820px;margin:2rem auto;padding:0 1rem}
+table{border-collapse:collapse;width:100%;margin:1.5rem 0}
+th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
+.buy{background:#238636;color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;font-size:1rem;cursor:pointer}
+input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:.5rem;width:16rem}
+.paypal{background:#ffc439;color:#111}label{display:block;margin:.6rem 0 .2rem;color:#8b949e}
+#msg{margin-top:1rem;min-height:1.4rem}</style></head><body>
+<h1>{{.Domain}} — plans</h1>
+<p>Pay once, get an API key instantly. Manage tunnels with it (custom subdomains, longer TTL).</p>
+<label for="email">Email (your account identity)</label>
+<input id="email" type="email" placeholder="you@example.com" autocomplete="email">
+<table><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
+{{range .Rows}}{{if .Buyable}}<tr><td><b>{{.Name}}</b></td><td>{{.TTL}}</td><td>{{.Custom}}</td>
+<td>{{.BandwidthMbps}} Mbps</td><td>{{.Price}}</td>
+<td><button class="buy" onclick="pay(this,'{{.ID}}','stripe')">Card</button>
+<button class="buy paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button></td></tr>{{end}}{{end}}
+</table>
+<div id="msg"></div>
+<script>
+async function pay(btn, tier, provider){
+  const email = document.getElementById('email').value.trim();
+  const msg = document.getElementById('msg');
+  if(!email || !email.includes('@')){ msg.textContent='Enter your email first.'; return; }
+  btn.disabled = true; msg.textContent = 'Creating payment...';
+  try {
+    const res = await fetch('/api/billing/checkout', {method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({email, tier, provider})});
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'checkout failed');
+    if(data.apiKey){ showKey(msg, data.apiKey); return; }
+    location.href = data.url;
+  } catch(e){ msg.textContent = e.message; btn.disabled = false; }
+}
+function showKey(el, key){
+  el.innerHTML = 'Paid! Your API key: <code>'+key+'</code><br>Use it as ETUNNEL_TOKEN. Keep it safe.';
+}
+</script></body></html>`
+	tpl := template.Must(template.New("p").Parse(pricingHTML))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = tpl.Execute(w, map[string]any{"Rows": rows, "Domain": s.cfg.Domain})
+}
+
+func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Email    string `json:"email"`
+		Tier     string `json:"tier"`
+		Provider string `json:"provider"` // "stripe" | "paypal"
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	tier, ok := s.cfg.Tiers[req.Tier]
+	if !ok {
+		http.Error(w, `{"error":"unknown tier"}`, http.StatusBadRequest)
+		return
+	}
+	if _, buyable := s.tierPriceCents(req.Tier); !buyable {
+		http.Error(w, `{"error":"tier not purchasable"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Email == "" || !strings.Contains(req.Email, "@") {
+		http.Error(w, `{"error":"valid email required"}`, http.StatusBadRequest)
+		return
+	}
+	cents, _ := s.tierPriceCents(req.Tier)
+	base := s.billing.PublicBaseURL
+
+	var (
+		payURL string
+		err    error
+	)
+	switch req.Provider {
+	case "stripe":
+		if s.billing.StripeSecretKey == "" {
+			http.Error(w, `{"error":"card payments not configured"}`, http.StatusServiceUnavailable)
+			return
+		}
+		payURL, err = s.stripeCheckout(base, req.Email, req.Tier, tier.Name, cents)
+	case "paypal":
+		if s.billing.PayPalClientID == "" {
+			http.Error(w, `{"error":"paypal not configured"}`, http.StatusServiceUnavailable)
+			return
+		}
+		payURL, err = s.paypalCreateOrder(base, req.Email, req.Tier, cents)
+	default:
+		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		s.logf("billing: %s checkout failed: %v", req.Provider, err)
+		http.Error(w, `{"error":"payment provider error"}`, http.StatusBadGateway)
+		return
+	}
+	_ = tier
+	writeJSON(w, http.StatusOK, map[string]string{"url": payURL})
+}
+
+// handleBillingSuccess is the Stripe success redirect target; it resolves the
+// session server-side and shows the API key.
+func (s *Server) handleBillingSuccess(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("session_id")
+	if sid == "" || s.billing.StripeSecretKey == "" {
+		http.Redirect(w, r, "/pricing", http.StatusSeeOther)
+		return
+	}
+	sess, err := s.stripeGetSession(sid)
+	if err != nil || sess["payment_status"] != "paid" {
+		s.logf("billing: success lookup failed: %v", err)
+		http.Error(w, "could not confirm payment; if you were charged, the webhook will activate your account", http.StatusAccepted)
+		return
+	}
+	email, _ := sess["customer_email"].(string)
+	meta, _ := sess["metadata"].(map[string]any)
+	tier, _ := meta["tier"].(string)
+	key, err := s.activate(email, tier)
+	if err != nil {
+		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
+<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>. Keep it safe.</p></body>`,
+		tier, email, key)
+}
+
+// handlePayPalReturn captures an approved order and activates.
+func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token") // PayPal order id
+	if token == "" || s.billing.PayPalClientID == "" {
+		http.Redirect(w, r, "/pricing", http.StatusSeeOther)
+		return
+	}
+	order, err := s.paypalCaptureOrder(token)
+	if err != nil {
+		s.logf("billing: paypal capture failed: %v", err)
+		http.Error(w, "capture failed; if you were charged, the webhook will activate your account", http.StatusAccepted)
+		return
+	}
+	email, tier := paypalOrderMeta(order)
+	key, err := s.activate(email, tier)
+	if err != nil {
+		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
+<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>.</p></body>`,
+		tier, email, key)
+}
+
+// activate creates or renews the account for email; returns the API key.
+func (s *Server) activate(email, tier string) (string, error) {
+	if email == "" || tier == "" {
+		return "", errors.New("missing email or tier in payment record")
+	}
+	if _, ok := s.cfg.Tiers[tier]; !ok {
+		return "", fmt.Errorf("unknown tier %q", tier)
+	}
+	if acct, ok := s.accounts.LookupEmail(email); ok {
+		acct.Tier = tier // renewal/upgrade, key unchanged
+		_ = s.accounts.saveLockedSafe()
+		return acct.APIKey, nil
+	}
+	acct, err := s.accounts.Create(email, tier)
+	if err != nil {
+		return "", err
+	}
+	return acct.APIKey, nil
+}
+
+// --------------------------------------------------------------------------
+// Stripe (REST, form-encoded)
+
+var stripeHTTP = &http.Client{Timeout: 20 * time.Second}
+
+func (s *Server) stripeReq(method, path string, form url.Values) (map[string]any, error) {
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequest(method, "https://api.stripe.com"+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(s.billing.StripeSecretKey, "")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := stripeHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		if e, ok := out["error"].(map[string]any); ok {
+			if msg, ok := e["message"].(string); ok {
+				return nil, errors.New(msg)
+			}
+		}
+		return nil, fmt.Errorf("stripe: %s", resp.Status)
+	}
+	return out, nil
+}
+
+func (s *Server) stripeCheckout(base, email, tier, tierName string, cents int64) (string, error) {
+	form := url.Values{}
+	form.Set("mode", "payment")
+	form.Set("success_url", base+"/billing/success?session_id={CHECKOUT_SESSION_ID}")
+	form.Set("cancel_url", base+"/pricing")
+	form.Set("customer_email", email)
+	form.Set("client_reference_id", email)
+	form.Set("line_items[0][quantity]", "1")
+	form.Set("line_items[0][price_data][currency]", "usd")
+	form.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(cents, 10))
+	form.Set("line_items[0][price_data][product_data][name]", "etunnel "+tierName+" (1 month)")
+	form.Set("metadata[tier]", tier)
+	form.Set("metadata[email]", email)
+	out, err := s.stripeReq("POST", "/v1/checkout/sessions", form)
+	if err != nil {
+		return "", err
+	}
+	u, _ := out["url"].(string)
+	if u == "" {
+		return "", errors.New("stripe: no checkout url")
+	}
+	return u, nil
+}
+
+func (s *Server) stripeGetSession(id string) (map[string]any, error) {
+	return s.stripeReq("GET", "/v1/checkout/sessions/"+url.PathEscape(id), nil)
+}
+
+// handleStripeWebhook verifies the v1 signature then activates on
+// checkout.session.completed.
+func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.billing.StripeWebhookSecret == "" {
+		http.Error(w, "not configured", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+	if !stripeVerifySignature(body, r.Header.Get("Stripe-Signature"), s.billing.StripeWebhookSecret, 5*time.Minute) {
+		http.Error(w, "bad signature", http.StatusBadRequest)
+		return
+	}
+	var ev struct {
+		Type string `json:"type"`
+		Data struct {
+			Object struct {
+				PaymentStatus string `json:"payment_status"`
+				Metadata      struct {
+					Email string `json:"email"`
+					Tier  string `json:"tier"`
+				} `json:"metadata"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	if ev.Type == "checkout.session.completed" && ev.Data.Object.PaymentStatus == "paid" {
+		if _, err := s.activate(ev.Data.Object.Metadata.Email, ev.Data.Object.Metadata.Tier); err != nil {
+			s.logf("billing: stripe webhook activation failed: %v", err)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// stripeVerifySignature checks "t=...,v1=..." HMAC over "t + . + body".
+func stripeVerifySignature(body []byte, header, secret string, tolerance time.Duration) bool {
+	var ts string
+	var sigs []string
+	for _, part := range strings.Split(header, ",") {
+		k, v, _ := strings.Cut(strings.TrimSpace(part), "=")
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			sigs = append(sigs, v)
+		}
+	}
+	if ts == "" || len(sigs) == 0 {
+		return false
+	}
+	secs, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return false
+	}
+	if time.Since(time.Unix(secs, 0)) > tolerance || time.Unix(secs, 0).After(time.Now().Add(tolerance)) {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := mac.Sum(nil)
+	for _, s := range sigs {
+		got, err := hexDecode(s)
+		if err != nil {
+			continue
+		}
+		if subtle.ConstantTimeCompare(got, want) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func hexDecode(s string) ([]byte, error) {
+	return hex.DecodeString(s)
+}
+
+// --------------------------------------------------------------------------
+// PayPal (Orders v2)
+
+var paypalHTTP = &http.Client{Timeout: 20 * time.Second}
+
+func (s *Server) paypalAPIBase() string {
+	if strings.EqualFold(s.billing.PayPalEnv, "sandbox") {
+		return "https://api-m.sandbox.paypal.com"
+	}
+	return "https://api-m.paypal.com"
+}
+
+var (
+	ppTokMu   sync.Mutex
+	ppTok     string
+	ppTokExp  time.Time
+	ppTokBase string
+)
+
+func (s *Server) paypalToken() (string, error) {
+	ppTokMu.Lock()
+	defer ppTokMu.Unlock()
+	base := s.paypalAPIBase()
+	if ppTok != "" && time.Now().Before(ppTokExp) && ppTokBase == base {
+		return ppTok, nil
+	}
+	form := url.Values{"grant_type": {"client_credentials"}}
+	req, _ := http.NewRequest("POST", base+"/v1/oauth2/token", strings.NewReader(form.Encode()))
+	req.SetBasicAuth(s.billing.PayPalClientID, s.billing.PayPalSecret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := paypalHTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.AccessToken == "" {
+		return "", fmt.Errorf("paypal auth failed (%s)", resp.Status)
+	}
+	ppTok, ppTokBase = out.AccessToken, base
+	ppTokExp = time.Now().Add(time.Duration(out.ExpiresIn-60) * time.Second)
+	return ppTok, nil
+}
+
+func (s *Server) paypalReq(method, path string, payload any) (map[string]any, error) {
+	var body io.Reader
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, s.paypalAPIBase()+path, body)
+	if err != nil {
+		return nil, err
+	}
+	tok, err := s.paypalToken()
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := paypalHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		if desc, _ := out["message"].(string); desc != "" {
+			return nil, errors.New(desc)
+		}
+		return nil, fmt.Errorf("paypal: %s", resp.Status)
+	}
+	return out, nil
+}
+
+func (s *Server) paypalCreateOrder(base, email, tier string, cents int64) (string, error) {
+	order, err := s.paypalReq("POST", "/v2/checkout/orders", map[string]any{
+		"intent": "CAPTURE",
+		"purchase_units": []map[string]any{{
+			"custom_id": email + ":" + tier,
+			"amount":    map[string]any{"currency_code": "USD", "value": fmt.Sprintf("%d.%02d", cents/100, cents%100)},
+		}},
+		"application_context": map[string]any{
+			"user_action": "PAY_NOW",
+			"return_url":  base + "/billing/paypal/return",
+			"cancel_url":  base + "/pricing",
+			"brand_name":  "etunnel " + s.cfg.Domain,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	links, _ := order["links"].([]any)
+	for _, l := range links {
+		m, _ := l.(map[string]any)
+		if m["rel"] == "approve" {
+			u, _ := m["href"].(string)
+			return u, nil
+		}
+	}
+	return "", errors.New("paypal: no approve link")
+}
+
+func (s *Server) paypalCaptureOrder(orderID string) (map[string]any, error) {
+	return s.paypalReq("POST", "/v2/checkout/orders/"+url.PathEscape(orderID)+"/capture", map[string]any{})
+}
+
+func paypalOrderMeta(order map[string]any) (email, tier string) {
+	units, _ := order["purchase_units"].([]any)
+	if len(units) == 0 {
+		return
+	}
+	m, _ := units[0].(map[string]any)
+	cid, _ := m["custom_id"].(string)
+	email, tier, _ = strings.Cut(cid, ":")
+	return
+}
+
+// handlePayPalWebhook verifies via the API and activates on PAYMENT.CAPTURE.COMPLETED.
+func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.billing.PayPalWebhookID == "" {
+		http.Error(w, "not configured", http.StatusServiceUnavailable)
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	verify, err := s.paypalReq("POST", "/v1/notifications/verify-webhook-signature", map[string]any{
+		"auth_algo":         r.Header.Get("PAYPAL-AUTH-ALGO"),
+		"cert_url":          r.Header.Get("PAYPAL-CERT-URL"),
+		"transmission_id":   r.Header.Get("PAYPAL-TRANSMISSION-ID"),
+		"transmission_sig":  r.Header.Get("PAYPAL-TRANSMISSION-SIG"),
+		"transmission_time": r.Header.Get("PAYPAL-TRANSMISSION-TIME"),
+		"webhook_id":        s.billing.PayPalWebhookID,
+		"webhook_event":     json.RawMessage(body),
+	})
+	if err != nil || verify["verification_status"] != "SUCCESS" {
+		s.logf("billing: paypal webhook verification failed: %v", err)
+		http.Error(w, "verification failed", http.StatusBadRequest)
+		return
+	}
+	var ev struct {
+		EventType string `json:"event_type"`
+		Resource  struct {
+			CustomID string `json:"custom_id"`
+		} `json:"resource"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	if ev.EventType == "PAYMENT.CAPTURE.COMPLETED" {
+		email, tier, _ := strings.Cut(ev.Resource.CustomID, ":")
+		if _, err := s.activate(email, tier); err != nil {
+			s.logf("billing: paypal webhook activation failed: %v", err)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// saveLockedSafe persists the store from an HTTP handler context.
+func (s *AccountStore) saveLockedSafe() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked()
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}

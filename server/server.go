@@ -29,6 +29,12 @@ type Server struct {
 	adminMux     *http.ServeMux
 	handler      http.Handler
 	adminHandler http.Handler
+	billing      BillingConfig
+}
+
+// logf emits a server log line (stdout + journald under systemd).
+func (s *Server) logf(format string, args ...any) {
+	fmt.Printf("etunneld: "+format+"\n", args...)
 }
 
 // New builds a Server from cfg.
@@ -51,9 +57,16 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc(cfg.WSPath, s.handleTunnelWS)
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/api/tiers", s.handleTiers)
+	mux.HandleFunc("/pricing", s.handlePricing)
+	mux.HandleFunc("/api/billing/checkout", s.handleBillingCheckout)
+	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
+	mux.HandleFunc("/billing/paypal/return", s.handlePayPalReturn)
+	mux.HandleFunc("/webhooks/stripe", s.handleStripeWebhook)
+	mux.HandleFunc("/webhooks/paypal", s.handlePayPalWebhook)
 	mux.HandleFunc("/", s.handleProxy)
 	s.handler = mux
 	s.buildAdmin()
+	s.billing = billingFromEnv(cfg.Domain)
 	return s, nil
 }
 
