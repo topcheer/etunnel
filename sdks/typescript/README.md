@@ -1,6 +1,6 @@
 # etunnel for TypeScript
 
-[![npm](https://img.shields.io/npm/v/etunnel-ts?label=npm%20etunnel-ts)](https://www.npmjs.com/package/etunnel-ts)
+[![npm](https://img.shields.io/npm/v/@easytunnel/et-sdk?label=npm%20%40easytunnel%2Fet-sdk)](https://www.npmjs.com/package/@easytunnel/et-sdk) (JS runtime for the same wire protocol)
 
 Same implementation as the Node SDK, with types.
 
@@ -11,7 +11,9 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-npm install etunnel-ts
+# etunnel-ts is source-only (not on npm yet):
+# copy etunnel.ts into your project, or use the published JS package
+npm install @easytunnel/et-sdk
 ```
 
 Node >= 22 (type stripping) or tsc.
@@ -19,7 +21,7 @@ Node >= 22 (type stripping) or tsc.
 ## CLI
 
 ```
-node node_modules/etunnel-ts/etunnel.ts 3000
+node etunnel.ts 3000
 ```
 
 Prints `TUNNEL_URL: https://<subdomain>.t.ggcode.uk` — that URL now routes to
@@ -28,7 +30,8 @@ your local service. Ctrl-C closes the tunnel.
 ## Embed
 
 ```ts
-import { connect } from 'etunnel-ts';
+// after copying etunnel.ts next to your code:
+import { connect } from './etunnel.ts';
 const t = await connect('wss://t.ggcode.uk/tunnel', 3000);
 console.log(t.url);
 ```

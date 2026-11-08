@@ -14,7 +14,7 @@ defer t.Close()
 
 - Zero dependencies outside the Go standard library.
 - Manifest: the module's root `go.mod` (`module etunnel`) — installed via
-  `go get github.com/topcheer/etunnel@v1.0.0` once the repo is tagged, served by proxy.golang.org.
+  `go get github.com/topcheer/etunnel@v1.0.2` once the repo is tagged, served by proxy.golang.org.
 - Distributed through the Go module proxy (git tags); no package upload step.
 - Race-detector-enabled integration tests live at the repo root
   (`integration_test.go`).

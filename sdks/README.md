@@ -13,7 +13,7 @@ buffer-based ports (webhook/dashboard friendly; use Go for WS upgrade).
 |---|----------|---------|---------|----------|
 | 0 | [Go](../sdk/) (canonical) | `github.com/topcheer/etunnel` | `go get github.com/topcheer/etunnel` | [Go proxy](https://pkg.go.dev/github.com/topcheer/etunnel) |
 | 1 | [Node.js](node/) | `@easytunnel/et-sdk` | `npm install @easytunnel/et-sdk` | [npm](https://www.npmjs.com/package/@easytunnel/et-sdk) |
-| 2 | [TypeScript](typescript/) | `etunnel-ts` | `npm install etunnel-ts` | [npm](https://www.npmjs.com/package/etunnel-ts) |
+| 2 | [TypeScript](typescript/) | source-only (`etunnel.ts`) | copy `etunnel.ts`, or `npm install @easytunnel/et-sdk` | [npm (JS)](https://www.npmjs.com/package/@easytunnel/et-sdk) |
 | 3 | [Deno](deno/) | `@ggcode/etunnel` | `deno add @ggcode/etunnel` | [JSR](https://jsr.io/@ggcode/etunnel) |
 | 4 | [Python](python/) | `etunnel` | `pip install etunnel` | [PyPI](https://pypi.org/project/etunnel/) |
 | 5 | [Java](java/) | `dev.ggcode:etunnel` | Maven Central snippet below | [Maven Central](https://central.sonatype.com/artifact/dev.ggcode/etunnel) |

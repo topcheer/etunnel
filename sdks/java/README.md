@@ -2,7 +2,7 @@
 
 [![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
 
-Single-file SDK, JDK 11+ built-in HttpClient/WebSocket — zero dependencies.
+Single-file SDK, JDK 11+ built-in HttpClient/WebSocket — zero dependencies. Published to Maven Central.
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
@@ -11,7 +11,14 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-mvn package   # or drop Etunnel.java into your sources
+Maven:
+<dependency>
+  <groupId>dev.ggcode</groupId>
+  <artifactId>etunnel</artifactId>
+  <version>1.0.0</version>
+</dependency>
+
+Gradle: implementation "dev.ggcode:etunnel:1.0.0"
 ```
 
 Requires JDK 11+.
@@ -19,7 +26,7 @@ Requires JDK 11+.
 ## CLI
 
 ```
-java Etunnel.java 3000
+java sdks/java/src/main/java/dev/ggcode/Etunnel.java 3000
 ```
 
 Prints `TUNNEL_URL: https://<subdomain>.t.ggcode.uk` — that URL now routes to
