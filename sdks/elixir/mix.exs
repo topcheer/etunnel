@@ -34,7 +34,7 @@ defmodule Etunnel.MixProject do
     [
       files: ["lib", "mix.exs", "README.md", "LICENSE"],
       licenses: ["MIT"],
-      links: %{"GitHub" => "https://github.com/ggcode/etunnel"}
+      links: %{"GitHub" => "https://github.com/topcheer/etunnel"}
     ]
   end
 
