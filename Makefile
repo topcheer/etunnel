@@ -23,7 +23,7 @@ verify:
 	go build ./... && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
-	cd $(Sdks)/java && javac -d /tmp/et-verify-java Etunnel.java && echo "java: ok"
+	cd $(Sdks)/java && javac -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
 	cd $(Sdks)/swift && swift build 2>&1 | tail -1
 	cd $(Sdks)/clojure && clojure -M -e '(load-file "etunnel.clj")' > /dev/null && echo "clojure: ok"
 	cd $(Sdks)/ruby && ruby -c lib/etunnel.rb > /dev/null && echo "ruby: ok"
