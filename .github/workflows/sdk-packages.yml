@@ -24,8 +24,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: denoland/setup-deno@v2
-        with: { deno-version: 'v2.x' }
+      # NOTE: deno is intentionally NOT installed - pack-deno only tars
+      # sources (no deno invocation), and setup-deno was the sole recurring
+      # 504 source (deno CDN flakes).
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
