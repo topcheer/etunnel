@@ -75,3 +75,6 @@ sdks/python/build/
 sdks/deno/dist/
 sdks/dart/.dart_tool/
 sdks/dart/pubspec.lock
+
+# hex publish generated docs (stored server-side on hex.pm)
+sdks/elixir/doc/
