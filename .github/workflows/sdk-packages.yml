@@ -117,7 +117,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: pipx install build
-      - run: cd sdks/python && python -m build
+      - run: cd sdks/python && build
       - uses: pypa/gh-action-pypi-publish@release/v1
   #
   # publish-others:

@@ -1,6 +1,6 @@
 {
   "name": "@easytunnel/et-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Expose a local service through an etunnel reverse-tunnel server with one line of code. Zero dependencies, Node >= 22.",
   "license": "MIT",
   "repository": {
@@ -36,5 +36,8 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "dependencies": {
+    "@easytunnel/et-sdk": "^1.0.0"
   }
 }

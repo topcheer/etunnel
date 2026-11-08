@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 'use strict';
 // etunnel SDK for Node.js (>= 22, built-in WebSocket, zero dependencies).
 // Buffer-based protocol client: request/response bodies are buffered per
