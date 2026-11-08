@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 type metrics struct {

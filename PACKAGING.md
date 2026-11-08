@@ -19,7 +19,7 @@ publish straight from git tags with no account at all.
 
 | # | Language | Registry | Account needed | Auth | Publish command | One-time gotchas |
 |---|----------|----------|----------------|------|-----------------|------------------|
-| 1 | Go (server/sdk) | proxy.golang.org | none (GitHub repo is enough) | - | `git tag v1.0.0 && git push --tags` then `GOPROXY=proxy.golang.org go get etunnel@v1.0.0` | repo must be public; module path in go.mod must match repo URL |
+| 1 | Go (server/sdk) | proxy.golang.org | none (GitHub repo is enough) | - | `git tag v1.0.0 && git push --tags` then `GOPROXY=proxy.golang.org go get github.com/topcheer/etunnel@v1.0.0` | repo must be public; module path in go.mod must match repo URL |
 | 2 | Node | npmjs.com | npm org `easytunnel` | OIDC trusted publishing (no token) | `cd sdks/node && npm publish --access public` (CI job `publish-npm`, env `npm`) | published as `@easytunnel/et-sdk`; provenance on; repo `topcheer/etunnel` must match package.json |
 | 3 | TypeScript | npmjs.com | npm account | `NPM_TOKEN` | `cd sdks/typescript && npm publish --access public` | published as `etunnel-ts` |
 | 4 | Deno | JSR / deno.land/x | GitHub login for JSR | browser | `cd sdks/deno && deno publish` | JSR requires a scope: change `deno.json` name to `@<yourscope>/etunnel`; deno.land/x needs the git tag |

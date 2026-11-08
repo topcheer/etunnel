@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 const (

@@ -1,4 +1,4 @@
-module etunnel
+module github.com/topcheer/etunnel
 
 go 1.26.0
 

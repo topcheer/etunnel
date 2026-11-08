@@ -18,7 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/time/rate"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 var (

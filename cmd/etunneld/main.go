@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"etunnel/server"
+	"github.com/topcheer/etunnel/server"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 var errStreamReset = errors.New("etunnel: stream reset by peer")

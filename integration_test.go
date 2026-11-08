@@ -16,8 +16,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	etunnel "etunnel/sdk"
-	"etunnel/server"
+	etunnel "github.com/topcheer/etunnel/sdk"
+	"github.com/topcheer/etunnel/server"
 )
 
 const testDomain = "t.test"

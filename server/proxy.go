@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 // hop-by-hop headers (RFC 7230) never forwarded end to end.

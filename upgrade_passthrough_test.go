@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"etunnel/protocol"
-	"etunnel/server"
+	"github.com/topcheer/etunnel/protocol"
+	"github.com/topcheer/etunnel/server"
 
 	"github.com/coder/websocket"
 )

@@ -19,7 +19,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"etunnel/protocol"
+	"github.com/topcheer/etunnel/protocol"
 )
 
 // Options configures a tunnel.
