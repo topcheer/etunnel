@@ -78,3 +78,5 @@ sdks/dart/pubspec.lock
 
 # hex publish generated docs (stored server-side on hex.pm)
 sdks/elixir/doc/
+sdks/elixir/mix.lock
+sdks/lua/*.rock
