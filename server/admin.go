@@ -89,10 +89,10 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 
 		"billing": map[string]any{
-			"stripe": s.billing.StripeSecretKey != "",
-			"paypal":  s.billing.PayPalClientID != "",
+			"stripe":    s.billing.StripeSecretKey != "",
+			"paypal":    s.billing.PayPalClientID != "",
 			"paypalEnv": s.billing.PayPalEnv,
-		},		"uptime":        time.Since(s.metrics.startedAt).Round(time.Second).String(),
+		}, "uptime": time.Since(s.metrics.startedAt).Round(time.Second).String(),
 		"activeTunnels": s.reg.Count(),
 		"tunnelsTotal":  s.metrics.tunnelsTotal.Load(),
 		"requestsTotal": s.metrics.requestsTotal.Load(),
