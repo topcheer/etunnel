@@ -8,6 +8,7 @@
 [![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)
 [![pub.dev](https://img.shields.io/pub/v/etunnel?label=pub.dev%20etunnel)](https://pub.dev/packages/etunnel)
 [![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)
+[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)
 
 A reverse-tunnel service like localhost.run / cloudflare tunnel, but **zero
 registration** and **one line of code** to use: an SDK client connects out to
