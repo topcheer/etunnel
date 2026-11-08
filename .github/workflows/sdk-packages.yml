@@ -150,7 +150,7 @@ jobs:
         with: { ruby-version: '3.3' }
       # OIDC -> API key credential exchange; owner binding REQUIRED for the
       # first push (RubyGems rejects ownerless first pushes)
-      - uses: rubygems/configure-rubygems-credentials@main
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
         with:
           owner: '247533'
       - run: cd sdks/ruby && gem build etunnel.gemspec
