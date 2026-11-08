@@ -1,0 +1,48 @@
+-J-Duser.language=
+-J-Duser.country=
+@options
+@argfile
+-encoding
+'UTF-8'
+-protected
+--release
+11
+-sourcepath
+'/Volumes/new/ggai/et/sdks/java:/Volumes/new/ggai/et/sdks/java/target/generated-sources/annotations'
+-author
+-bottom
+'Copyright &#169; 1980. All rights reserved.'
+-charset
+'UTF-8'
+-d
+'/Volumes/new/ggai/et/sdks/java/target/reports/apidocs'
+-docencoding
+'UTF-8'
+-doctitle
+'etunnel 1.0.0 API'
+-linkoffline
+'https://docs.oracle.com/en/java/javase/11/docs/api' '/Volumes/new/ggai/et/sdks/java/target/javadoc-bundle-options'
+-notimestamp
+-use
+-version
+-windowtitle
+'etunnel 1.0.0 API'
+'/Volumes/new/ggai/et/sdks/java/Etunnel.java'
+/Volumes/new/ggai/et/sdks/java/pom.xml = 1794148114971
+/Volumes/new/ggai/et/sdks/java/README.md = 1794128472942
+/Volumes/new/ggai/et/sdks/java/Etunnel.java = 1794148052132
+/Volumes/new/ggai/et/sdks/java = 1794148147312
+/Volumes/new/ggai/et/sdks/java/target/generated-sources/annotations = 1794148147322
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/tag-search-index.js = 1794148176626
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/overview-tree.html = 1794148176617
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/module-search-index.js = 1794148176625
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/index.html = 1794148176632
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/package-search-index.js = 1794148176625
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/index-all.html = 1794148176630
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/allpackages-index.html = 1794148176624
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/member-search-index.js = 1794148176626
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/help-doc.html = 1794148176637
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/element-list = 1794148176596
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/search.html = 1794148176631
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/allclasses-index.html = 1794148176623
+/Volumes/new/ggai/et/sdks/java/target/reports/apidocs/type-search-index.js = 1794148176625

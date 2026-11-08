@@ -282,6 +282,35 @@ jobs:
           else
             cd sdks/deno && deno publish --allow-dirty --no-check
           fi
+
+  publish-central:
+    # Maven Central (dev.ggcode namespace, verified via NS on the Portal).
+    # Secrets: MAVEN_USERNAME/MAVEN_PASSWORD (Portal token), GPG_PRIVATE_KEY,
+    # GPG_PASSPHRASE. Signs with sources+javadoc via the central profile.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Import GPG key
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+      - name: Publish to Maven Central (idempotent)
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          V=$(grep -m1 '<version>' sdks/java/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          if curl -sf "https://repo1.maven.org/maven2/dev/ggcode/etunnel/${V}/etunnel-${V}.pom" > /dev/null; then
+            echo "central: ${V} already published, skipping"
+          else
+            mvn -B -Pcentral -f sdks/java/pom.xml deploy
+          fi
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:

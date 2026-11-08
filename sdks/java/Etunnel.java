@@ -1,3 +1,5 @@
+package dev.ggcode;
+
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
