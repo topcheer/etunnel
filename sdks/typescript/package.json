@@ -1,7 +1,7 @@
 {
   "name": "etunnel-ts",
   "version": "1.0.0",
-  "description": "TypeScript SDK for etunnel reverse tunnels. Zero dependencies; runs natively on Node >= 22 (type stripping) or compile to JS.",
+  "description": "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server. Same wire protocol as @easytunnel/et-sdk.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -12,9 +12,11 @@
     "tunnel",
     "reverse-proxy",
     "webhook",
-    "typescript",
+    "ngrok",
     "localhost",
-    "expose"
+    "expose",
+    "easytunnel",
+    "typescript"
   ],
   "engines": {
     "node": ">=22"

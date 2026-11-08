@@ -5,7 +5,7 @@ source = {
   tag = "v1.0.0"
 }
 description = {
-  summary = "Expose a local service through an etunnel reverse-tunnel server",
+  summary = "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.",
   detailed = [[
 Buffer-based protocol client for etunnel: connect out to an etunnel
 server over WebSocket and expose a local service at a public HTTPS URL.

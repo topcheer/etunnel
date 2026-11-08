@@ -3,11 +3,11 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.ggcode</groupId>
+  <groupId>topcheer</groupId>
   <artifactId>etunnel</artifactId>
   <version>1.0.0</version>
   <name>etunnel</name>
-  <description>Expose a local service through an etunnel reverse-tunnel server with one line of code</description>
+  <description>Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server.</description>
   <url>https://github.com/ggcode/etunnel</url>
   <licenses>
     <license>

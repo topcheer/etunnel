@@ -2,7 +2,7 @@
 name = "etunnel"
 version = "1.0.1"
 edition = "2021"
-description = "Expose a local service through an etunnel reverse-tunnel server with one line of code"
+description = "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/topcheer/etunnel"

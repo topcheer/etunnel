@@ -1,7 +1,7 @@
 {
   "name": "@easytunnel/et-sdk",
   "version": "1.0.1",
-  "description": "Expose a local service through an etunnel reverse-tunnel server with one line of code. Zero dependencies, Node >= 22.",
+  "description": "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,9 +16,9 @@
     "tunnel",
     "reverse-proxy",
     "webhook",
+    "ngrok",
     "localhost",
     "expose",
-    "ngrok",
     "easytunnel"
   ],
   "engines": {

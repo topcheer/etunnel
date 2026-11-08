@@ -5,7 +5,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     NAME         => 'etunnel',
     VERSION      => '1.0.0',
-    ABSTRACT     => 'Expose a local service through an etunnel reverse-tunnel server',
+    ABSTRACT     => 'Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.',
     AUTHOR       => 'etunnel authors <etunnel@example.com>',
     LICENSE      => 'mit',
     EXE_FILES    => ['etunnel.pl'],

@@ -3,8 +3,8 @@
 Gem::Specification.new do |s|
   s.name = 'etunnel'
   s.version = '1.0.1'
-  s.summary = 'Expose a local service through an etunnel reverse-tunnel server with one line of code'
-  s.description = 'Expose a local service through an etunnel reverse-tunnel server with one line of code. '
+  s.summary = 'Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.'
+  s.description = '#{LONG} '
                   'Buffer-based protocol client using faye-websocket.'
   s.authors = ['etunnel authors']
   s.license = 'MIT'
