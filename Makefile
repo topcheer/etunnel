@@ -9,6 +9,7 @@ Sdks    := sdks
 V       := 1.0.0
 NODE_V  := $(shell node -p "require('./$(Sdks)/node/package.json').version" 2>/dev/null || echo 1.0.0)
 RUST_V  := $(shell grep -m1 '^version' $(Sdks)/rust/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+RUBY_V  := $(shell ruby -e "print Gem::Specification.load('$(Sdks)/ruby/etunnel.gemspec').version" 2>/dev/null || echo 1.0.0)
 
 .PHONY: all verify pack-all clean-pkgs $(PACK) prereq
 
@@ -63,7 +64,7 @@ pack-dart: prereq
 	cd $(Sdks)/dart && tar czf ../../$(PACK)/etunnel-dart-$(V).tar.gz etunnel.dart pubspec.yaml README.md
 pack-ruby: prereq
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent \
-	  && mv etunnel-$(V).gem ../../$(PACK)/
+	  && mv etunnel-$(RUBY_V).gem ../../$(PACK)/
 pack-php: prereq
 	cd $(Sdks)/php && tar czf ../../$(PACK)/etunnel-php-$(V).tar.gz etunnel.php composer.json README.md
 pack-perl: prereq

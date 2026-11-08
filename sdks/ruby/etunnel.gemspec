@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name = 'etunnel'
-  s.version = '1.0.0'
+  s.version = '1.0.1'
   s.summary = 'Expose a local service through an etunnel reverse-tunnel server with one line of code'
   s.description = 'Expose a local service through an etunnel reverse-tunnel server with one line of code. '
                   'Buffer-based protocol client using faye-websocket.'
