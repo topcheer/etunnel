@@ -3,17 +3,29 @@
   "description": "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server.",
   "type": "library",
   "license": "MIT",
-  "keywords": ["tunnel", "reverse-proxy", "webhook", "localhost"],
-  "homepage": "https://github.com/ggcode/etunnel",
+  "keywords": [
+    "tunnel",
+    "reverse-proxy",
+    "webhook",
+    "ngrok",
+    "localhost",
+    "expose",
+    "easytunnel"
+  ],
+  "homepage": "https://github.com/topcheer/etunnel",
   "require": {
     "php": ">=8.0",
     "ext-openssl": "*"
   },
   "autoload": {
-    "files": ["etunnel.php"]
+    "files": [
+      "sdks/php/etunnel.php"
+    ]
   },
-  "bin": ["etunnel.php"],
+  "bin": [
+    "sdks/php/etunnel.php"
+  ],
   "support": {
-    "source": "https://github.com/ggcode/etunnel/tree/main/sdks/php"
+    "source": "https://github.com/topcheer/etunnel/tree/main/sdks/php"
   }
 }
