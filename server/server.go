@@ -31,6 +31,7 @@ type Server struct {
 	adminHandler http.Handler
 	billing      BillingConfig
 	tg           telegramConfig
+	auth         oauthConfig
 }
 
 // logf emits a server log line (stdout + journald under systemd).
@@ -59,6 +60,15 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/api/tiers", s.handleTiers)
 	mux.HandleFunc("/pricing", s.handlePricing)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/me", s.handleMe)
+	mux.HandleFunc("/me/", func(w http.ResponseWriter, r *http.Request) {
+		s.handleMeAction(w, r, strings.TrimPrefix(r.URL.Path, "/me/"))
+	})
+	for _, p := range []string{"google", "gitlab", "apple"} {
+		mux.HandleFunc("/auth/"+p+"/login", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthLogin(w, r, p) })
+		mux.HandleFunc("/auth/"+p+"/callback", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthCallback(w, r, p) })
+	}
 	mux.HandleFunc("/api/billing/checkout", s.handleBillingCheckout)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/paypal/return", s.handlePayPalReturn)
@@ -68,6 +78,7 @@ func New(cfg Config) (*Server, error) {
 	s.handler = mux
 	s.buildAdmin()
 	s.billing = billingFromEnv(cfg.Domain)
+	s.auth = oauthFromEnv()
 	return s, nil
 }
 

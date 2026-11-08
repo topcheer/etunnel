@@ -25,6 +25,12 @@ type Account struct {
 	Email   string    `json:"email"`
 	Tier    string    `json:"tier"`
 	Created time.Time `json:"created"`
+	// OAuth identity (optional; anonymous email-registered accounts have none).
+	Provider string `json:"provider,omitempty"` // google | gitlab | apple
+	Subject  string `json:"subject,omitempty"`  // provider-stable user id
+	Name     string `json:"name,omitempty"`     // display name
+	// Custom subdomains the account owns (paid tiers, count-limited by tier).
+	Domains []string `json:"domains,omitempty"`
 }
 
 // AccountStore persists accounts in a JSON file.
@@ -139,6 +145,59 @@ func (s *AccountStore) Delete(key string) bool {
 	}
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
+	_ = s.saveLocked()
+	return true
+}
+
+// ResetKey issues a fresh API key for the account (identity/tier preserved).
+func (s *AccountStore) ResetKey(email string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.byMail[email]
+	if !ok {
+		return "", false
+	}
+	delete(s.byKey, a.APIKey)
+	a.APIKey = newAPIKey()
+	s.byKey[a.APIKey] = a
+	_ = s.saveLocked()
+	return a.APIKey, true
+}
+
+// CancelSubscription downgrades the account to the free tier.
+func (s *AccountStore) CancelSubscription(email string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.byMail[email]
+	if !ok {
+		return false
+	}
+	a.Tier = "free"
+	_ = s.saveLocked()
+	return true
+}
+
+// FindByProvider resolves an account by OAuth provider + subject.
+func (s *AccountStore) FindByProvider(provider, subject string) (*Account, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.byKey {
+		if a.Provider == provider && a.Subject == subject {
+			return a, true
+		}
+	}
+	return nil, false
+}
+
+// Mutate applies fn to the account under the store lock and persists.
+func (s *AccountStore) Mutate(email string, fn func(*Account)) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.byMail[email]
+	if !ok {
+		return false
+	}
+	fn(a)
 	_ = s.saveLocked()
 	return true
 }

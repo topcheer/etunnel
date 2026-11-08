@@ -96,19 +96,17 @@ func TestPricingAndCheckout(t *testing.T) {
 		t.Fatalf("pricing page: %d %.120s", rec.Code, body)
 	}
 
-	// checkout without configured provider reports 503, not crash
-	rec = httptest.NewRecorder()
-	s.handleBillingCheckout(rec, httptest.NewRequest(http.MethodPost, "/api/billing/checkout",
-		strings.NewReader(`{"email":"a@x.com","tier":"pro","provider":"stripe"}`)))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unconfigured stripe: got %d", rec.Code)
-	}
-	// paypal same
-	rec = httptest.NewRecorder()
-	s.handleBillingCheckout(rec, httptest.NewRequest(http.MethodPost, "/api/billing/checkout",
-		strings.NewReader(`{"email":"a@x.com","tier":"pro","provider":"paypal"}`)))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unconfigured paypal: got %d", rec.Code)
+	// checkout without a login session is rejected (401) before anything else
+	for _, payload := range []string{
+		`{"email":"a@x.com","tier":"pro","provider":"stripe"}`,
+		`{"email":"a@x.com","tier":"pro","provider":"paypal"}`,
+	} {
+		rec = httptest.NewRecorder()
+		s.handleBillingCheckout(rec, httptest.NewRequest(http.MethodPost, "/api/billing/checkout",
+			strings.NewReader(payload)))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("logged-out checkout %s: want 401, got %d", payload, rec.Code)
+		}
 	}
 	// bad provider / bad tier / bad email
 	for _, payload := range []string{

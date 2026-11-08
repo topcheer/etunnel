@@ -175,6 +175,18 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"valid email required"}`, http.StatusBadRequest)
 		return
 	}
+	if req.Provider != "stripe" && req.Provider != "paypal" {
+		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
+		return
+	}
+	// Subscribing requires a signed-in user; the session email wins so a
+	// purchase can never be attributed to an address the buyer doesn't own.
+	if session := s.sessionEmail(r); session != "" {
+		req.Email = session
+	} else {
+		http.Error(w, `{"error":"login required before subscribing (see /login)"}`, http.StatusUnauthorized)
+		return
+	}
 	cents, _ := s.tierPriceCents(req.Tier)
 	base := s.billing.PublicBaseURL
 

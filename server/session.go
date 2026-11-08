@@ -243,6 +243,14 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sub := protocol.NormalizeSubdomain(hello.Subdomain)
+		// Ownership gate: paid users may only claim subdomains they added
+		// via the portal (/me) - purchase alone does not unlock any name.
+		if !containsStr(acct.Domains, sub) {
+			cancel()
+			s.wsErrorClose(ws, protocol.ErrCodeSubdomainPlan,
+				fmt.Sprintf("subdomain %q is not in your account's domain list (add it at /me first)", sub))
+			return
+		}
 		if err := protocol.ValidateSubdomain(sub); err != nil {
 			cancel()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainBad, err.Error())

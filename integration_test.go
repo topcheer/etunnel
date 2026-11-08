@@ -219,6 +219,8 @@ func TestPaidCustomSubdomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ownership gate: custom names must be added to the account first (portal /me).
+	srv.Accounts().Mutate("dev@example.com", func(a *server.Account) { a.Domains = []string{"mydev"} })
 	local := newLocalService(t, http.NotFoundHandler())
 
 	tun := connectTunnel(t, srvURL, local, func(o *etunnel.Options) {
