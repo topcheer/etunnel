@@ -51,6 +51,7 @@ func (s *Server) startTelegram(ctx context.Context) {
 		return
 	}
 	go s.telegramPollLoop(ctx)
+	go s.telegramAlertPatrol(ctx)
 	s.logf("telegram: admin bot enabled (chat %d)", s.tg.chatID)
 }
 
@@ -137,10 +138,13 @@ func (s *Server) handleAdminCommand(text string) string {
 		return "etunnel admin bot\n" +
 			"/status - server overview\n" +
 			"/tunnels - live tunnels\n" +
+			"/tunnel <subdomain> - one tunnel in detail\n" +
 			"/accounts - registered accounts\n" +
 			"/kick <subdomain> - drop a tunnel\n" +
 			"/tier <email> <tier> - change account tier\n" +
-			"/whois <subdomain> - tunnel owner"
+			"/whois <subdomain> - tunnel owner\n" +
+			"/key <email> - show API key\n" +
+			"/delete <email> - remove account"
 	case "/status":
 		var in, out int64
 		if s.metrics != nil {
@@ -223,6 +227,45 @@ func (s *Server) handleAdminCommand(text string) string {
 			return rest + ": anonymous (free plan)"
 		}
 		return fmt.Sprintf("%s: %s [%s]", rest, sess.account.Email, sess.account.Tier)
+	case "/key":
+		if rest == "" {
+			return "usage: /key <email>"
+		}
+		acct, ok := s.accounts.LookupEmail(strings.ToLower(rest))
+		if !ok {
+			return "no such account: " + rest
+		}
+		return rest + " API key:\n" + acct.APIKey
+	case "/delete":
+		if rest == "" {
+			return "usage: /delete <email>"
+		}
+		acct, ok := s.accounts.LookupEmail(strings.ToLower(rest))
+		if !ok {
+			return "no such account: " + rest
+		}
+		if !s.accounts.Delete(acct.APIKey) {
+			return "delete failed"
+		}
+		return "deleted " + acct.Email
+	case "/tunnel":
+		if rest == "" {
+			return "usage: /tunnel <subdomain>"
+		}
+		sess := s.reg.Lookup(rest)
+		if sess == nil {
+			return "no such tunnel: " + rest
+		}
+		acct := "anonymous (free)"
+		if sess.account != nil {
+			acct = sess.account.Email + " [" + sess.account.Tier + "]"
+		}
+		exp := "unlimited"
+		if !sess.expires.IsZero() {
+			exp = time.Until(sess.expires).Round(time.Second).String()
+		}
+		return fmt.Sprintf("%s\nplan %s\nowner %s\nip %s\nstreams %d\nexpires in %s",
+			sess.URL(), sess.Plan(), acct, sess.RemoteIP(), sess.streamCount(), exp)
 	}
 	return ""
 }
@@ -236,6 +279,53 @@ func (s *Server) notifyPayment(email, tier string) {
 		return
 	}
 	s.tgSend(fmt.Sprintf("💰 %s purchased %s", email, tier))
+}
+
+// notifyPaymentFailure reports declined/failed payment attempts.
+func (s *Server) notifyPaymentFailure(email, tier, reason string) {
+	if !s.tg.enabled() {
+		return
+	}
+	s.tgSend(fmt.Sprintf("⚠️ payment FAILED for %s (%s)%s", email, tier, prefixIfSet(reason)))
+}
+
+func prefixIfSet(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return ": " + reason
+}
+
+// telegramAlertPatrol pushes a one-shot alert each time the live-tunnel
+// count crosses the configured threshold from below (and re-arms after
+// dropping back). TELEGRAM_ALERT_TUNNELS=0 (default) disables it.
+func (s *Server) telegramAlertPatrol(ctx context.Context) {
+	threshold := 0
+	if v := os.Getenv("TELEGRAM_ALERT_TUNNELS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			threshold = n
+		}
+	}
+	if threshold == 0 {
+		return
+	}
+	armed := true
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n := s.reg.Count()
+			if armed && n >= threshold {
+				s.tgSend(fmt.Sprintf("🚨 tunnel threshold: %d live (>= %d)", n, threshold))
+				armed = false
+			} else if !armed && n < threshold {
+				armed = true // re-arm so the next spike alerts again
+			}
+		}
+	}
 }
 
 func humanBytes(n int64) string {
