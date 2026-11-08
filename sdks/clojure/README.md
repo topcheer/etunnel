@@ -11,8 +11,9 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-;; deps.edn
-{:deps {dev.ggcode/etunnel {:mvn/version "1.1.0"}}}
+;; deps.edn — served from Maven Central (Clojars forbids shadowing it)
+;; add https://repo1.maven.org/maven2/ (default in most setups) if missing
+{:mvn/version "1.1.0"} with :deps {dev.ggcode/etunnel ...}
 ```
 
 Requires JDK 11+.
