@@ -1,0 +1,5 @@
+require 'bundler/gem_tasks'
+
+# release-gem action drives `bundle exec rake release` semantics; the gem
+# package itself is built from etunnel.gemspec by Bundler's gem tasks.
+task default: :build
