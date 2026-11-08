@@ -79,9 +79,33 @@ func (s *Server) telegramAPI(method string, payload any) (map[string]any, error)
 
 func (s *Server) tgSend(text string) {
 	_, _ = s.telegramAPI("sendMessage", map[string]any{
-		"chat_id": s.tg.chatID,
-		"text":    text,
+		"chat_id":      s.tg.chatID,
+		"text":         text,
+		"reply_markup": tgMainMenu(),
 	})
+}
+
+// tgMainMenu is the tap-only reply keyboard shown on every bot reply.
+func tgMainMenu() map[string]any {
+	return map[string]any{
+		"keyboard": [][]string{
+			{"📊 Status", "🚇 Tunnels"},
+			{"👥 Accounts", "🔍 Whois"},
+			{"⬆️ Upgrade tier", "⛔ Kick"},
+			{"🔑 API key", "🗑 Delete account"},
+			{"❓ Help"},
+		},
+		"resize_keyboard": true,
+	}
+}
+
+// menuAliases maps button labels to commands.
+var menuAliases = map[string]string{
+	"📊 Status": "/status", "🚇 Tunnels": "/tunnels",
+	"👥 Accounts": "/accounts", "🔍 Whois": "/whois",
+	"⬆️ Upgrade tier": "/tier", "⛔ Kick": "/kick",
+	"🔑 API key": "/key", "🗑 Delete account": "/delete",
+	"❓ Help": "/help",
 }
 
 func (s *Server) telegramPollLoop(ctx context.Context) {
@@ -131,6 +155,9 @@ func (s *Server) telegramPollLoop(ctx context.Context) {
 // handleAdminCommand executes one whitelisted command and returns the reply.
 func (s *Server) handleAdminCommand(text string) string {
 	text = strings.TrimSpace(text)
+	if cmd, ok := menuAliases[text]; ok {
+		text = cmd
+	}
 	cmd, rest, _ := strings.Cut(text, " ")
 	rest = strings.TrimSpace(rest)
 	switch cmd {

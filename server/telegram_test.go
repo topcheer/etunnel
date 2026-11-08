@@ -181,3 +181,20 @@ func TestHumanBytes(t *testing.T) {
 }
 
 var _ = filepath.Join
+
+func TestTelegramMenuAliases(t *testing.T) {
+	_, api := newFakeTelegram(t)
+	s := newTGTestServer(t, api, 100)
+	if r := s.handleAdminCommand("📊 Status"); !strings.Contains(r, "uptime") {
+		t.Fatalf("menu Status -> %q", r)
+	}
+	if r := s.handleAdminCommand("❓ Help"); !strings.Contains(r, "/kick") {
+		t.Fatalf("menu Help -> %q", r)
+	}
+	if r := s.handleAdminCommand("🔑 API key"); r != "usage: /key <email>" {
+		t.Fatalf("menu Key -> %q", r)
+	}
+	if tgMainMenu()["keyboard"] == nil {
+		t.Fatal("main menu keyboard missing")
+	}
+}
