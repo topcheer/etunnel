@@ -8,6 +8,7 @@ PACK    := dist/packages
 Sdks    := sdks
 V       := 1.0.0
 NODE_V  := $(shell node -p "require('./$(Sdks)/node/package.json').version" 2>/dev/null || echo 1.0.0)
+RUST_V  := $(shell grep -m1 '^version' $(Sdks)/rust/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 
 .PHONY: all verify pack-all clean-pkgs $(PACK) prereq
 
@@ -54,7 +55,7 @@ pack-csharp: prereq
 	cd $(Sdks)/csharp && dotnet pack -c Release -o ../../$(PACK) /clp:ErrorsOnly
 pack-rust: prereq
 	cd $(Sdks)/rust && cargo package --no-verify --allow-dirty --quiet \
-	  && cp target/package/etunnel-$(V).crate ../../$(PACK)/
+	  && cp target/package/etunnel-$(RUST_V).crate ../../$(PACK)/
 pack-swift: prereq
 	cd $(Sdks)/swift && swift build -c release 2>&1 | tail -1 \
 	  && tar czf ../../$(PACK)/etunnel-swift-$(V).tar.gz etunnel.swift Package.swift README.md
