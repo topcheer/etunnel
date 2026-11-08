@@ -66,7 +66,7 @@ pack-ruby: prereq
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent \
 	  && mv etunnel-$(RUBY_V).gem ../../$(PACK)/
 pack-php: prereq
-	cd $(Sdks)/php && tar czf ../../$(PACK)/etunnel-php-$(V).tar.gz etunnel.php composer.json README.md
+	cd $(Sdks)/php && tar czf ../../$(PACK)/etunnel-php-$(V).tar.gz etunnel.php README.md
 pack-perl: prereq
 	cd $(Sdks)/perl && (perl Makefile.PL > /dev/null 2>&1; make dist > /dev/null 2>&1) \
 	  && mv etunnel-$(V).tar.gz ../../$(PACK)/etunnel-perl-$(V).tar.gz && rm -f Makefile Makefile.old pm_to_blib 2>/dev/null; true
