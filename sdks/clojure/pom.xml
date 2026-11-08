@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.ggcode</groupId>
+  <artifactId>etunnel</artifactId>
+  <version>1.0.0</version>
+  <name>etunnel</name>
+  <description>Expose a local service through an etunnel reverse-tunnel server with one line of code</description>
+  <url>https://github.com/ggcode/etunnel</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer><name>etunnel authors</name></developer>
+  </developers>
+  <scm>
+    <url>https://github.com/ggcode/etunnel</url>
+    <connection>scm:git:https://github.com/ggcode/etunnel.git</connection>
+  </scm>
+</project>

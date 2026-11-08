@@ -1,0 +1,40 @@
+{
+  "name": "@easytunnel/et-sdk",
+  "version": "1.0.0",
+  "description": "Expose a local service through an etunnel reverse-tunnel server with one line of code. Zero dependencies, Node >= 22.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topcheer/etunnel.git",
+    "directory": "sdks/node"
+  },
+  "homepage": "https://github.com/topcheer/etunnel#readme",
+  "bugs": {
+    "url": "https://github.com/topcheer/etunnel/issues"
+  },
+  "keywords": [
+    "tunnel",
+    "reverse-proxy",
+    "webhook",
+    "localhost",
+    "expose",
+    "ngrok",
+    "easytunnel"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "etunnel.js",
+  "bin": {
+    "etunnel": "etunnel.js"
+  },
+  "files": [
+    "etunnel.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etunnel"
+version = "1.0.0"
+description = "Expose a local service through an etunnel reverse-tunnel server with one line of code"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "etunnel authors" }]
+keywords = ["tunnel", "reverse-proxy", "webhook", "localhost", "ngrok"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Internet :: Proxy Servers",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = ["websocket-client>=1.6"]
+
+[project.urls]
+Homepage = "https://github.com/ggcode/etunnel"
+Repository = "https://github.com/ggcode/etunnel"
+
+[project.scripts]
+etunnel = "etunnel:_main"
+
+[tool.setuptools]
+py-modules = ["etunnel"]

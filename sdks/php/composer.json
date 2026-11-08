@@ -1,0 +1,19 @@
+{
+  "name": "ggcode/etunnel",
+  "description": "Expose a local service through an etunnel reverse-tunnel server with one line of code",
+  "type": "library",
+  "license": "MIT",
+  "keywords": ["tunnel", "reverse-proxy", "webhook", "localhost"],
+  "homepage": "https://github.com/ggcode/etunnel",
+  "require": {
+    "php": ">=8.0",
+    "ext-openssl": "*"
+  },
+  "autoload": {
+    "files": ["etunnel.php"]
+  },
+  "bin": ["etunnel.php"],
+  "support": {
+    "source": "https://github.com/ggcode/etunnel/tree/main/sdks/php"
+  }
+}

@@ -1,0 +1,75 @@
+# build outputs
+/dist/
+/build/
+*.test
+*.out
+
+# repo-original entries
+/etunneld
+/etunnel
+/var/
+*.pem
+*.key
+
+# Go
+/vendor/
+
+# Node / JS
+node_modules/
+*.tgz
+
+# Rust
+sdks/rust/target/
+
+# C / C++
+sdks/c/etunnel
+sdks/cpp/build/
+*.o
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# Java / JVM
+sdks/java/build/
+sdks/scala/build/
+*.class
+
+# Perl
+sdks/perl/Makefile
+sdks/perl/Makefile.old
+sdks/perl/pm_to_blib
+sdks/perl/META.yml
+sdks/perl/META.json
+sdks/perl/MYMETA.*
+sdks/perl/blib/
+
+# Ruby
+*.gem
+sdks/ruby/Gemfile.lock
+
+# Elixir
+sdks/elixir/deps/
+sdks/elixir/_build/
+sdks/elixir/.mix/
+
+# .NET
+sdks/csharp/bin/
+sdks/csharp/obj/
+*.nupkg
+
+# Clojure
+sdks/clojure/.cpcache/
+sdks/clojure/.nrepl-port
+
+# misc
+.DS_Store
+*.log
+
+# agent workspace / build strays
+.ggcode/
+sdks/swift/.build/
+sdks/python/build/
+sdks/deno/dist/

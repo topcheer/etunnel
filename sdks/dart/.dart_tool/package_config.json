@@ -1,0 +1,16 @@
+{
+  "configVersion": 2,
+  "packages": [
+    {
+      "name": "etunnel",
+      "rootUri": "../",
+      "packageUri": "lib/",
+      "languageVersion": "3.0"
+    }
+  ],
+  "generator": "pub",
+  "generatorVersion": "3.13.7",
+  "flutterRoot": "file:///opt/homebrew/share/flutter",
+  "flutterVersion": "3.47.9",
+  "pubCache": "file:///Users/zhanju/.pub-cache"
+}

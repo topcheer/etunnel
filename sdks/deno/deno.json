@@ -1,0 +1,9 @@
+{
+  "name": "etunnel",
+  "version": "1.0.0",
+  "exports": "./etunnel.ts",
+  "license": "MIT",
+  "publish": {
+    "exclude": ["dist"]
+  }
+}

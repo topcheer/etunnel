@@ -1,0 +1,219 @@
+package server
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+)
+
+// registerLimiter is a tiny per-IP limiter for the public register endpoint.
+type registerLimiter struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+var regLimiter = &registerLimiter{seen: make(map[string]time.Time)}
+
+func (l *registerLimiter) allow(ip string, every time.Duration) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	if t, ok := l.seen[ip]; ok && now.Sub(t) < every {
+		return false
+	}
+	l.seen[ip] = now
+	if len(l.seen) > 10000 {
+		l.seen = make(map[string]time.Time)
+	}
+	return true
+}
+
+func (s *Server) buildAdmin() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok\n")
+	})
+	mux.HandleFunc("/stats", s.handleStats)
+	mux.HandleFunc("/admin/accounts", s.adminAuth(s.handleAdminAccounts))
+	mux.HandleFunc("/admin/accounts/", s.adminAuth(s.handleAdminAccountDelete))
+	s.adminHandler = mux
+}
+
+func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AdminToken != "" && r.Header.Get("X-Admin-Token") != s.cfg.AdminToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+type tunnelStat struct {
+	Subdomain string `json:"subdomain"`
+	Hostname  string `json:"hostname"`
+	URL       string `json:"url"`
+	Plan      string `json:"plan"`
+	Custom    bool   `json:"custom"`
+	Account   string `json:"account,omitempty"`
+	RemoteIP  string `json:"remoteIp"`
+	Streams   int    `json:"streams"`
+	ExpiresAt int64  `json:"expiresAt,omitempty"`
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
+	sessions := s.reg.Snapshot()
+	tunnels := make([]tunnelStat, 0, len(sessions))
+	for _, sess := range sessions {
+		acct := ""
+		if sess.account != nil {
+			acct = sess.account.Email
+		}
+		tunnels = append(tunnels, tunnelStat{
+			Subdomain: sess.sub,
+			Hostname:  sess.hostname,
+			URL:       sess.url,
+			Plan:      sess.tier.Name,
+			Custom:    sess.custom,
+			Account:   acct,
+			RemoteIP:  sess.ip,
+			Streams:   sess.streamCount(),
+			ExpiresAt: expiresUnix(sess.expires),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"uptime":        time.Since(s.metrics.startedAt).Round(time.Second).String(),
+		"activeTunnels": s.reg.Count(),
+		"tunnelsTotal":  s.metrics.tunnelsTotal.Load(),
+		"requestsTotal": s.metrics.requestsTotal.Load(),
+		"bytesIn":       s.metrics.bytesIn.Load(),
+		"bytesOut":      s.metrics.bytesOut.Load(),
+		"tunnels":       tunnels,
+	})
+}
+
+func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		type acct struct {
+			Email   string    `json:"email"`
+			Tier    string    `json:"tier"`
+			Created time.Time `json:"created"`
+		}
+		out := make([]acct, 0)
+		for _, a := range s.accounts.List() {
+			out = append(out, acct{Email: a.Email, Tier: a.Tier, Created: a.Created})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	case http.MethodPost:
+		var req struct {
+			Email string `json:"email"`
+			Tier  string `json:"tier"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.Tier == "" {
+			req.Tier = s.cfg.DefaultPaidTier
+		}
+		if _, ok := s.cfg.Tiers[req.Tier]; !ok {
+			http.Error(w, "unknown tier", http.StatusBadRequest)
+			return
+		}
+		a, err := s.accounts.Create(req.Email, req.Tier)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"apiKey": a.APIKey, "tier": a.Tier})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAdminAccountDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := strings.TrimPrefix(r.URL.Path, "/admin/accounts/")
+	if !s.accounts.Delete(key) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- public registration API ---------------------------------------------------
+
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := remoteIP(r)
+	if !regLimiter.allow(ip, time.Minute) {
+		http.Error(w, "too many registrations, retry later", http.StatusTooManyRequests)
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+		Tier  string `json:"tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if !strings.Contains(req.Email, "@") || len(req.Email) > 254 {
+		http.Error(w, "invalid email", http.StatusBadRequest)
+		return
+	}
+	if req.Tier == "" {
+		req.Tier = s.cfg.DefaultPaidTier
+	}
+	tier, ok := s.cfg.Tiers[req.Tier]
+	if !ok {
+		http.Error(w, "unknown tier", http.StatusBadRequest)
+		return
+	}
+	a, err := s.accounts.Create(req.Email, req.Tier)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"apiKey": a.APIKey,
+		"email":  a.Email,
+		"tier":   a.Tier,
+		"plan": map[string]any{
+			"name":          tier.Name,
+			"ttlHours":      int(tier.TTL.Hours()),
+			"customDomains": tier.CustomDomains,
+			"bandwidthMbps": tier.Bandwidth / 1_000_000,
+		},
+	})
+}
+
+func (s *Server) handleTiers(w http.ResponseWriter, _ *http.Request) {
+	out := make([]map[string]any, 0, len(s.cfg.Tiers))
+	for id, t := range s.cfg.Tiers {
+		out = append(out, map[string]any{
+			"id":            id,
+			"name":          t.Name,
+			"ttlHours":      int(t.TTL.Hours()),
+			"customDomains": t.CustomDomains,
+			"bandwidthMbps": t.Bandwidth / 1_000_000,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}

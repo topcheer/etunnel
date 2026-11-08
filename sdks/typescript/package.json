@@ -1,0 +1,28 @@
+{
+  "name": "etunnel-ts",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for etunnel reverse tunnels. Zero dependencies; runs natively on Node >= 22 (type stripping) or compile to JS.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggcode/etunnel.git",
+    "directory": "sdks/typescript"
+  },
+  "keywords": [
+    "tunnel",
+    "reverse-proxy",
+    "webhook",
+    "typescript",
+    "localhost",
+    "expose"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "etunnel.ts",
+  "types": "etunnel.ts",
+  "files": [
+    "etunnel.ts",
+    "README.md"
+  ]
+}
