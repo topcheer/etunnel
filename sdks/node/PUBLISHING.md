@@ -80,3 +80,17 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 Tag push → CI builds matrix → `publish-npm` publishes with provenance.
 No tokens, no secrets, no manual npm step.
+
+## Known issue (2026-11-08): OIDC push to an existing gem returns 403
+
+`configure-rubygems-credentials@v2.1.0` has no `owner` input, and a manual
+exchange (`POST /api/v1/oidc/trusted_publisher/exchange_token`, body
+`{"jwt": ...}`) succeeds and returns a valid `push_rubygem` key, but
+`gem push` of a version to the *already existing* gem still answers
+"You are not allowed to push this gem." (pusher.rb: notify_unauthorized,
+i.e. server thinks the key's owner doesn't own the gem). Same mechanics as
+`release-gem@v1.4.1` (it shells the same credentials action + rake release).
+
+Workaround until clarified with RubyGems.org: release gem versions manually
+(`gem push` with a user API key; MFA via WebAuthn) - takes ~30s per release.
+The workflow job stays `continue-on-error` so it never blocks the matrix.
