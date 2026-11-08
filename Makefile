@@ -41,10 +41,14 @@ pack-java: prereq
 	  && jar cfe ../../$(PACK)/etunnel-java-$(V).jar Etunnel -C build . \
 	  && cp pom.xml ../../$(PACK)/etunnel-java-$(V).pom
 pack-kotlin: prereq
-	cd $(Sdks)/kotlin && kotlinc Etunnel.kt -include-runtime -d ../../$(PACK)/etunnel-kotlin-$(V).jar
+	cd $(Sdks)/kotlin && (mkdir -p build && kotlinc Etunnel.kt -include-runtime -d ../../$(PACK)/etunnel-kotlin-$(V).jar \
+	  && echo "kotlin: local build ok" || echo "kotlin: build skipped (no kotlinc; source tarball only)") \
+	  ; tar czf ../../$(PACK)/etunnel-kotlin-src-$(V).tar.gz Etunnel.kt build.gradle.kts README.md
 pack-scala: prereq
-	cd $(Sdks)/scala && mkdir -p build && scalac -d build Etunnel.scala \
-	  && jar cfe ../../$(PACK)/etunnel-scala-$(V).jar Etunnel -C build .
+	cd $(Sdks)/scala && (mkdir -p build && scalac -d build Etunnel.scala \
+	  && jar cfe ../../$(PACK)/etunnel-scala-$(V).jar Etunnel -C build . \
+	  && echo "scala: local build ok" || echo "scala: build skipped (no scalac; source tarball only)") \
+	  ; tar czf ../../$(PACK)/etunnel-scala-src-$(V).tar.gz Etunnel.scala build.sbt README.md
 pack-csharp: prereq
 	cd $(Sdks)/csharp && dotnet pack -c Release -o ../../$(PACK) /clp:ErrorsOnly
 pack-rust: prereq
@@ -64,9 +68,11 @@ pack-perl: prereq
 	cd $(Sdks)/perl && (perl Makefile.PL > /dev/null 2>&1; make dist > /dev/null 2>&1) \
 	  && mv etunnel-$(V).tar.gz ../../$(PACK)/etunnel-perl-$(V).tar.gz && rm -f Makefile Makefile.old pm_to_blib 2>/dev/null; true
 pack-clojure: prereq
-	cd $(Sdks)/clojure && jar cf ../../$(PACK)/etunnel-clojure-$(V).jar etunnel.clj \
+	cd $(Sdks)/clojure && (jar cf ../../$(PACK)/etunnel-clojure-$(V).jar etunnel.clj \
 	  && cp pom.xml ../../$(PACK)/etunnel-clojure-$(V).pom \
-	  && cp deps.edn ../../$(PACK)/etunnel-clojure-$(V).deps.edn
+	  && cp deps.edn ../../$(PACK)/etunnel-clojure-$(V).deps.edn \
+	  && echo "clojure: local build ok" || echo "clojure: build skipped (no jar tool; source tarball only)") \
+	  ; tar czf ../../$(PACK)/etunnel-clojure-src-$(V).tar.gz etunnel.clj deps.edn pom.xml README.md
 pack-c: prereq
 	cd $(Sdks)/c && (make -s etunnel > /dev/null 2>&1 && rm -f etunnel \
 	  && echo "c: local build ok" || echo "c: build skipped (need libwebsockets/libcurl/json-c via pkg-config)") \

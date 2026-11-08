@@ -45,23 +45,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-cli lua5.4 luarocks elixir cmake unzip \
+          sudo apt-get install -y php-cli lua5.4 luarocks elixir cmake \
             libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
             libwebsocketpp-dev libasio-dev
 
-      - name: Install JVM extras - Linux (kotlin/scala/clojure)
-        if: runner.os == 'Linux'
-        run: |
-          set -e
-          # kotlin via SDKMAN (direct GitHub-release URL 504s repeatedly from runners)
-          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://get.sdkman.io | bash
-          source ~/.sdkman/bin/sdkman-init.sh
-          sdk install kotlin 2.0.21
-          sudo ln -sf ~/.sdkman/candidates/kotlin/current/bin/kotlinc /usr/local/bin/kotlinc
-          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://github.com/coursier/coursier/releases/download/v2.1.18/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
-          chmod +x /tmp/cs
-          sudo /tmp/cs install scala:3.5.2 scalac:3.5.2 --install-dir /usr/local/bin
-          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
+      # kotlin/scala/clojure: no runtime download here - runner egress to
+      # GitHub-release/SDKMAN CDNs is currently 504ing; pack targets emit
+      # source tarballs when the toolchain is absent (see Makefile).
 
       - name: Install macOS extras
         if: runner.os == 'macOS'
