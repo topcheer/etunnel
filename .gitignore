@@ -80,3 +80,5 @@ sdks/dart/pubspec.lock
 sdks/elixir/doc/
 sdks/elixir/mix.lock
 sdks/lua/*.rock
+/.build/
+/.swiftpm/
