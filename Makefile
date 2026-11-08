@@ -7,6 +7,7 @@
 PACK    := dist/packages
 Sdks    := sdks
 V       := 1.0.0
+NODE_V  := $(shell node -p "require('./$(Sdks)/node/package.json').version" 2>/dev/null || echo 1.0.0)
 
 .PHONY: all verify pack-all clean-pkgs $(PACK) prereq
 
@@ -29,7 +30,7 @@ verify:
 # ---------- per-language pack targets ----------
 pack-node: prereq
 	cd $(Sdks)/node && npm pack --silent --pack-destination ../../$(PACK) \
-	  && mv ../../$(PACK)/easytunnel-et-sdk-$(V).tgz ../../$(PACK)/et-sdk-node-$(V).tgz
+	  && mv ../../$(PACK)/easytunnel-et-sdk-$(NODE_V).tgz ../../$(PACK)/et-sdk-node-$(NODE_V).tgz
 pack-typescript: prereq
 	cd $(Sdks)/typescript && npm pack --silent --pack-destination ../../$(PACK)
 pack-deno: prereq
