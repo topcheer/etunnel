@@ -237,6 +237,29 @@ jobs:
             mix deps.get
             mix hex.publish --yes   # OIDC auto: id-token:write + no HEX_API_KEY
           fi
+
+  publish-dart:
+    # pub.dev automated publishing (OIDC): topcheer/etunnel + sdk-packages.yml
+    # configured on the package's Automated publishing settings.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: pub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - name: dart pub publish (idempotent)
+        run: |
+          V=$(sed -n 's/^version: //p' sdks/dart/pubspec.yaml | head -1)
+          if curl -sf "https://pub.dev/api/packages/etunnel" | grep -q "\"$V\""; then
+            echo "pub.dev: ${V} already published, skipping"
+          else
+            cd sdks/dart && dart pub publish --force
+          fi
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
