@@ -1,5 +1,8 @@
 # etunnel
 
+[![npm](https://img.shields.io/npm/v/@easytunnel/et-sdk?label=npm%20%40easytunnel%2Fet-sdk)](https://www.npmjs.com/package/@easytunnel/et-sdk)
+[![crates.io](https://img.shields.io/crates/v/etunnel?label=crates.io%20etunnel)](https://crates.io/crates/etunnel)
+
 A reverse-tunnel service like localhost.run / cloudflare tunnel, but **zero
 registration** and **one line of code** to use: an SDK client connects out to
 the server, gets a random subdomain with an automatically issued TLS
