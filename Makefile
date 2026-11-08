@@ -19,7 +19,10 @@ prereq:
 	@mkdir -p $(PACK)
 
 # ---------- verification (compile-only, no artifacts) ----------
-verify:
+check-versions:
+	python3 scripts/bump-release.py --check
+
+verify: check-versions
 	go build ./... && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
