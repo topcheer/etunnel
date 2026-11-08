@@ -167,3 +167,27 @@ TIER_PRO_PRICE_CENTS=900
 - Admin: `/stats` reports `billing: {stripe, paypal}` enablement
 - Webhook signature verification: Stripe HMAC-SHA256 (tolerance 5m),
   PayPal via the verify-webhook-signature API
+
+## Telegram admin bot (optional)
+
+Manage the server from a whitelisted Telegram chat:
+
+```sh
+TELEGRAM_BOT_TOKEN=123456:ABC...   # from @BotFather
+TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id (get via @userinfobot)
+```
+
+Commands (only the whitelisted chat is answered; everyone else is ignored):
+
+```
+/status                     uptime, tunnel/account counts, traffic, billing
+/tunnels                    live tunnels: subdomain, plan, owner, ip, streams
+/accounts                   registered accounts and tiers
+/kick <subdomain>           drop a tunnel
+/tier <email> <tier>        change an account's tier
+/whois <subdomain>          tunnel owner
+```
+
+Payments also push a notification ("💰 email purchased tier") on every
+successful activation. Zero new dependencies; long-polling, no public
+webhook needed. Either env empty -> bot fully disabled.

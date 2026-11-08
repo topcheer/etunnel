@@ -272,12 +272,14 @@ func (s *Server) activate(email, tier string) (string, error) {
 	if acct, ok := s.accounts.LookupEmail(email); ok {
 		acct.Tier = tier // renewal/upgrade, key unchanged
 		_ = s.accounts.saveLockedSafe()
+		s.notifyPayment(email, tier)
 		return acct.APIKey, nil
 	}
 	acct, err := s.accounts.Create(email, tier)
 	if err != nil {
 		return "", err
 	}
+	s.notifyPayment(email, tier)
 	return acct.APIKey, nil
 }
 

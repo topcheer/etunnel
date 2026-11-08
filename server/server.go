@@ -30,6 +30,7 @@ type Server struct {
 	handler      http.Handler
 	adminHandler http.Handler
 	billing      BillingConfig
+	tg           telegramConfig
 }
 
 // logf emits a server log line (stdout + journald under systemd).
@@ -79,6 +80,7 @@ func (s *Server) Accounts() *AccountStore { return s.accounts }
 // Run starts all listeners and blocks until ctx is done.
 func (s *Server) Run(ctx context.Context) error {
 	var servers []*http.Server
+	s.startTelegram(ctx)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, srv := range servers {
