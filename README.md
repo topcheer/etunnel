@@ -143,6 +143,13 @@ gofmt -w . && go vet ./...
 
 Protocol details: [PROTOCOL.md](PROTOCOL.md).
 
+## User accounts & login
+
+OAuth login (Google / GitLab / Apple) gates subscriptions: see /login and
+/me (reset API key, cancel, custom domains, close account). Custom
+subdomains are ownership-gated - paid users claim names they added in /me.
+Full credential list: [CREDENTIALS.md](CREDENTIALS.md).
+
 ## Billing (PayPal + Stripe)
 
 Self-hosted payments for paid tiers, zero third-party Go dependencies:
