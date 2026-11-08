@@ -432,9 +432,12 @@ Register for paid plans (custom subdomains, longer lifetime, 10 Mbps):
 func notFoundHTML(cfg Config, host string) string {
 	return `<!doctype html>
 <html><head><meta charset="utf-8"><title>tunnel not found</title>
-<style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:560px;padding:2rem;text-align:center}h1{color:#f85149}</style>
+<meta http-equiv="refresh" content="5; url=https://github.com/topcheer/etunnel">
+<style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:560px;padding:2rem;text-align:center}h1{color:#f85149}a{color:#58a6ff}</style>
 </head><body><main>
 <h1>404 — no tunnel here</h1>
 <p><code>` + host + `</code> does not have an active tunnel right now.<br>The SDK client may be offline, or the tunnel expired.</p>
+<p><small>Redirecting to <a href="https://github.com/topcheer/etunnel">github.com/topcheer/etunnel</a> in 5 seconds...</small></p>
+<script>setTimeout(function(){location.href="https://github.com/topcheer/etunnel"},5000)</script>
 </main></body></html>`
 }
