@@ -1,12 +1,12 @@
 [package]
 name = "etunnel"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Expose a local service through an etunnel reverse-tunnel server with one line of code"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/ggcode/etunnel"
-homepage = "https://github.com/ggcode/etunnel"
+repository = "https://github.com/topcheer/etunnel"
+homepage = "https://github.com/topcheer/etunnel"
 keywords = ["tunnel", "reverse-proxy", "webhook", "localhost", "ngrok"]
 categories = ["network-programming", "web-programming"]
 
