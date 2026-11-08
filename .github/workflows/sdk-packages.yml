@@ -51,13 +51,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -e
-          curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
+          CURL="curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors"
+          $CURL https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
           unzip -q /tmp/kotlin.zip -d /tmp/kotlin
           sudo ln -sf /tmp/kotlin/kotlinc/bin/kotlinc /usr/local/bin/kotlinc
-          curl -fsSL https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
+          $CURL https://github.com/coursier/coursier/releases/download/v2.1.18/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
           chmod +x /tmp/cs
           sudo /tmp/cs install scala:3.5.2 scalac:3.5.2 --install-dir /usr/local/bin
-          curl -fsSL https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
+          $CURL https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
 
       - name: Install macOS extras
         if: runner.os == 'macOS'
@@ -103,6 +104,8 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+      - name: Upgrade npm (trusted publishing needs npm >= 11.5.0; node 22 ships npm 10.x)
+        run: npm install -g npm@latest && npm --version
       - name: Publish @easytunnel/et-sdk (provenance via OIDC)
         run: cd sdks/node && npm publish --access public
   #
