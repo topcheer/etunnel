@@ -152,12 +152,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with: { ruby-version: '3.3' }
-      # OIDC -> API key credential exchange; owner binding REQUIRED for the
-      # first push (RubyGems rejects ownerless first pushes)
-      - uses: rubygems/configure-rubygems-credentials@v2.1.0
-        with:
-          owner: '247533'
-      - run: cd sdks/ruby && gem build etunnel.gemspec
+      # Manual OIDC exchange: rubygems/configure-rubygems-credentials has no
+      # `owner` input in any release, but the exchange endpoint accepts it in
+      # the JSON body (required while the pending trusted publisher exists).
+      - name: OIDC exchange (owner-bound) + gem build
+        run: |
+          set -e
+          OIDC=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rubygems.org" | jq -r .value)
+          KEY=$(curl -fsS -X POST https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token \
+            -H 'content-type: application/json' \
+            -d "{\"jwt\":\"$OIDC\",\"owner\":247533}" \
+            | jq -r '.rubygems_api_key // .rubygemsApiKey // empty')
+          if [ -z "$KEY" ]; then echo "exchange failed"; exit 1; fi
+          echo "::add-mask::$KEY"
+          echo "GEM_HOST_API_KEY=$KEY" >> "$GITHUB_ENV"
+          cd sdks/ruby && gem build etunnel.gemspec
       - name: gem push (idempotent)
         run: |
           V=$(ruby -e "print Gem::Specification.load('sdks/ruby/etunnel.gemspec').version")
