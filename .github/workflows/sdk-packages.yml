@@ -163,8 +163,9 @@ jobs:
           KEY=$(curl -fsS -X POST https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token \
             -H 'content-type: application/json' \
             -d "{\"jwt\":\"$OIDC\",\"owner\":\"247533\"}" \
-            | jq -r '.rubygems_api_key // .rubygemsApiKey // empty')
-          if [ -z "$KEY" ]; then echo "exchange failed"; exit 1; fi
+            | tee /tmp/exch.json | jq -r '.rubygems_api_key // .rubygemsApiKey // empty')
+          if [ -z "$KEY" ]; then cat /tmp/exch.json; echo; echo "exchange failed"; exit 1; fi
+          echo "exchange ok, key owner: $(jq -r '.owner // "?"' /tmp/exch.json), id: $(jq -r '.id // "?"' /tmp/exch.json), scopes: $(jq -c '.scopes // "?"' /tmp/exch.json)"
           echo "::add-mask::$KEY"
           echo "GEM_HOST_API_KEY=$KEY" >> "$GITHUB_ENV"
           cd sdks/ruby && gem build etunnel.gemspec
