@@ -299,6 +299,18 @@ jobs:
           cache: maven
       - name: Import GPG key
         run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+      - name: Write Maven settings.xml
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<XML
+          <settings><servers>
+          <server>
+            <id>central</id>
+            <username>${{ secrets.MAVEN_USERNAME }}</username>
+            <password>${{ secrets.MAVEN_PASSWORD }}</password>
+          </server>
+          </servers></settings>
+          XML
       - name: Publish to Maven Central (idempotent)
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
