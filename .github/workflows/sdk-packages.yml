@@ -260,6 +260,28 @@ jobs:
           else
             cd sdks/dart && dart pub publish --force
           fi
+
+  publish-jsr:
+    # JSR (@ggcode/etunnel): scope linked to GitHub on jsr.io; deno publish
+    # uses OIDC automatically with id-token:write.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: 'v2.x' }
+      - name: deno publish (idempotent)
+        run: |
+          V=$(deno eval "const c=JSON.parse(await Deno.readTextFile('sdks/deno/deno.json'));console.log(c.version)")
+          if curl -sf "https://jsr.io/@ggcode/etunnel/meta.json" | grep -q "\"$V\""; then
+            echo "jsr: ${V} already published, skipping"
+          else
+            cd sdks/deno && deno publish --allow-dirty --no-check
+          fi
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
