@@ -162,7 +162,7 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rubygems.org" | jq -r .value)
           KEY=$(curl -fsS -X POST https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token \
             -H 'content-type: application/json' \
-            -d "{\"jwt\":\"$OIDC\",\"owner\":247533}" \
+            -d "{\"jwt\":\"$OIDC\",\"owner\":\"247533\"}" \
             | jq -r '.rubygems_api_key // .rubygemsApiKey // empty')
           if [ -z "$KEY" ]; then echo "exchange failed"; exit 1; fi
           echo "::add-mask::$KEY"
