@@ -195,6 +195,37 @@ jobs:
               --api-key "${{ steps.nugetlogin.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+
+  publish-hex:
+    # Hex Workload Identity (trusted publishing). Bootstrap: first release is
+    # pushed manually (workload identities can't create a package), then the
+    # owner adds a Workload Identity on hex.pm/gems/etunnel -> Workload
+    # identities: repo owner topcheer, repo etunnel, workflow sdk-packages.yml,
+    # env hex. Fail-soft until that is done.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: hex
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.17'
+      - name: mix hex.publish (idempotent, OIDC workload identity)
+        run: |
+          cd sdks/elixir
+          V=$(grep -oP '(?<=version: ")[^"]+' mix.exs | head -1)
+          if curl -sf "https://hex.pm/api/packages/etunnel/releases/$V" > /dev/null; then
+            echo "hex: ${V} already published, skipping"
+          else
+            mix deps.get
+            mix hex.publish --yes   # OIDC auto: id-token:write + no HEX_API_KEY
+          fi
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
