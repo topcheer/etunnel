@@ -80,8 +80,15 @@ is complete (upgrade requests carry no body and get no FIN — the stream then
 stays a bidirectional pipe, see §5).
 
 Hop-by-hop headers (`Connection`, `Transfer-Encoding`, `Keep-Alive`, `Te`,
-`Trailer`, `Upgrade`, `Proxy-*`) are stripped by the server; it adds
-`X-Forwarded-For` (appending), `X-Forwarded-Proto` and `X-Real-Ip`.
+`Trailer`, `Proxy-*`) are stripped by the server — **except on upgrade
+requests** (those carrying `Connection: Upgrade` / an `Upgrade` header),
+where `Connection` and `Upgrade` are forwarded verbatim and `Sec-WebSocket-*`
+headers pass through, so a 101 response turns the stream into a raw
+bidirectional pipe (§5). The server adds `X-Forwarded-For` (appending),
+`X-Forwarded-Proto`, `X-Real-Ip`, and `X-Forwarded-Host` (the original
+public `Host`, prepended to any existing chain) — the canonical Go SDK
+restores that value as the request `Host` the local service sees; other
+SDKs should read the header for absolute URLs and same-origin checks.
 
 The client executes the request against the local service and answers:
 

@@ -182,6 +182,12 @@ func (t *Tunnel) serveStream(st *clientStream, req *protocol.Req) {
 			hreq.Header.Del("Content-Length")
 		}
 	}
+	// Restore the original public host (X-Forwarded-Host from the server):
+	// req.Host sets the Host header the local service sees, so absolute
+	// URLs and Origin/Host same-origin checks work through the tunnel.
+	if fh := hdrs.Values("X-Forwarded-Host"); len(fh) > 0 && fh[0] != "" {
+		hreq.Host = fh[0]
+	}
 
 	var resp *http.Response
 	if isUpgrade {

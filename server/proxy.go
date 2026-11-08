@@ -232,6 +232,14 @@ func forwardRequestHeaders(r *http.Request, isUpgrade bool) map[string][]string 
 		out["X-Forwarded-For"] = []string{remoteIP(r)}
 	}
 	out["X-Forwarded-Proto"] = []string{schemeOf(r)}
+	// Original public host (Go keeps r.Host out of r.Header): local apps
+	// need it for absolute URLs and Origin/Host same-origin checks. The Go
+	// SDK restores it as the request Host; other SDKs read the header.
+	if prior := out["X-Forwarded-Host"]; len(prior) > 0 {
+		out["X-Forwarded-Host"] = append([]string{r.Host}, prior...)
+	} else {
+		out["X-Forwarded-Host"] = []string{r.Host}
+	}
 	if out["X-Real-Ip"] == nil {
 		out["X-Real-Ip"] = []string{remoteIP(r)}
 	}
@@ -330,10 +338,26 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 
 	done := make(chan struct{}, 2)
 
-	// tunnel -> external
+	// tunnel -> external. Write+Flush per chunk: the hijacked bufio.Writer
+	// otherwise buffers small frames (e.g. a single WebSocket frame) in its
+	// 4KB buffer and the TLS-path peer never sees them until close.
 	go func() {
 		defer func() { done <- struct{}{} }()
-		_, _ = io.Copy(brw, st.bodyPr)
+		buf := make([]byte, protocol.MaxPayload)
+		for {
+			n, rerr := st.bodyPr.Read(buf)
+			if n > 0 {
+				if _, werr := brw.Write(buf[:n]); werr != nil {
+					break
+				}
+				if ferr := brw.Flush(); ferr != nil {
+					break
+				}
+			}
+			if rerr != nil {
+				break
+			}
+		}
 		_ = brw.Flush()
 		_ = conn.Close() // signal EOF to the other direction
 	}()
