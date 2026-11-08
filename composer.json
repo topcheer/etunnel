@@ -27,5 +27,6 @@
   ],
   "support": {
     "source": "https://github.com/topcheer/etunnel/tree/main/sdks/php"
-  }
+  },
+  "version": "1.1.0"
 }

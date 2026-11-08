@@ -67,7 +67,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -e
-          cd sdks/lua && luarocks pack etunnel-1.0.0-1.rockspec && mv *.rock ../../dist/packages/ && cd ../..
+          cd sdks/lua && luarocks pack ggcode.etunnel-*-1.rockspec && mv *.rock ../../dist/packages/ && cd ../..
           cd sdks/elixir && mix local.hex --force && mix deps.get && mix compile
           cd sdks/elixir && mix hex.build --output ../../dist/packages/etunnel-elixir-1.0.0.tar || true
 
