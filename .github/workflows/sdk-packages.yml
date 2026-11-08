@@ -119,6 +119,26 @@ jobs:
       - run: pipx install build
       - run: cd sdks/python && build
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-rubygems:
+    # RubyGems trusted publishing (OIDC). One-time bootstrap, same shape as npm:
+    # 1) manual first push: gem push dist/packages/etunnel-1.0.0.gem (needs API key
+    #    from rubygems.org settings + OTP)
+    # 2) then on the gem page -> Settings -> Trusted Publishing, add:
+    #    owner=topcheer repo=etunnel workflow=sdk-packages.yml env=rubygems
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: rubygems
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with: { ruby-version: '3.3' }
+      - run: cd sdks/ruby && gem build etunnel.gemspec
+      - run: gem push sdks/ruby/etunnel-*.gem   # RubyGems CLI >=3.6 auto-detects Actions OIDC
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
