@@ -1,7 +1,7 @@
 package = "ggcode.etunnel"
 version = "1.0.0-1"
 source = {
-  url = "git://github.com/ggcode/etunnel",
+  url = "https://github.com/topcheer/etunnel",
   tag = "v1.0.0"
 }
 description = "Expose a local service through an etunnel reverse-tunnel server"

@@ -1,7 +1,7 @@
 name: etunnel
 description: Expose a local service through an etunnel reverse-tunnel server with one line of code.
 version: 1.0.0
-homepage: https://github.com/ggcode/etunnel
-repository: https://github.com/ggcode/etunnel
+homepage: https://github.com/topcheer/etunnel
+repository: https://github.com/topcheer/etunnel
 environment:
   sdk: ^3.0.0
