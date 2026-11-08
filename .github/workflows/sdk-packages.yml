@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14]
+        # macos-14 pool currently rejects configs ("not supported"); artifacts
+        # are source-identical - ubuntu-only until the pool recovers
+        os: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v4
 
@@ -51,19 +53,19 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -e
-          CURL="curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors"
-          $CURL https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
-          unzip -q /tmp/kotlin.zip -d /tmp/kotlin
-          sudo ln -sf /tmp/kotlin/kotlinc/bin/kotlinc /usr/local/bin/kotlinc
-          $CURL https://github.com/coursier/coursier/releases/download/v2.1.18/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
+          # kotlin via SDKMAN (direct GitHub-release URL 504s repeatedly from runners)
+          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://get.sdkman.io | bash
+          source ~/.sdkman/bin/sdkman-init.sh
+          sdk install kotlin 2.0.21
+          sudo ln -sf ~/.sdkman/candidates/kotlin/current/bin/kotlinc /usr/local/bin/kotlinc
+          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://github.com/coursier/coursier/releases/download/v2.1.18/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
           chmod +x /tmp/cs
           sudo /tmp/cs install scala:3.5.2 scalac:3.5.2 --install-dir /usr/local/bin
-          $CURL https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
+          curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
 
       - name: Install macOS extras
         if: runner.os == 'macOS'
         run: brew install kotlin scala clojure libwebsockets json-c
-
       - name: Verify core
         run: go build ./... && go test -count=1 ./...
 
@@ -108,6 +110,25 @@ jobs:
         run: npm install -g npm@latest && npm --version
       - name: Publish @easytunnel/et-sdk (provenance via OIDC)
         run: cd sdks/node && npm publish --access public
+
+  publish-pypi:
+    # PyPI trusted publishing (OIDC, no token). One-time setup on pypi.org:
+    # manage.pypi.org -> Publishing -> Add a new *pending* publisher:
+    #   name=etunnel  owner=topcheer  repo=etunnel  workflow=sdk-packages.yml  env=pypi
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC token for PyPI trusted publishing
+      contents: read
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pipx install build
+      - run: cd sdks/python && python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
