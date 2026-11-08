@@ -1,5 +1,7 @@
 # etunnel for Lua
 
+[![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)
+
 luasocket + luasec (wss against autocert servers needs lua-http for SNI).
 
 Zero registration: every SDK client speaks the same tiny wire protocol

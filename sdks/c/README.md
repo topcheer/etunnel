@@ -1,5 +1,7 @@
 # etunnel for C
 
+[![GitHub release](https://img.shields.io/github/v/release/topcheer/etunnel?label=GitHub%20release)](https://github.com/topcheer/etunnel/releases)
+
 libwebsockets + libcurl + json-c.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

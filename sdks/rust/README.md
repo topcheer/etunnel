@@ -1,62 +1,45 @@
-# etunnel (Rust)
+# etunnel for Rust
 
-Expose a local service to the internet through an [etunnel](https://github.com/topcheer/etunnel)
-reverse-tunnel server — one command, zero registration, automatic TLS.
+[![crates.io](https://img.shields.io/crates/v/etunnel?label=crates.io%20etunnel)](https://crates.io/crates/etunnel)
 
-```text
-your app :3000 ──wss──▶ etunneld ──https──▶ https://<subdomain>.t.ggcode.uk
-```
+tungstenite + ureq CLI crate.
+
+Zero registration: every SDK client speaks the same tiny wire protocol
+([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
+(default `wss://t.ggcode.uk/tunnel`).
 
 ## Install
 
-```sh
+```
 cargo install etunnel
 ```
 
-Or add it as a dependency:
+Requires Rust 1.70+.
 
-```sh
-cargo add etunnel
+## CLI
+
+```
+etunnel 3000
 ```
 
-## CLI usage
+Prints `TUNNEL_URL: https://<subdomain>.t.ggcode.uk` — that URL now routes to
+your local service. Ctrl-C closes the tunnel.
 
-```sh
-etunnel 3000                      # expose localhost:3000
-TUNNEL_URL: https://quiet-frog-42.t.ggcode.uk
-```
+## Embed
 
-That URL now routes to your local service from anywhere on the internet.
-`Ctrl-C` closes the tunnel.
+See the header of the source file for the embed example.
 
-Environment variables (all optional):
+## Environment variables
 
-| Variable            | Meaning                                   | Default                      |
-|---------------------|-------------------------------------------|------------------------------|
-| `ETUNNEL_SERVER`    | tunnel server WebSocket URL               | `wss://t.ggcode.uk/tunnel`   |
-| `ETUNNEL_LOCAL`     | local port or `host:port`                 | `3000` (or 1st CLI arg)      |
-| `ETUNNEL_TOKEN`     | paid-plan API key                         | -                            |
-| `ETUNNEL_SUBDOMAIN` | custom subdomain (paid plans)             | random                       |
-
-## Embedding
-
-The crate is primarily a CLI (see [`src/main.rs`](https://github.com/topcheer/etunnel/blob/main/sdks/rust/src/main.rs)
-for the full protocol client); for programmatic use from Rust, the canonical
-streaming SDK is the Go package at [`sdk/`](https://github.com/topcheer/etunnel/tree/main/sdk).
-
-## How it works
-
-The client dials one outbound WebSocket to the server, multiplexes HTTP
-request/response streams over it, and forwards each request to your local
-service. The wire protocol is tiny (JSON control messages + 9-byte-header
-binary frames) — see [PROTOCOL.md](https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md).
-This port buffers request/response bodies per stream: fine for webhooks,
-dashboards and demos.
-
-Server-side it's a single Go binary (`etunneld`) — see the
-[main README](https://github.com/topcheer/etunnel) for a 60-second setup and
-the public instance at `wss://t.ggcode.uk/tunnel`.
+| Variable | Meaning | Default |
+|---|---|---|
+| `ETUNNEL_SERVER` | tunnel server WebSocket URL | `wss://t.ggcode.uk/tunnel` |
+| `ETUNNEL_LOCAL` | local port or `host:port` (or 1st CLI arg) | `3000` |
+| `ETUNNEL_TOKEN` | paid-plan API key (optional) | - |
+| `ETUNNEL_SUBDOMAIN` | custom subdomain (paid plans) | random |
 
 ## License
 
-MIT — see [LICENSE](https://github.com/topcheer/etunnel/blob/main/LICENSE).
+MIT — see [LICENSE](../../LICENSE). Buffer-based protocol client: request and
+response bodies are buffered per stream (fine for webhooks/dashboards/demos;
+use the [Go SDK](../../sdk) for streaming and WebSocket pass-through).

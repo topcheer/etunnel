@@ -1,5 +1,7 @@
 # etunnel for Elixir
 
+[![Hex](https://img.shields.io/hexpm/v/etunnel?label=Hex%20etunnel)](https://hex.pm/packages/etunnel)
+
 websockex + jason; local requests via :httpc.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

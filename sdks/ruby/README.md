@@ -1,5 +1,7 @@
 # etunnel for Ruby
 
+[![RubyGems](https://img.shields.io/gem/v/etunnel?label=RubyGems%20etunnel)](https://rubygems.org/gems/etunnel)
+
 EventMachine/faye-websocket based.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

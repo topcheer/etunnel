@@ -1,5 +1,7 @@
 # etunnel for Deno
 
+[![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)
+
 Built-in WebSocket, zero dependencies.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

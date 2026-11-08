@@ -1,5 +1,7 @@
 # etunnel for PHP
 
+[![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)
+
 Streams + ext-openssl only — no curl/guzzle needed.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

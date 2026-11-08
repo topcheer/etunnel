@@ -1,5 +1,7 @@
 # etunnel for Swift
 
+[![SwiftPM](https://img.shields.io/badge/SwiftPM-compatible-orange?logo=swift)](https://github.com/topcheer/etunnel)
+
 Foundation-only single-file SDK (URLSession WebSocket).
 
 Zero registration: every SDK client speaks the same tiny wire protocol

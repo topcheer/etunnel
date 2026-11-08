@@ -1,5 +1,7 @@
 # etunnel for Kotlin
 
+Maven Central: `dev.ggcode:etunnel` (Java artifact)
+
 Single-file SDK on JDK HttpClient/WebSocket.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

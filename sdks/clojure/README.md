@@ -1,5 +1,7 @@
 # etunnel for Clojure
 
+[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)
+
 JDK HttpClient/WebSocket + cheshire.
 
 Zero registration: every SDK client speaks the same tiny wire protocol
@@ -10,7 +12,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 
 ```
 ;; deps.edn
-{:deps {dev.ggcode/etunnel {:mvn/version "1.0.0"}}}
+{:deps {com.ggcode/etunnel {:mvn/version "1.0.0"}}}
 ```
 
 Requires JDK 11+.

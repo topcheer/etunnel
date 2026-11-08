@@ -1,5 +1,7 @@
 # etunnel for TypeScript
 
+[![npm](https://img.shields.io/npm/v/etunnel-ts?label=npm%20etunnel-ts)](https://www.npmjs.com/package/etunnel-ts)
+
 Same implementation as the Node SDK, with types.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

@@ -1,5 +1,7 @@
 # etunnel for C# / .NET
 
+[![NuGet](https://img.shields.io/nuget/v/etunnel?label=NuGet%20etunnel)](https://www.nuget.org/packages/etunnel)
+
 System.Net.WebSockets + HttpClient, zero NuGet dependencies.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

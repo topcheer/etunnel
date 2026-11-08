@@ -1,5 +1,7 @@
 # etunnel for Dart
 
+[![pub.dev](https://img.shields.io/pub/v/etunnel?label=pub.dev%20etunnel)](https://pub.dev/packages/etunnel)
+
 dart:io only, zero dependencies.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

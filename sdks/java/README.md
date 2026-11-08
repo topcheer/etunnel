@@ -1,5 +1,7 @@
 # etunnel for Java
 
+[![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
+
 Single-file SDK, JDK 11+ built-in HttpClient/WebSocket — zero dependencies.
 
 Zero registration: every SDK client speaks the same tiny wire protocol

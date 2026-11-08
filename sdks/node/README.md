@@ -1,5 +1,7 @@
 # etunnel for Node.js
 
+[![npm](https://img.shields.io/npm/v/@easytunnel/et-sdk?label=npm%20%40easytunnel%2Fet-sdk)](https://www.npmjs.com/package/@easytunnel/et-sdk)
+
 Expose a local service through an etunnel reverse-tunnel server. Zero dependencies (Node >= 22 built-in WebSocket).
 
 Zero registration: every SDK client speaks the same tiny wire protocol

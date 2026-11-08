@@ -1,5 +1,7 @@
 # etunnel for Perl
 
+CPAN (pending PAUSE approval)
+
 Core modules only (IO::Socket::SSL, JSON::PP, HTTP::Tiny).
 
 Zero registration: every SDK client speaks the same tiny wire protocol

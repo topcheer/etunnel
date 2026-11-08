@@ -4,6 +4,8 @@ import pathlib
 
 TMPL = """# etunnel for {title}
 
+{badge}
+
 {desc}
 
 Zero registration: every SDK client speaks the same tiny wire protocol
@@ -46,6 +48,7 @@ use the [Go SDK](../../sdk) for streaming and WebSocket pass-through).
 """
 SEE = "## Embed\n\nSee the header of the source file for the embed example."
 R = {
+
  "node": ("Node.js", "Expose a local service through an etunnel reverse-tunnel server. Zero dependencies (Node >= 22 built-in WebSocket).", "npm install @easytunnel/et-sdk", "Requires Node >= 22.", "npx @easytunnel/et-sdk 3000", "## Embed\n\n```js\nconst { connect } = require('@easytunnel/et-sdk');\nconst t = await connect('wss://t.ggcode.uk/tunnel', 3000);\nconsole.log(t.url);\n```"),
  "typescript": ("TypeScript", "Same implementation as the Node SDK, with types.", "npm install etunnel-ts", "Node >= 22 (type stripping) or tsc.", "node node_modules/etunnel-ts/etunnel.ts 3000", "## Embed\n\n```ts\nimport { connect } from 'etunnel-ts';\nconst t = await connect('wss://t.ggcode.uk/tunnel', 3000);\nconsole.log(t.url);\n```"),
  "deno": ("Deno", "Built-in WebSocket, zero dependencies.", "deno add @ggcode/etunnel", "Deno >= 1.38.", "deno run --allow-net etunnel.ts 3000", "## Embed\n\n```ts\nimport { connect } from '@ggcode/etunnel';\nconst t = await connect('wss://t.ggcode.uk/tunnel', 3000);\n```"),
@@ -67,9 +70,32 @@ R = {
  "cpp": ("C++", "websocketpp + asio + libcurl.", "cmake -B build && cmake --build build", "Requires websocketpp, asio (or Boost >= 1.66), libcurl, OpenSSL.", "./build/etunnel 3000", SEE),
 }
 
+
+BADGES = {
+ "node": "[![npm](https://img.shields.io/npm/v/@easytunnel/et-sdk?label=npm%20%40easytunnel%2Fet-sdk)](https://www.npmjs.com/package/@easytunnel/et-sdk)",
+ "typescript": "[![npm](https://img.shields.io/npm/v/etunnel-ts?label=npm%20etunnel-ts)](https://www.npmjs.com/package/etunnel-ts)",
+ "deno": "[![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)",
+ "python": "[![PyPI](https://img.shields.io/pypi/v/etunnel?label=PyPI%20etunnel)](https://pypi.org/project/etunnel/)",
+ "java": "[![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)",
+ "kotlin": "Maven Central: `dev.ggcode:etunnel` (Java artifact)",
+ "scala": "Maven Central: `dev.ggcode:etunnel` (Java artifact)",
+ "csharp": "[![NuGet](https://img.shields.io/nuget/v/etunnel?label=NuGet%20etunnel)](https://www.nuget.org/packages/etunnel)",
+ "rust": "[![crates.io](https://img.shields.io/crates/v/etunnel?label=crates.io%20etunnel)](https://crates.io/crates/etunnel)",
+ "swift": "[![SwiftPM](https://img.shields.io/badge/SwiftPM-compatible-orange?logo=swift)](https://github.com/topcheer/etunnel)",
+ "dart": "[![pub.dev](https://img.shields.io/pub/v/etunnel?label=pub.dev%20etunnel)](https://pub.dev/packages/etunnel)",
+ "ruby": "[![RubyGems](https://img.shields.io/gem/v/etunnel?label=RubyGems%20etunnel)](https://rubygems.org/gems/etunnel)",
+ "php": "[![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)",
+ "perl": "CPAN (pending PAUSE approval)",
+ "clojure": "[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)",
+ "elixir": "[![Hex](https://img.shields.io/hexpm/v/etunnel?label=Hex%20etunnel)](https://hex.pm/packages/etunnel)",
+ "lua": "[![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)",
+ "c": "[![GitHub release](https://img.shields.io/github/v/release/topcheer/etunnel?label=GitHub%20release)](https://github.com/topcheer/etunnel/releases)",
+ "cpp": "[![GitHub release](https://img.shields.io/github/v/release/topcheer/etunnel?label=GitHub%20release)](https://github.com/topcheer/etunnel/releases)",
+}
+
 root = pathlib.Path(__file__).resolve().parent.parent
 for lang, (title, desc, install, req, cli, embed) in R.items():
     p = root / "sdks" / lang / "README.md"
-    p.write_text(TMPL.format(title=title, desc=desc, install=install, req=req, cli=cli, embed=embed))
+    p.write_text(TMPL.format(title=title, badge=BADGES[lang], desc=desc, install=install, req=req, cli=cli, embed=embed))
     print("wrote", p.relative_to(root), p.stat().st_size, "bytes")
 print("total:", len(R))

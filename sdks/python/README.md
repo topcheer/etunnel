@@ -1,5 +1,7 @@
 # etunnel for Python
 
+[![PyPI](https://img.shields.io/pypi/v/etunnel?label=PyPI%20etunnel)](https://pypi.org/project/etunnel/)
+
 websocket-client based.
 
 Zero registration: every SDK client speaks the same tiny wire protocol
