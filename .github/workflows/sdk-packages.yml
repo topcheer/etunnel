@@ -68,7 +68,7 @@ jobs:
         run: |
           set -e
           cd sdks/lua && luarocks pack ggcode.etunnel-*-1.rockspec && mv *.rock ../../dist/packages/ && cd ../..
-          cd sdks/elixir && mix local.hex --force && mix deps.get && mix compile
+          cd sdks/elixir && mix local.hex --force && mix deps.get --only prod && MIX_ENV=prod mix compile
 
       - uses: actions/upload-artifact@v4
         with:
