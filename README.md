@@ -11,6 +11,7 @@
 [![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)
 [![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)
 [![Go](https://img.shields.io/github/go-mod/go-version/topcheer/etunnel?label=Go%20module)](https://pkg.go.dev/github.com/topcheer/etunnel)
+[![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
 
 A reverse-tunnel service like localhost.run / cloudflare tunnel, but **zero
 registration** and **one line of code** to use: an SDK client connects out to
