@@ -40,7 +40,7 @@ pack-deno: prereq
 pack-python: prereq
 	cd $(Sdks)/python && python3 -m pip wheel . --no-deps -w ../../$(PACK) --quiet
 pack-java: prereq
-	cd $(Sdks)/java && mkdir -p build && javac -d build Etunnel.java \
+	cd $(Sdks)/java && mkdir -p build && javac -d build src/main/java/dev/ggcode/Etunnel.java \
 	  && jar cfe ../../$(PACK)/etunnel-java-$(V).jar dev.ggcode.Etunnel -C build . \
 	  && cp pom.xml ../../$(PACK)/etunnel-java-$(V).pom
 pack-kotlin: prereq
