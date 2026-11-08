@@ -73,3 +73,5 @@ sdks/clojure/.nrepl-port
 sdks/swift/.build/
 sdks/python/build/
 sdks/deno/dist/
+sdks/dart/.dart_tool/
+sdks/dart/pubspec.lock
