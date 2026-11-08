@@ -16,35 +16,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchains (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y golang php-cli lua5.4 luarocks elixir cmake \
-            libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
-            libwebsocketpp-dev libasio-dev
-          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
-          curl -fsSL https://deno.land/install.sh | sh -s -- -y && echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
-          curl -fsSL https://rustup.rs | sh -s -- -y --default-toolchain stable && echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Install toolchains (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install deno kotlin scala clojure libwebsockets json-c
-
+      # ---- language setup actions (both OS) ----
+      - uses: actions/setup-go@v5
+        with: { go-version: 'stable' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: 'v2.x' }
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.0.x' }
-      - uses: swift-actions/setup-swift@v2
-        if: runner.os == 'Linux'
-        with: { swift-version: '5.9' }
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
       - uses: ruby/setup-ruby@v1
         with: { ruby-version: '3.3' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
+      - uses: swift-actions/setup-swift@v2
+        if: runner.os == 'Linux'
+        with: { swift-version: '5.9' }
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli lua5.4 luarocks elixir cmake unzip \
+            libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
+            libwebsocketpp-dev libasio-dev
+
+      - name: Install JVM extras - Linux (kotlin/scala/clojure)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          curl -fsSL https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/2.0.21/kotlin-compiler-2.0.21.zip -o /tmp/kotlin.zip
+          unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+          sudo ln -sf /tmp/kotlin/kotlinc/bin/kotlinc /usr/local/bin/kotlinc
+          curl -fsSL https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz | gzip -d > /tmp/cs
+          chmod +x /tmp/cs
+          sudo /tmp/cs install scala:3.5.2 scalac:3.5.2 --install-dir /usr/local/bin
+          curl -fsSL https://download.clojure.org/install/linux-install-1.12.0.1479.sh | sudo bash
+
+      - name: Install macOS extras
+        if: runner.os == 'macOS'
+        run: brew install kotlin scala clojure libwebsockets json-c
 
       - name: Verify core
         run: go build ./... && go test -count=1 ./...
@@ -52,7 +69,7 @@ jobs:
       - name: Pack all SDKs
         run: make pack-all
 
-      - name: Pack language-specific (Linux extras)
+      - name: Pack Linux extras (lua rock / elixir hex)
         if: runner.os == 'Linux'
         run: |
           set -e
@@ -88,18 +105,6 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Publish @easytunnel/et-sdk (provenance via OIDC)
         run: cd sdks/node && npm publish --access public
-  #
-  # publish-others:
-  #   needs: build
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   runs-on: ubuntu-latest
-  #   permissions: { id-token: write }   # PyPI Trusted Publishing (no token!)
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with: { python-version: '3.12' }
-  #     - run: pip install build && cd sdks/python && python -m build
-  #     - uses: pypa/gh-action-pypi-publish@release/v1
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
