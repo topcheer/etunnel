@@ -31,6 +31,10 @@ type Account struct {
 	Name     string `json:"name,omitempty"`     // display name
 	// Custom subdomains the account owns (paid tiers, count-limited by tier).
 	Domains []string `json:"domains,omitempty"`
+	// ExpiresAt is when the paid subscription lapses; zero means no expiry
+	// (free tier, or an account granted a tier manually). The reaper in
+	// Server.startTierReaper downgrades expired accounts to free.
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 }
 
 // AccountStore persists accounts in a JSON file.
@@ -232,4 +236,31 @@ func (s *AccountStore) List() []*Account {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
 	return out
+}
+
+// ExpiredPaid returns emails of paid accounts whose subscription lapsed.
+func (s *AccountStore) ExpiredPaid(now time.Time) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []string
+	for _, a := range s.byKey {
+		if a.Tier != "free" && !a.ExpiresAt.IsZero() && now.After(a.ExpiresAt) {
+			out = append(out, a.Email)
+		}
+	}
+	return out
+}
+
+// DowngradeToFree sets the tier to free and clears the expiry.
+func (s *AccountStore) DowngradeToFree(email string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.byMail[email]
+	if !ok {
+		return false
+	}
+	a.Tier = "free"
+	a.ExpiresAt = time.Time{}
+	_ = s.saveLocked()
+	return true
 }
