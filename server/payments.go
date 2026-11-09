@@ -266,6 +266,14 @@ func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, tier := paypalOrderMeta(order)
+	if email == "" || tier == "" {
+		// capture responses sometimes omit purchase_units.custom_id;
+		// GET order reliably returns it.
+		s.logf("billing: paypal capture missing custom_id, falling back to GET order %s", token)
+		if got, gerr := s.paypalReq("GET", "/v2/checkout/orders/"+url.PathEscape(token), nil); gerr == nil {
+			email, tier = paypalOrderMeta(got)
+		}
+	}
 	key, err := s.activate(email, tier)
 	if err != nil {
 		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
