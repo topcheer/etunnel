@@ -164,3 +164,35 @@ func TestLogoutClearsSession(t *testing.T) {
 		t.Fatal("logout must expire the session cookie")
 	}
 }
+
+func TestOAuthProvidersGating(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth = oauthConfig{}
+	if s.oauthEnabled("github") || s.oauthEnabled("gitlab") {
+		t.Fatal("empty config must disable all providers")
+	}
+	s.auth.githubID = "gh-id"
+	if !s.oauthEnabled("github") {
+		t.Fatal("github id set -> enabled")
+	}
+	// /login lists only configured providers
+	rec := httptest.NewRecorder()
+	s.handleLogin(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "/auth/github/login") || strings.Contains(body, "/auth/apple/login") {
+		t.Fatalf("login page provider list wrong: %.200s", body)
+	}
+}
+
+func TestOAuthLoginRedirectsToGithub(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth.githubID = "gh-id"
+	s.billing.PublicBaseURL = "https://x.test"
+	rec := httptest.NewRecorder()
+	s.handleOAuthLogin(rec, httptest.NewRequest(http.MethodGet, "/auth/github/login", nil), "github")
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "https://github.com/login/oauth/authorize?") ||
+		!strings.Contains(loc, "client_id=gh-id") || !strings.Contains(loc, "read%3Auser") {
+		t.Fatalf("github redirect: %d %s", rec.Code, loc)
+	}
+}

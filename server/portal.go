@@ -38,7 +38,7 @@ func parseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var providers []string
-	for _, p := range []string{"google", "gitlab", "apple"} {
+	for _, p := range []string{"google", "gitlab", "github", "apple"} {
 		if s.oauthEnabled(p) {
 			providers = append(providers, p)
 		}

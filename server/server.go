@@ -66,7 +66,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/me/", func(w http.ResponseWriter, r *http.Request) {
 		s.handleMeAction(w, r, strings.TrimPrefix(r.URL.Path, "/me/"))
 	})
-	for _, p := range []string{"google", "gitlab", "apple"} {
+	for _, p := range []string{"google", "gitlab", "github", "apple"} {
 		mux.HandleFunc("/auth/"+p+"/login", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthLogin(w, r, p) })
 		mux.HandleFunc("/auth/"+p+"/callback", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthCallback(w, r, p) })
 	}

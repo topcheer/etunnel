@@ -38,6 +38,7 @@ type oauthConfig struct {
 	googleID, googleSecret string
 	gitlabID, gitlabSecret string
 	gitlabURL              string
+	githubID, githubSecret string
 	appleID, appleTeam,
 	appleKey string
 	appleKeyPEM string
@@ -51,6 +52,8 @@ func oauthFromEnv() oauthConfig {
 		gitlabID:      os.Getenv("GITLAB_CLIENT_ID"),
 		gitlabSecret:  os.Getenv("GITLAB_CLIENT_SECRET"),
 		gitlabURL:     envOr("GITLAB_URL", "https://gitlab.com"),
+		githubID:      os.Getenv("GITHUB_CLIENT_ID"),
+		githubSecret:  os.Getenv("GITHUB_CLIENT_SECRET"),
 		appleID:       os.Getenv("APPLE_CLIENT_ID"),
 		appleTeam:     os.Getenv("APPLE_TEAM_ID"),
 		appleKey:      os.Getenv("APPLE_KEY_ID"),
@@ -119,6 +122,8 @@ func (s *Server) oauthEnabled(p string) bool {
 		return s.auth.googleID != ""
 	case "gitlab":
 		return s.auth.gitlabID != ""
+	case "github":
+		return s.auth.githubID != ""
 	case "apple":
 		return s.auth.appleID != "" && s.auth.appleTeam != "" && s.auth.appleKey != "" && s.auth.appleKeyPEM != ""
 	}
@@ -170,6 +175,13 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provid
 			"response_type": {"code"},
 			"scope":         {"read_user"},
 			"state":         {st},
+		}.Encode()
+	case "github":
+		authURL = "https://github.com/login/oauth/authorize?" + url.Values{
+			"client_id":    {s.auth.githubID},
+			"redirect_uri": {base + "/auth/github/callback"},
+			"scope":        {"read:user user:email"},
+			"state":        {st},
 		}.Encode()
 	case "apple":
 		authURL = "https://appleid.apple.com/auth/authorize?" + url.Values{
@@ -279,6 +291,47 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 			email = fmt.Sprintf("%s@users.noreply.gitlab.com", ui.Username)
 		}
 		return &oauthIdentityRes{fmt.Sprint(ui.ID), email, ui.Name}, nil
+	case "github":
+		tok, err := s.oauthToken(ctx, "https://github.com/login/oauth/access_token", url.Values{
+			"client_id": {s.auth.githubID}, "client_secret": {s.auth.githubSecret},
+			"code": {code}, "redirect_uri": {s.billing.PublicBaseURL + "/auth/github/callback"},
+		})
+		if err != nil {
+			return nil, err
+		}
+		var gh struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+			Name  string `json:"name"`
+			Email string `json:"email"`
+		}
+		if err := oauthGetJSON(ctx, "https://api.github.com/user", tok["access_token"], &gh); err != nil {
+			return nil, err
+		}
+		ghEmail := strings.ToLower(gh.Email)
+		if ghEmail == "" {
+			var emails []struct {
+				Email    string `json:"email"`
+				Primary  bool   `json:"primary"`
+				Verified bool   `json:"verified"`
+			}
+			if err := oauthGetJSON(ctx, "https://api.github.com/user/emails", tok["access_token"], &emails); err == nil {
+				for _, e := range emails {
+					if e.Primary && e.Verified {
+						ghEmail = strings.ToLower(e.Email)
+						break
+					}
+				}
+			}
+		}
+		if ghEmail == "" {
+			ghEmail = fmt.Sprintf("%s@users.noreply.github.com", gh.Login)
+		}
+		ghName := gh.Name
+		if ghName == "" {
+			ghName = gh.Login
+		}
+		return &oauthIdentityRes{fmt.Sprint(gh.ID), ghEmail, ghName}, nil
 	case "apple":
 		tok, err := s.oauthToken(ctx, "https://appleid.apple.com/auth/token", url.Values{
 			"client_id": {s.auth.appleID}, "client_secret": {s.appleClientSecret()},
