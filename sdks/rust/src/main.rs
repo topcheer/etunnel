@@ -308,7 +308,7 @@ fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, loca
 }
 
 fn main() {
-    let server = std::env::var("ETUNNEL_SERVER").unwrap_or_else(|_| "wss://t.ggcode.uk/tunnel".into());
+    let server = std::env::var("ETUNNEL_SERVER").unwrap_or_else(|_| option_env!("ETUNNEL_BUILD_SERVER").unwrap_or("wss://t.ggcode.uk/tunnel").into());
     let local = std::env::args().nth(1)
         .or_else(|| std::env::var("ETUNNEL_LOCAL").ok())
         .unwrap_or_else(|| "3000".into());

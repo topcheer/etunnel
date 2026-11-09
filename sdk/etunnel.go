@@ -39,6 +39,10 @@ type Options struct {
 	OnLog func(format string, args ...any)
 }
 
+// DefaultServer is the connect target when Options.Server is empty;
+// overridable at link time: -ldflags "-X etunnel/sdk.DefaultServer=wss://t.example.com/tunnel"
+var DefaultServer = "wss://t.ggcode.uk/tunnel"
+
 // APIError is a policy error returned by the server during handshake.
 type APIError struct {
 	Code    string
@@ -117,6 +121,9 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		opts.LocalAddr = "127.0.0.1" + opts.LocalAddr
 	}
 	server := NormalizeServerURL(opts.Server)
+	if server == "" {
+		server = DefaultServer
+	}
 	if server == "" {
 		return nil, errors.New("etunnel: Server is required")
 	}

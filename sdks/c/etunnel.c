@@ -269,7 +269,10 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_sigint);
     if (argc > 1) g_local_port = atoi(argv[1]);
     else if (getenv("ETUNNEL_LOCAL")) g_local_port = atoi(getenv("ETUNNEL_LOCAL"));
-    const char *server = getenv("ETUNNEL_SERVER") ?: "wss://t.ggcode.uk/tunnel";
+    #ifndef ETUNNEL_DEFAULT_SERVER
+#define ETUNNEL_DEFAULT_SERVER "wss://t.ggcode.uk/tunnel"
+#endif
+    const char *server = getenv("ETUNNEL_SERVER") ?: ETUNNEL_DEFAULT_SERVER;
 
     lws_set_log_level(0, NULL);
     struct lws_context_creation_info info;

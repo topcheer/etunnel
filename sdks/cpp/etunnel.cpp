@@ -160,7 +160,10 @@ static void serve(WsClient *client, websocketpp::connection_hdl hdl,
 
 int main(int argc, char **argv) {
     const char *serverEnv = getenv("ETUNNEL_SERVER");
-    std::string server = serverEnv ? serverEnv : "wss://t.ggcode.uk/tunnel";
+    #ifndef ETUNNEL_DEFAULT_SERVER
+#define ETUNNEL_DEFAULT_SERVER "wss://t.ggcode.uk/tunnel"
+#endif
+    std::string server = serverEnv ? serverEnv : ETUNNEL_DEFAULT_SERVER;
     const char *localEnv = getenv("ETUNNEL_LOCAL");
     int local_port = 3000;
     if (argc > 1) local_port = atoi(argv[1]);

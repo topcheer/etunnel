@@ -143,7 +143,10 @@ class _StreamBuf {
 }
 
 Future<void> main(List<String> args) async {
-  final server = Platform.environment['ETUNNEL_SERVER'] ?? 'wss://t.ggcode.uk/tunnel';
+  const String kDefaultServer = String.fromEnvironment(
+        'ETUNNEL_DEFAULT_SERVER',
+        defaultValue: 'wss://t.ggcode.uk/tunnel');
+    final server = Platform.environment['ETUNNEL_SERVER'] ?? kDefaultServer;
   final local = args.isNotEmpty ? args[0] : Platform.environment['ETUNNEL_LOCAL'] ?? '3000';
   try {
     final t = await Etunnel.connect(server, local,
