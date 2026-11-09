@@ -52,9 +52,10 @@ Commands as actually used by Makefile and CI
   `sdk.DefaultServer` is overridable via `-ldflags -X`.
 - `server/` — the `etunneld` server: `session.go` (one WS connection per
   tunnel, multiplexed streams, TTL expiry, token-bucket bandwidth),
-  `proxy.go` (HTTP reverse proxy by hostname + WebSocket pass-through),
-  `registry.go` (hostname → session), `auth.go` (API keys + OAuth),
-  `payments.go`, `portal.go` (landing/404), `account.go` (JSON account
+  `proxy.go` (HTTP reverse proxy by hostname + WebSocket pass-through,
+  landing page + branded 404), `registry.go` (hostname → session),
+  `auth.go` (API keys + OAuth), `payments.go`, `portal.go` (user portal:
+  `/login` + `/me` actions), `account.go` (JSON account
   store), `admin.go` (stats/admin API), `telegram.go`, `tls.go` (ondemand /
   dns / static TLS modes), `acme_dns.go` (DNS-01 via lego), `config.go`.
 - `cmd/etunnel/` — client CLI (`etunnel -server ... 3000`).

@@ -257,10 +257,7 @@ func (s *Server) handleBillingSuccess(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
-<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
-<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>. Keep it safe.</p></body>`,
-		tier, email, key)
+	s.writeSuccessKeyPage(w, r, tier, email, key)
 }
 
 // handlePayPalReturn captures an approved order and activates.
@@ -285,15 +282,17 @@ func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
 			email, tier = paypalOrderMeta(got)
 		}
 	}
+	if !paypalCaptureCompleted(order) {
+		s.logf("billing: paypal order %s captured but not cleared yet (eCheck?); webhook will activate", token)
+		http.Error(w, "payment captured but still clearing (eCheck) — your account activates automatically once PayPal completes it", http.StatusAccepted)
+		return
+	}
 	key, err := s.activate(email, tier)
 	if err != nil {
 		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
-<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
-<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>.</p></body>`,
-		tier, email, key)
+	s.writeSuccessKeyPage(w, r, tier, email, key)
 }
 
 // activate creates or renews the account for email; returns the API key.
@@ -305,7 +304,9 @@ func (s *Server) activate(email, tier string) (string, error) {
 		return "", fmt.Errorf("unknown tier %q", tier)
 	}
 	if acct, ok := s.accounts.LookupEmail(email); ok {
-		acct.Tier = tier // renewal/upgrade, key unchanged
+		// renewal/upgrade, key unchanged — write the tier under the store
+		// mutex (#4: no lock-free writes to the shared *Account).
+		s.accounts.Mutate(email, func(a *Account) { a.Tier = tier })
 		_ = s.accounts.saveLockedSafe()
 		s.notifyPayment(email, tier)
 		return acct.APIKey, nil
@@ -316,6 +317,56 @@ func (s *Server) activate(email, tier string) (string, error) {
 	}
 	s.notifyPayment(email, tier)
 	return acct.APIKey, nil
+}
+
+// writeSuccessKeyPage renders the post-payment page. The freshly-activated
+// API key is only shown to the logged-in buyer (#9) — success URL ids leak
+// into browser history, Referer headers and proxy logs.
+func (s *Server) writeSuccessKeyPage(w http.ResponseWriter, r *http.Request, tier, email, key string) {
+	if se := s.sessionEmail(r); se == "" || se != email {
+		fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
+<p>Your API key is ready — log in at <a href="/me">/me</a> to view it.</p></body>`, tier, email)
+		return
+	}
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
+<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>. Keep it safe.</p></body>`,
+		tier, email, key)
+}
+
+// paypalCaptureCompleted reports whether a captured PayPal order is fully
+// settled: order status COMPLETED and every capture resource COMPLETED
+// (#5 — eCheck captures return 201 with PENDING captures that can bounce).
+func paypalCaptureCompleted(order map[string]any) bool {
+	if st, _ := order["status"].(string); st != "COMPLETED" {
+		return false
+	}
+	units, _ := order["purchase_units"].([]any)
+	for _, u := range units {
+		unit, _ := u.(map[string]any)
+		payments, _ := unit["payments"].(map[string]any)
+		caps, _ := payments["captures"].([]any)
+		for _, c := range caps {
+			cm, _ := c.(map[string]any)
+			if st, _ := cm["status"].(string); st != "" && st != "COMPLETED" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// nowpaymentsPaidEnough rejects clearly-underpaid payments (#3): the IPN
+// carries the expected fiat price (price_amount) and the settled fiat amount
+// (outcome_amount). Absent fields pass — the payment_status gate still applies.
+func nowpaymentsPaidEnough(ev map[string]any) bool {
+	price, okP := ev["price_amount"].(float64)
+	paid, okA := ev["outcome_amount"].(float64)
+	if !okP || !okA || price <= 0 {
+		return true
+	}
+	return paid >= price*0.95
 }
 
 // --------------------------------------------------------------------------
@@ -696,7 +747,7 @@ func (s *Server) nowpaymentsInvoice(base, email, tier string, cents int64) (stri
 }
 
 // handleCryptoSuccess: NOWPayments appends the payment id to success_url;
-// query it and activate on finished/confirmed.
+// query it and activate on finished (settled) only.
 func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 	pid := strings.TrimPrefix(r.URL.Path, "/billing/crypto/success")
 	pid = strings.Trim(pid, "/")
@@ -711,7 +762,7 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 		st, err := s.nowpaymentsAPI("GET", "/v1/payment/"+url.PathEscape(pid), nil)
 		if err == nil {
 			status, _ := st["payment_status"].(string)
-			if status == "finished" || status == "confirmed" {
+			if status == "finished" && nowpaymentsPaidEnough(st) { // #3: "confirmed" is seen-on-chain, not settled
 				var email, tier string
 				if oid, ok := st["order_id"].(string); ok {
 					email, tier, _ = strings.Cut(oid, ":")
@@ -721,9 +772,7 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "activation failed: "+aerr.Error(), http.StatusInternalServerError)
 					return
 				}
-				fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
-<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
-<p>Your API key: <code>%s</code></p></body>`, tier, email, key)
+				s.writeSuccessKeyPage(w, r, tier, email, key)
 				return
 			}
 		}
@@ -733,7 +782,7 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNowPaymentsIPN verifies x-nowpayments-sig (HMAC-SHA512 over sorted
-// key=value& pairs) and activates on finished/confirmed.
+// key=value& pairs) and activates on finished (settled) only.
 func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 	if s.billing.NowPaymentsIPNSecret == "" {
 		http.Error(w, "not configured", http.StatusServiceUnavailable)
@@ -774,7 +823,7 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, _ := ev["payment_status"].(string)
-	if status == "finished" || status == "confirmed" {
+	if status == "finished" && nowpaymentsPaidEnough(ev) { // #3: "confirmed" is seen-on-chain, not settled
 		oid, _ := ev["order_id"].(string)
 		email, tier, _ := strings.Cut(oid, ":")
 		if _, err := s.activate(email, tier); err != nil {
