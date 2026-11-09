@@ -383,15 +383,19 @@ func TestPricingPageMobileShape(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`name="viewport" content="width=device-width`,
-		`overflow-x:auto`,
-		`<td>30d</td>`,
+		`class="plans"`,          // card grid, not a 5-column table
+		`30d tunnel lifetime`,    // humanTTL renders in the feature list
+		`@media(max-width:700px)`, // collapses to one column on phones
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pricing page missing %q", want)
 		}
 	}
 	if strings.Contains(body, "h0m0s") {
-		t.Error("raw Go duration leaked into the pricing table")
+		t.Error("raw Go duration leaked into the pricing page")
+	}
+	if strings.Contains(body, "<table") {
+		t.Error("pricing still renders the old table layout")
 	}
 }
 

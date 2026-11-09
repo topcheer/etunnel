@@ -111,50 +111,96 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 			TTL: humanTTL(t.TTL), Custom: t.CustomDomains,
 			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
 	}
-	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>{{.Domain}} - pricing</title>
-<style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:820px;margin:2rem auto;padding:0 1rem}
-table{border-collapse:collapse;width:100%;margin:1.5rem 0}
-th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
-.buy{background:#238636;color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;font-size:1rem;cursor:pointer}
-input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:.5rem;width:16rem}
-.paypal{background:#ffc439;color:#111}label{display:block;margin:.6rem 0 .2rem;color:#8b949e}
-#msg{margin-top:1rem;min-height:1.4rem}</style></head><body>
-<h1><svg width="40" height="40" viewBox="0 0 512 512" aria-label="etunnel" style="vertical-align:middle;margin-right:.6rem"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>{{.Domain}} - plans</h1>
-{{if .User}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#3fb950">
-  ✓ Signed in as <b>{{.User}}</b> &middot; <a href="/me" style="color:#58a6ff">my account</a> &middot; <a href="/logout" style="color:#8b949e">sign out</a></p>
-{{else}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#d29922">
-  Not signed in - <a href="/login" style="color:#58a6ff">sign in first</a> to subscribe.</p>{{end}}
-<p>Pay once, get an API key instantly. Manage tunnels with it (custom subdomains, longer TTL).</p>
-<label for="email">Email (your account identity)</label>
-<input id="email" type="email" placeholder="you@example.com" autocomplete="email" value="{{.User}}"{{if .User}} readonly style="opacity:.7"{{end}}>
-<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="width:100%;min-width:520px;border-collapse:collapse"><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
-{{range .Rows}}{{if .Buyable}}<tr><td><b>{{.Name}}</b></td><td>{{.TTL}}</td><td>{{.Custom}}</td>
-<td>{{.BandwidthMbps}} Mbps</td><td>{{.Price}}</td>
-<td><button class="buy" onclick="pay(this,'{{.ID}}','crypto')">💎 Crypto</button>
-<button class="buy paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button></td></tr>{{end}}{{end}}
-</table></div>
-<div id="msg"></div>
+	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="` + portalFavicon + `">
+<title>Pricing - etunnel</title>
+<style>` + portalCSS + `
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.2rem 0}
+.plan .name{font-weight:700;font-size:1.05rem}
+.plan .price{font-size:1.9rem;font-weight:800;margin:.4rem 0 .2rem}
+.plan .price small{font-size:.8rem;color:var(--dim);font-weight:400}
+.plan ul{list-style:none;margin:.7rem 0 1.1rem;padding:0;color:var(--dim);font-size:.85rem}
+.plan li:before{content:"\\2713 ";color:var(--green)}
+.plan.hl{border-color:rgba(63,185,80,.5)}
+.plan .pay{display:flex;gap:.5rem;flex-wrap:wrap}
+.plan .pay .btn{flex:1 1 auto;text-align:center;padding:.55rem .8rem;font-size:.88rem}
+.btn.paypal{background:#ffc439;color:#111}
+@media(max-width:700px){.plans{grid-template-columns:1fr}}
+</style></head><body>
+<nav>
+  <a class="brand" href="/">` + logoMark + `etunnel</a>
+  <div class="navlinks">
+    <a href="/#quickstart">quickstart</a>
+    <a href="/pricing">pricing</a>
+    <a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">docs</a>
+    {{if .User}}<a href="/logout">sign out</a>{{else}}<a href="/login">sign in</a>{{end}}
+  </div>
+</nav>
+<main>
+<header>
+  <h1>Plans</h1>
+  <p class="sub">{{if .User}}Signed in as <b>{{.User}}</b> &middot; <a href="/me">my account</a>{{else}}Sign in to subscribe. Free tunnels need no account at all.{{end}}</p>
+</header>
+
+{{if not .User}}
+<div class="card">
+  <p class="hint">Prices are per month. Your API key is issued the moment payment clears and appears in <a href="/me">your account</a>.</p>
+  <div class="row"><a class="btn" href="/login">Sign in to subscribe</a></div>
+</div>
+{{end}}
+
+<div class="plans">
+{{range .Rows}}{{if .Buyable}}
+  <section class="card plan{{if eq .ID "pro"}} hl{{end}}">
+    <div class="name">{{.Name}}</div>
+    <div class="price">{{.Price}}<small>/mo</small></div>
+    <ul>
+      <li>{{.TTL}} tunnel lifetime</li>
+      <li>{{.Custom}} custom subdomain{{if gt .Custom 1}}s{{end}}</li>
+      <li>{{.BandwidthMbps}} Mbps</li>
+      <li>API key + account portal</li>
+    </ul>
+    <div class="pay">
+      <button class="btn" onclick="pay(this,'{{.ID}}','crypto')">Crypto</button>
+      <button class="btn paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button>
+    </div>
+  </section>
+{{end}}{{end}}
+</div>
+
+<p class="msg" id="msg"></p>
+
+<section class="card">
+  <h2>Not ready to pay?</h2>
+  <p class="hint">Anonymous tunnels are free forever: a random subdomain, 4 hours, 1 Mbps. No account, no card, no email.</p>
+  <pre><code>npx @easytunnel/et-sdk 3000</code></pre>
+</section>
+</main>
+<footer class="foot">{{.Domain}} &middot; <a href="/">home</a> &middot; <a href="https://github.com/topcheer/etunnel">github</a> &middot; <a href="/me">account</a></footer>
 <script>
 async function pay(btn, tier, provider){
-  const email = document.getElementById('email').value.trim();
   const msg = document.getElementById('msg');
-  if(!email || !email.includes('@')){ msg.textContent='Enter your email first.'; return; }
-  btn.disabled = true; msg.textContent = 'Creating payment...';
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = 'Creating payment...';
   try {
     const res = await fetch('/api/billing/checkout', {method:'POST',
       headers:{'content-type':'application/json'},
-      body: JSON.stringify({email, tier, provider})});
+      body: JSON.stringify({tier, provider})});
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'checkout failed');
-    if(data.apiKey){ showKey(msg, data.apiKey); return; }
-    location.href = data.url;
-  } catch(e){ msg.textContent = e.message; btn.disabled = false; }
+    if(data.url){ location.href = data.url; return; }
+    throw new Error('no payment url');
+  } catch(e){
+    msg.className = 'msg err';
+    msg.textContent = (e.message === 'login required before subscribing (see /login)')
+      ? 'Sign in first — the account must exist before payment.'
+      : e.message;
+    btn.disabled = false;
+  }
 }
-function showKey(el, key){
-  el.innerHTML = 'Paid! Your API key: <code>'+key+'</code><br>Use it as ETUNNEL_TOKEN. Keep it safe.';
-}
-</script></body></html>`
+</script>
+</body></html>`
+
 	tpl := template.Must(template.New("p").Parse(pricingHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{"Rows": rows, "Domain": s.cfg.Domain, "User": s.sessionEmail(r)})
@@ -184,7 +230,8 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"tier not purchasable"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Email == "" || !strings.Contains(req.Email, "@") {
+	// Email is optional in the request: the signed-in session supplies it.
+	if req.Email != "" && !strings.Contains(req.Email, "@") {
 		http.Error(w, `{"error":"valid email required"}`, http.StatusBadRequest)
 		return
 	}

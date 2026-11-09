@@ -133,20 +133,23 @@ func TestPricingShowsLoggedInState(t *testing.T) {
 	if _, err := s.activate("u@x.com", "pro"); err != nil {
 		t.Fatal(err)
 	}
-	// anonymous: prompt to sign in, email empty
+	// anonymous: the page owns the sign-in prompt (no email field to prefill)
 	rec := httptest.NewRecorder()
 	s.handlePricing(rec, httptest.NewRequest(http.MethodGet, "/pricing", nil))
-	if !strings.Contains(rec.Body.String(), "Not signed in") {
+	if !strings.Contains(rec.Body.String(), "Sign in to subscribe") {
 		t.Fatal("anonymous pricing must prompt sign-in")
 	}
-	// logged in: identity banner + prefilled readonly email
+	// logged in: identity line with the account email, and no prompt
 	r := httptest.NewRequest(http.MethodGet, "/pricing", nil)
 	r.AddCookie(s.sessionCookie("u@x.com"))
 	rec = httptest.NewRecorder()
 	s.handlePricing(rec, r)
 	body := rec.Body.String()
-	if !strings.Contains(body, "Signed in as") || !strings.Contains(body, "value=\"u@x.com\"") || !strings.Contains(body, "readonly") {
-		t.Fatalf("logged-in pricing missing prefill/banner: %.200s", body)
+	if !strings.Contains(body, "Signed in as") || !strings.Contains(body, "u@x.com") {
+		t.Fatalf("logged-in pricing missing identity: %.200s", body)
+	}
+	if strings.Contains(body, "Sign in to subscribe") {
+		t.Fatal("logged-in pricing still asks the user to sign in")
 	}
 }
 
