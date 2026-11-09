@@ -413,6 +413,39 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 
 func landingHTML(cfg Config) string {
 	server := "wss://" + cfg.Domain + cfg.WSPath
+	type qs struct{ ID, Name, Install string }
+	qsLangs := []qs{
+		{"node", "Node", "# no install needed - runs straight from npm\nnpx @easytunnel/et-sdk 3000"},
+		{"ts", "TypeScript", "# source-only: grab the file, run with Node >= 22\ncurl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/typescript/etunnel.ts\nnode etunnel.ts 3000"},
+		{"deno", "Deno", "deno run --allow-net https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/deno/etunnel.ts 3000"},
+		{"python", "Python", "pip install etunnel\netunnel 3000"},
+		{"go", "Go", "go install github.com/topcheer/etunnel/cmd/etunnel@latest\netunnel -server '" + server + "' 3000"},
+		{"java", "Java", "# single-file source launch (JDK 11+)\ncurl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/java/src/main/java/dev/ggcode/Etunnel.java\njava Etunnel.java 3000"},
+		{"kotlin", "Kotlin", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/kotlin/Etunnel.kt\nkotlinc Etunnel.kt -include-runtime -d etunnel.jar\njava -jar etunnel.jar 3000"},
+		{"scala", "Scala", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/scala/Etunnel.scala\nscala Etunnel.scala 3000"},
+		{"csharp", "C#", "# .NET 10 single-file app\ndotnet add package etunnel\ndotnet run 3000"},
+		{"rust", "Rust", "cargo install etunnel\netunnel 3000"},
+		{"swift", "Swift", "git clone https://github.com/topcheer/etunnel\ncd etunnel && swift build -c release\n.build/release/etunnel 3000"},
+		{"dart", "Dart", "dart pub add etunnel\ndart run etunnel.dart 3000"},
+		{"ruby", "Ruby", "gem install etunnel\netunnel 3000"},
+		{"php", "PHP", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/php/etunnel.php\nphp etunnel.php 3000"},
+		{"perl", "Perl", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/perl/etunnel.pl\nperl etunnel.pl 3000"},
+		{"lua", "Lua", "luarocks install ggcode.etunnel\nlua $(luarocks show ggcode.etunnel | awk '/Location/{print $2}')/etunnel.lua 3000"},
+		{"c", "C", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/c/etunnel.c\ncc -O2 -o etunnel etunnel.c -lwebsockets -lcurl -lssl -lcrypto\n./etunnel 3000"},
+		{"cpp", "C++", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/cpp/etunnel.cpp\nc++ -std=c++17 -O2 -o etunnel etunnel.cpp -lssl -lcrypto\n./etunnel 3000"},
+		{"clojure", "Clojure", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/clojure/etunnel.clj\nclojure -M -i etunnel.clj -e \"(et/-main \\\"3000\\\")\""},
+		{"elixir", "Elixir", "mix deps.get\nmix run --no-halt runner.exs 3000"},
+	}
+	var tb, pn strings.Builder
+	for i, l := range qsLangs {
+		cls := ""
+		if i == 0 {
+			cls = ` class="on"`
+		}
+		fmt.Fprintf(&tb, `<button%s onclick="showLang('%s')">%s</button>`, cls, l.ID, l.Name)
+		fmt.Fprintf(&pn, `<div class="panel%s" id="p-%s"><div class="cmd" style="max-width:44rem;margin:0 auto;white-space:pre-wrap;text-align:left"><span id="c-%s">%s</span><button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('c-%s').textContent);this.textContent='copied'">copy</button></div></div>`, cls, l.ID, l.ID, htmlEscapeText(l.Install), l.ID)
+	}
+	qsTabs, qsPanels := tb.String(), pn.String()
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -461,6 +494,13 @@ section .sub{color:var(--dim);margin-bottom:2.2rem;font-size:.95rem}
 pre{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.2rem;font-size:.83rem;overflow:auto;line-height:1.75}
 pre .cm{color:var(--dim)}pre .k{color:#ff7b72}pre .s{color:#a5d6ff}pre .f{color:#d2a8ff}pre .g{color:var(--green2)}
 pre .out{color:var(--green2)}
+/* quickstart tabs */
+.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
+.tabs button{background:none;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:.35rem .75rem;font-size:.8rem;font-family:inherit;cursor:pointer}
+.tabs button.on{background:var(--panel);border-color:rgba(63,185,80,.5);color:var(--fg)}
+.tabs button:hover{color:var(--fg)}
+.panel{display:none}
+.panel.on{display:block}
 /* pricing strip */
 .tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
 .tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.6rem}
@@ -516,33 +556,10 @@ footer .sep{margin:0 .6rem}
 </section>
 
 <section id="quickstart">
-  <h2>Quickstart</h2>
-  <p class="sub">From nothing to a public URL in under 10 seconds.</p>
-  <div class="demo">
-<pre><span class="cm"># Node - no install</span>
-$ npx @easytunnel/et-sdk 3000
-
-<span class="out">TUNNEL_URL: https://quiet-frog-42.` + cfg.Domain + `</span>
-
-<span class="cm"># Go - embed it</span>
-<span class="k">import</span> sdk <span class="s">"github.com/topcheer/etunnel/sdk"</span>
-
-t, _ := sdk.<span class="f">Connect</span>(ctx, sdk.Options{
-    Server:    <span class="s">"` + server + `"</span>,
-    LocalAddr: <span class="s">"127.0.0.1:3000"</span>,
-})
-fmt.<span class="f">Println</span>(t.<span class="f">URL</span>()) <span class="cm">// live</span></pre>
-<pre><span class="cm"># Python</span>
-$ pip install etunnel && etunnel 3000
-
-<span class="cm"># Rust / Swift / Java / C ...</span>
-<span class="cm"># 18 more - see sdks/README.md</span>
-
-<span class="cm"># Self-host the server</span>
-$ etunneld --domain t.example.com \     --tls-mode dns --dns-provider cloudflare
-
-<span class="out">etunneld ready: domain=t.example.com</span></pre>
-  </div>
+  <h2>Quickstart - 20 languages</h2>
+  <p class="sub">Pick your stack; the CLI is the same everywhere. Free tunnels need no account.</p>
+  <div class="tabs" id="langtabs">` + qsTabs + `</div>
+  ` + qsPanels + `
 </section>
 
 <section id="pricing">
@@ -558,6 +575,12 @@ $ etunneld --domain t.example.com \     --tls-mode dns --dns-provider cloudflare
 <footer>
   <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a>
   <br><span style="opacity:.6">etunnel - one binary, twenty SDKs, your localhost worldwide.</span>
+<script>
+function showLang(id){
+  document.querySelectorAll('#langtabs button').forEach(b=>b.classList.toggle('on',b.textContent===document.querySelector('[onclick="showLang(\''"+id+"\')"]')?.textContent));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.id==='p-'+id));
+}
+</script>
 </footer>
 </body></html>`
 }
@@ -573,4 +596,10 @@ func notFoundHTML(cfg Config, host string) string {
 <p><small>Redirecting to <a href="https://github.com/topcheer/etunnel">github.com/topcheer/etunnel</a> in 5 seconds...</small></p>
 <script>setTimeout(function(){location.href="https://github.com/topcheer/etunnel"},5000)</script>
 </main></body></html>`
+}
+
+// htmlEscapeText escapes install text for embedding in generated HTML.
+func htmlEscapeText(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "\n", "\n")
+	return r.Replace(s)
 }
