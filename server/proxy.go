@@ -232,24 +232,17 @@ func forwardRequestHeaders(r *http.Request, isUpgrade bool) map[string][]string 
 		copy(cp, vs)
 		out[k] = cp
 	}
-	// Standard proxy headers.
-	if prior := out["X-Forwarded-For"]; len(prior) > 0 {
-		out["X-Forwarded-For"] = append(prior, remoteIP(r))
-	} else {
-		out["X-Forwarded-For"] = []string{remoteIP(r)}
-	}
+	// Standard proxy headers. This binary is the network edge: an inbound
+	// X-Forwarded-For / X-Forwarded-Host / X-Real-Ip was set by whoever made
+	// the request, so it is untrusted and replaced rather than extended
+	// (issue #13). Downstream apps can rely on exactly one authoritative hop.
+	out["X-Forwarded-For"] = []string{remoteIP(r)}
 	out["X-Forwarded-Proto"] = []string{schemeOf(r)}
 	// Original public host (Go keeps r.Host out of r.Header): local apps
 	// need it for absolute URLs and Origin/Host same-origin checks. The Go
 	// SDK restores it as the request Host; other SDKs read the header.
-	if prior := out["X-Forwarded-Host"]; len(prior) > 0 {
-		out["X-Forwarded-Host"] = append([]string{r.Host}, prior...)
-	} else {
-		out["X-Forwarded-Host"] = []string{r.Host}
-	}
-	if out["X-Real-Ip"] == nil {
-		out["X-Real-Ip"] = []string{remoteIP(r)}
-	}
+	out["X-Forwarded-Host"] = []string{r.Host}
+	out["X-Real-Ip"] = []string{remoteIP(r)}
 	return out
 }
 
