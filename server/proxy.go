@@ -475,7 +475,7 @@ pre .out{color:var(--green2)}
 .snip-head .fname{color:var(--fg);font-weight:600}
 .snip-head .mode{font-size:.64rem;text-transform:uppercase;letter-spacing:.09em;border-radius:4px;padding:.05rem .4rem;border:1px solid var(--line);color:var(--dim)}
 .snip-head .mode.embed{color:var(--green2);border-color:rgba(63,185,80,.45)}
-.snip-head .dep{color:var(--dim)}
+.snip-head .dep{color:var(--dim);flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .snip-head .snip-link{margin-left:auto;color:#58a6ff;font-size:.75rem}
 .snip-head .snip-copy{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);font-family:inherit;font-size:.7rem;padding:.1rem .45rem;cursor:pointer}
 .snip-head .snip-copy:hover{color:var(--fg);border-color:var(--dim)}
@@ -485,7 +485,19 @@ pre.code .st{color:#a5d6ff}
 pre.code .cm{color:#6e7681;font-style:italic}
 /* diagrams */
 .flow{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.5rem;overflow:auto;text-align:center}
-.flow pre.mermaid{background:transparent;border:0;margin:0;padding:0;font-size:.78rem;color:var(--dim)}
+.flow pre.mermaid{background:transparent;border:0;margin:0;padding:0;font-size:.78rem;color:var(--dim);min-width:640px}
+/* narrow screens: the vertical variant fits, so it needs no minimum width */
+@media(max-width:700px){.flow pre.mermaid{min-width:0}}
+/* narrow screens: the diagram keeps its readable size and pans inside .flow */
+@media(max-width:700px){
+  nav{flex-wrap:wrap;justify-content:center;gap:.45rem;padding:.75rem 1rem}
+  nav .links{order:3;width:100%;justify-content:center;gap:1.1rem;font-size:.8rem}
+  section{padding:3rem 1rem}
+  .flow{padding:1rem}
+  .snip-head .snip-link{margin-left:auto}
+  pre.code{font-size:.75rem}
+  .cmd{font-size:.85rem}
+}
 /* pricing strip */
 .tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
 .tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.6rem}
@@ -544,7 +556,11 @@ footer .sep{margin:0 .6rem}
   <h2>How it works</h2>
   <p class="sub">One outbound WebSocket from your process. No inbound port, no router config, no firewall change.</p>
   <div class="flow">
-    <pre class="mermaid">
+    <pre class="mermaid" id="flowdiagram" data-mobile="flowchart TD
+  V[&quot;visitor<br/>https://quiet-frog-42.t.etun.uk&quot;] -->|HTTPS 443| E[&quot;etunneld<br/>wildcard TLS + plan limits&quot;]
+  E -->|&quot;wss /tunnel<br/>multiplexed streams&quot;| C[&quot;SDK client<br/>inside your process&quot;]
+  C -->|HTTP/1.1| A[&quot;localhost:3000<br/>your app&quot;]
+  E -.->|&quot;101 upgrade<br/>raw byte pipe&quot;| A">
 flowchart LR
   V["visitor<br/>https://quiet-frog-42.t.etun.uk"] -->|HTTPS 443| E["etunneld<br/>wildcard TLS + plan limits"]
   E -->|wss /tunnel<br/>multiplexed streams| C["SDK client<br/>inside your process"]
@@ -595,6 +611,16 @@ function copySnippet(btn){
     navigator.clipboard.writeText(pre.textContent).then(done, done);
   } else { done(); }
 }
+</script>
+<script>
+// Pick the diagram orientation before mermaid boots: a top-down flow fits a
+// phone without panning, the left-to-right one reads better on desktop.
+(function () {
+  var el = document.getElementById('flowdiagram');
+  if (el && window.matchMedia('(max-width:700px)').matches && el.dataset.mobile) {
+    el.textContent = el.dataset.mobile;
+  }
+})();
 </script>
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
