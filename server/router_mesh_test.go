@@ -42,7 +42,7 @@ func TestMeshOwnershipGossipAndForward(t *testing.T) {
 	b, _ := newTestMesh(t, "b")
 
 	// join b to a
-	if n, err := b.ml.Join([]string{fmt.Sprintf("127.0.0.1:%d", aPort)}); err != nil || n == 0 {
+	if n, err := b.ml.Join([]string{fmt.Sprintf("127.0.0.1:%d", aPort+100)}); err != nil || n == 0 {
 		t.Fatalf("join: n=%d err=%v", n, err)
 	}
 	time.Sleep(300 * time.Millisecond) // SWIM membership settle

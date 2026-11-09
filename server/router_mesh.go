@@ -20,8 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -57,30 +59,60 @@ func newMeshRouter(advertise, join, nodeID string) (*meshRouter, error) {
 	}
 	cfg := memberlist.DefaultLANConfig()
 	cfg.Name = nodeID
-	host, port, _ := net.SplitHostPort(advertise)
-	cfg.AdvertiseAddr = host
+	_, port, _ := net.SplitHostPort(advertise)
 	var p int
 	fmt.Sscanf(port, "%d", &p)
-	cfg.AdvertisePort = p
-	// Bind the gossip transport on the same port so two instances on one
-	// host (tests, bare-metal) do not fight over the default 7946.
-	cfg.BindPort = p
-	cfg.BindAddr = "0.0.0.0"
-	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
-		cfg.BindAddr = host
+	// memberlist needs an IP for AdvertiseAddr; resolve the hostname part.
+	advIP := hostOf(advertise)
+	if ips, err := net.LookupIP(advIP); err == nil && len(ips) > 0 {
+		advIP = ips[0].String()
 	}
-	cfg.PushPullInterval = 30 * time.Second
+	cfg.AdvertiseAddr = advIP
+	cfg.AdvertisePort = p
+	// Gossip transport lives on its own port: the advertise port carries
+	// HTTP (tunnels/forwarding), so gossip uses ETUNNEL_GOSSIP_PORT or
+	// advertise+100. Peers learn it from the join address / node meta.
+	gossipPort := p + 100
+	if v := os.Getenv("ETUNNEL_GOSSIP_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &gossipPort)
+	}
+	cfg.BindPort = gossipPort
+	cfg.AdvertisePort = gossipPort // memberlist advertises its own port
+	cfg.BindAddr = "0.0.0.0"
+	cfg.PushPullInterval = 15 * time.Second
 	cfg.Delegate = &meshDelegate{r: r}
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("etunnel: memberlist create: %w", err)
 	}
 	r.ml = ml
+	// Re-broadcast our ownership every 10s: SendReliable is best-effort and
+	// NodeMeta rides periodic probes, so a periodic refresh guarantees
+	// convergence without waiting for push/pull.
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if subs := r.ourSubs(); len(subs) > 0 {
+				r.broadcast(meshEvent{Kind: "claim", From: r.self, Subs: subs})
+			}
+		}
+	}()
 	if join != "" {
 		seeds := strings.Split(join, ",")
-		if n, err := ml.Join(seeds); err != nil && n == 0 {
+		// Retry the join: peers start concurrently and DNS may lag.
+		var joined int
+		for i := 0; i < 10 && joined == 0; i++ {
+			joined, _ = ml.Join(seeds)
+			if joined == 0 {
+				time.Sleep(2 * time.Second)
+			}
+		}
+		if joined == 0 {
+			// Start anyway as a lone node; peers will find us via the
+			// probe/anti-entropy path once they come up.
 			ml.Shutdown()
-			return nil, fmt.Errorf("etunnel: memberlist join %v: %w", seeds, err)
+			return nil, fmt.Errorf("etunnel: memberlist join %v: no peer reachable", seeds)
 		}
 	}
 	return r, nil
@@ -215,6 +247,7 @@ func (r *meshRouter) Forward(sub string, w http.ResponseWriter, req *http.Reques
 	}
 	target := r.Lookup(sub)
 	if target == "" {
+		logfMesh("forward %s: no owner known", sub)
 		return false
 	}
 	url := *req.URL
@@ -222,12 +255,15 @@ func (r *meshRouter) Forward(sub string, w http.ResponseWriter, req *http.Reques
 	url.Host = target
 	out, err := http.NewRequestWithContext(req.Context(), req.Method, url.String(), req.Body)
 	if err != nil {
+		logfMesh("forward %s: build: %v", sub, err)
 		return false
 	}
+	out.Host = req.Host // keep the visitor's Host; node1:8080 is just transport
 	out.Header = req.Header.Clone()
 	out.Header.Set(r.fwdHdr, r.self)
 	resp, err := r.hc.Do(out)
 	if err != nil {
+		logfMesh("forward %s -> %s: %v", sub, target, err)
 		return false
 	}
 	defer resp.Body.Close()
@@ -292,3 +328,14 @@ func (r *meshRouter) startPump(ctx context.Context, ch <-chan []byte) {
 }
 
 var _ = bytes.MinRead
+
+// hostOf returns the host part of host:port.
+func hostOf(hostPort string) string {
+	h, _, _ := net.SplitHostPort(hostPort)
+	return h
+}
+
+// logfMesh logs through the standard logger (visible in docker logs).
+func logfMesh(format string, args ...any) {
+	log.Printf("mesh: "+format, args...)
+}

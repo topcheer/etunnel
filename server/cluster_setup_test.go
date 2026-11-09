@@ -16,7 +16,11 @@ func TestDefaultClusterIsSingleNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { for _, c := range closers { c() } }()
+	defer func() {
+		for _, c := range closers {
+			c()
+		}
+	}()
 	if cc.Store != nil {
 		t.Fatal("default must keep the JSON store")
 	}

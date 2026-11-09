@@ -271,9 +271,6 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 				sess.sub = sub
 				sess.custom = true
 				resumed = sub
-				if s.router != nil {
-					s.router.Claim(sub)
-				}
 				s.logf("session %s: resumed subdomain %s", sess.id, sub)
 			} else {
 				s.logf("session %s: resume token valid but %s is taken, falling through", sess.id, sub)
@@ -333,6 +330,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sess.sub = sub
+	}
+
+	// Cluster: announce ownership (resume / custom / random all land here).
+	if s.router != nil && sess.sub != "" {
+		s.router.Claim(sess.sub)
 	}
 
 	sess.hostname = sess.sub + "." + s.cfg.Domain

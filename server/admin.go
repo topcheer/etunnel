@@ -124,6 +124,36 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 
+		"cluster": func() map[string]any {
+			m := map[string]any{"mode": "single"}
+			if s.router != nil {
+				owned := 0
+				if mr, ok := s.router.(*meshRouter); ok {
+					mr.mu.RLock()
+					owned = len(mr.ours)
+					known := len(mr.owner)
+					mr.mu.RUnlock()
+					m["mode"] = "mesh"
+					m["owned"] = owned
+					m["remoteKnown"] = known
+					m["peers"] = len(mr.ml.Members())
+				}
+				if sr, ok := s.router.(*stickyRouter); ok {
+					sr.mu.RLock()
+					owned = len(sr.ours)
+					sr.mu.RUnlock()
+					m["mode"] = "sticky"
+					m["owned"] = owned
+				}
+			}
+			if _, isMem := s.counter.(*memCounter); !isMem {
+				m["counter"] = "redis"
+			}
+			if _, isJSON := s.accounts.(*AccountStore); !isJSON {
+				m["store"] = "postgres"
+			}
+			return m
+		}(),
 		"billing": map[string]any{
 			"stripe":    s.billing.StripeSecretKey != "",
 			"paypal":    s.billing.PayPalClientID != "",
