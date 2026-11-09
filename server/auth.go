@@ -57,7 +57,8 @@ func oauthFromEnv() oauthConfig {
 		appleID:       os.Getenv("APPLE_CLIENT_ID"),
 		appleTeam:     os.Getenv("APPLE_TEAM_ID"),
 		appleKey:      os.Getenv("APPLE_KEY_ID"),
-		appleKeyPEM:   os.Getenv("APPLE_PRIVATE_KEY"),
+		// systemd EnvironmentFile keeps "\n" literal; PEM needs real newlines.
+		appleKeyPEM: strings.ReplaceAll(os.Getenv("APPLE_PRIVATE_KEY"), `\n`, "\n"),
 	}
 }
 

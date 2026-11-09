@@ -196,3 +196,12 @@ func TestOAuthLoginRedirectsToGithub(t *testing.T) {
 		t.Fatalf("github redirect: %d %s", rec.Code, loc)
 	}
 }
+
+func TestAppleKeyPEMNormalized(t *testing.T) {
+	raw := "-----BEGIN PRIVATE KEY-----\\nMIGabc\\n-----END PRIVATE KEY-----"
+	t.Setenv("APPLE_PRIVATE_KEY", raw)
+	cfg := oauthFromEnv()
+	if !strings.Contains(cfg.appleKeyPEM, "\n") || strings.Contains(cfg.appleKeyPEM, `\n`) {
+		t.Fatalf("literal \\n not normalized: %q", cfg.appleKeyPEM)
+	}
+}
