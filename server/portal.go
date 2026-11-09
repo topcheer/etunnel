@@ -37,6 +37,44 @@ func hmacEqual(a, b string) bool {
 
 func parseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
+// portalFavicon, portalCSS and logoMark are the design system shared by the
+// account pages. They mirror the landing page (same palette, mono type, 12px
+// cards, green accent) so signing in does not feel like leaving the site.
+const portalFavicon = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>`
+
+const logoMark = `<svg width="26" height="26" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>`
+
+const portalCSS = `
+:root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950;--green2:#7ee787;--blue:#58a6ff;--red:#da3633}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+input,button{font-family:inherit;font-size:.85rem}
+input{background:#0b0e14;border:1px solid var(--line);border-radius:8px;color:var(--fg);padding:.5rem .7rem;outline:none}
+input:focus{border-color:rgba(63,185,80,.55)}
+code{background:#161b22;border:1px solid var(--line);border-radius:6px;padding:.1rem .4rem;font-size:.78rem}
+nav{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 2rem;border-bottom:1px solid var(--line);background:rgba(11,14,20,.85);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10}
+nav .logo{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:1.05rem;color:var(--fg)}
+nav .links{display:flex;gap:1.5rem;font-size:.85rem}
+nav .links a{color:var(--dim)}nav .links a:hover{color:var(--fg);text-decoration:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.5rem}
+.card h2{font-size:.95rem;font-weight:700;letter-spacing:-.01em;margin-bottom:.25rem}
+.hint{color:var(--dim);font-size:.76rem}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:8px;padding:.55rem 1.05rem;font-size:.82rem;font-weight:700;border:1px solid transparent;cursor:pointer;background:var(--green);color:#0b0e14;text-decoration:none}
+.btn:hover{background:var(--green2);text-decoration:none}
+.btn.ghost{background:rgba(13,17,23,.6);border-color:var(--line);color:var(--fg)}
+.btn.ghost:hover{border-color:var(--dim);background:var(--panel)}
+.btn.danger{background:transparent;border-color:rgba(218,54,51,.6);color:#ff7b72}
+.btn.danger:hover{background:rgba(218,54,51,.14);border-color:var(--red)}
+.badge{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--line);border-radius:99px;padding:.15rem .7rem;font-size:.72rem;color:var(--dim);white-space:nowrap}
+.g{color:var(--green2)}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+@media(max-width:700px){
+  nav{flex-wrap:wrap;justify-content:center;gap:.45rem;padding:.75rem 1rem}
+  nav .links{order:3;width:100%;justify-content:center;gap:1.1rem;font-size:.8rem}
+  .card{padding:1.25rem}
+}`
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	type prov struct {
 		ID, Label string
@@ -48,11 +86,42 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			providers = append(providers, prov{ID: p, Label: providerLabel(p), Icon: providerIcon(p)})
 		}
 	}
-	const loginHTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>etunnel login</title>
-<style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center}main{text-align:center}a{display:flex;align-items:center;justify-content:center;gap:.6rem;margin:.6rem auto;padding:.7rem 1.2rem;width:15rem;border-radius:8px;text-decoration:none;font-weight:600;background:#21262d;color:#e6edf3}a:hover{background:#30363d}a svg{flex:none;width:20px;height:20px}</style>
-<main><h1><svg width="40" height="40" viewBox="0 0 512 512" aria-label="etunnel" style="vertical-align:middle;margin-right:.6rem"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>Sign in to etunnel</h1><p>Required before subscribing.</p>
-{{range .Providers}}<a href="/auth/{{.ID}}/login">{{.Icon}}<span>{{.Label}}</span></a>{{end}}
-</main>`
+	loginHTML := `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sign in - etunnel</title>
+<link rel="icon" href="` + portalFavicon + `">
+<style>` + portalCSS + `
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem 1rem;position:relative}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(63,185,80,.13),transparent 55%),repeating-linear-gradient(90deg,transparent 0 79px,rgba(230,237,243,.03) 79px 80px)}
+.auth{position:relative;width:100%;max-width:26rem}
+.auth .card{padding:2.2rem 1.8rem;box-shadow:0 26px 70px rgba(0,0,0,.5)}
+.brand{display:flex;align-items:center;gap:.65rem;font-weight:800;font-size:1.02rem;margin-bottom:1.5rem}
+h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;margin-bottom:.45rem}
+.sub{color:var(--dim);font-size:.84rem;margin-bottom:1.5rem}
+.prov{display:flex;align-items:center;gap:.75rem;width:100%;padding:.72rem 1rem;margin-bottom:.55rem;border:1px solid var(--line);border-radius:9px;background:rgba(22,27,34,.55);color:var(--fg);font-weight:600;font-size:.86rem;text-decoration:none}
+.prov:hover{border-color:rgba(63,185,80,.55);background:#161b22;text-decoration:none}
+.prov svg{flex:none;width:19px;height:19px}
+.prov .arrow{margin-left:auto;color:var(--dim);font-weight:400}
+.none{border:1px dashed var(--line);border-radius:9px;padding:1rem;text-align:center;color:var(--dim);font-size:.82rem}
+.fine{color:var(--dim);font-size:.71rem;line-height:1.55;margin-top:1.4rem;padding-top:1.1rem;border-top:1px solid var(--line)}
+.foot{display:flex;justify-content:center;gap:.7rem;font-size:.77rem;color:var(--dim);margin-top:1.4rem}
+.foot a{color:var(--dim)}.foot a:hover{color:var(--fg)}
+@media(max-width:700px){body{padding:1.25rem .9rem}.auth .card{padding:1.7rem 1.25rem}}
+</style></head><body>
+<div class="auth">
+<div class="card">
+<div class="brand">` + logoMark + ` etunnel</div>
+<h1>Sign in to <span class="g">etunnel</span></h1>
+<p class="sub">Your account holds the API key, the plan and the subdomains you own.</p>
+{{if .Providers}}{{range .Providers}}<a class="prov" href="/auth/{{.ID}}/login">{{.Icon}}<span>Continue with {{.Label}}</span><span class="arrow">&#8594;</span></a>{{end}}{{else}}<p class="none">No sign-in provider is configured on this server.</p>{{end}}
+<p class="fine">The provider returns your email address and display name, and that is what the account is built from. Free tunnels need no account at all.</p>
+</div>
+<div class="foot"><a href="/">&#8592; etunnel home</a><span>&middot;</span><a href="/pricing">pricing</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">docs</a></div>
+</div>
+</body></html>`
+
 	tpl := template.Must(template.New("l").Parse(loginHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{"Providers": providers})
@@ -104,40 +173,90 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if tier != nil {
 		maxDomains = tier.CustomDomains
 	}
-	domains := strings.Join(acct.Domains, ", ")
 
-	const meHTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>etunnel - my account</title>
-<style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:640px;margin:2rem auto;padding:0 1rem}
-button{background:#238636;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;margin:.3rem;cursor:pointer}
-.danger{background:#da3633}code{background:#161b22;padding:.2rem .4rem;border-radius:4px}
-h2{border-bottom:1px solid #21262d;padding-bottom:.4rem}</style>
-<h2>Signed in as {{.Email}}</h2>
-<p style="color:#8b949e">via {{.Provider}}{{if .Name}} &middot; {{.Name}}{{end}} &middot; <a href="/logout" style="color:#58a6ff">sign out</a></p>
-<p>Plan: <b>{{.Tier}}</b>{{if .MaxDomains}} (up to {{.MaxDomains}} custom subdomains){{end}}{{if .Expires}}<br><span style="color:#8b949e">renews/expires: {{.Expires}}</span>{{end}}</p>
-<p>API key: <code>{{.Key}}</code> <button onclick="act('reset')">Reset key</button></p>
-<h3>Subscription</h3>
-<p><a href="/pricing" style="color:#58a6ff">Subscribe / change plan</a>
-<button class="danger" onclick="act('cancel')">Cancel subscription</button></p>
-<h3>Custom subdomains</h3>
-<p>Owned: <code>{{.Domains}}</code></p>
-<p><input id="dom" placeholder="my-sub"> <button onclick="addDom()">Add</button>
-<button class="danger" onclick="delDom()">Remove</button></p>
-<h3>Danger zone</h3>
-<button class="danger" onclick="if(confirm('Delete account permanently?'))act('close')">Close account</button>
-<p id="msg"></p>
+	meHTML := `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Account - etunnel</title>
+<link rel="icon" href="` + portalFavicon + `">
+<style>` + portalCSS + `
+body{padding-bottom:4rem}
+.wrap{max-width:1000px;margin:0 auto;padding:2.5rem 1.5rem}
+.pagehead{margin-bottom:1.8rem}
+.pagehead h1{font-size:1.55rem;font-weight:800;letter-spacing:-.02em}
+.pagehead .sub{color:var(--dim);font-size:.84rem;margin-top:.3rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+.wide{grid-column:1/-1}
+.tier{font-size:1.3rem;font-weight:800;line-height:1.2;color:var(--green2);text-transform:capitalize}
+.key{display:flex;gap:.5rem;flex-wrap:wrap}
+.key input{flex:1 1 12rem;min-width:0;font-size:.76rem;color:var(--green2);letter-spacing:.02em}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1rem;min-height:1.6rem;align-items:center}
+.chip{border:1px solid var(--line);border-radius:99px;padding:.18rem .65rem;font-size:.76rem;background:rgba(22,27,34,.6)}
+.empty{color:var(--dim);font-size:.78rem}
+.zone{border-color:rgba(218,54,51,.45)}
+.msg{margin-top:1.2rem;font-size:.82rem;min-height:1.3rem;color:var(--dim)}
+.msg.ok{color:var(--green2)}.msg.err{color:#ff7b72}
+@media(max-width:700px){.wrap{padding:1.7rem 1rem}.pagehead h1{font-size:1.35rem}.grid{grid-template-columns:1fr}}
+</style></head><body>
+<nav>
+  <a class="logo" href="/">` + logoMark + ` etunnel</a>
+  <div class="links"><a href="/#quickstart">quickstart</a><a href="/pricing">pricing</a><a href="https://github.com/topcheer/etunnel">docs</a><a href="/logout">sign out</a></div>
+</nav>
+<main class="wrap">
+<header class="pagehead">
+  <h1>Account</h1>
+  <p class="sub">Signed in as <b>{{.Email}}</b> via {{.Provider}}{{if .Name}} &middot; {{.Name}}{{end}}</p>
+</header>
+<div class="grid">
+  <section class="card">
+    <h2>Plan</h2>
+    <p class="hint">Tunnel lifetime, custom subdomains and bandwidth.</p>
+    <div class="row" style="margin:.8rem 0 .35rem"><span class="tier">{{.Tier}}</span></div>
+    {{if .Expires}}<div class="row" style="margin-bottom:.9rem"><span class="badge">renews/expires: {{.Expires}}</span></div>{{end}}
+    <p class="hint" style="margin-bottom:1.1rem">{{if .MaxDomains}}Up to {{.MaxDomains}} custom subdomains.{{else}}Random subdomain only.{{end}}</p>
+    <div class="row"><a class="btn" href="/pricing">Subscribe / change plan</a><button class="btn ghost" onclick="act('cancel')">Cancel subscription</button></div>
+  </section>
+  <section class="card">
+    <h2>API key</h2>
+    <p class="hint" style="margin-bottom:.9rem">Pass it as the <code>token</code> option in any SDK; it also unlocks the plan features on the CLI.</p>
+    <div class="key"><input id="apikey" value="{{.Key}}" readonly><button class="btn ghost" onclick="copyKey(this)">copy</button><button class="btn ghost" onclick="act('reset')">reset</button></div>
+  </section>
+  <section class="card wide">
+    <h2>Custom subdomains</h2>
+    <p class="hint" style="margin-bottom:.9rem">A subdomain you own keeps the same public URL between restarts.</p>
+    <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">none yet</span>{{end}}</div>
+    <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem"><button class="btn" onclick="addDom()">Add</button><button class="btn ghost" onclick="delDom()">Remove</button></div>
+  </section>
+  <section class="card wide zone">
+    <h2>Danger zone</h2>
+    <p class="hint" style="margin-bottom:1rem">Closing the account deletes the API key, the subdomains and the plan. Running tunnels stop immediately.</p>
+    <button class="btn danger" onclick="if(confirm('Delete account permanently?'))act('close')">Close account</button>
+  </section>
+</div>
+<p id="msg" class="msg"></p>
+</main>
 <script>
 const email = {{.EmailJS}};
 async function act(a, body){
   const res = await fetch('/me/'+a, {method:'POST',headers:{'content-type':'application/json'},
     body: JSON.stringify(body||{email})});
   const data = await res.json().catch(()=>({}));
-  document.getElementById('msg').textContent = res.ok ? (data.message||data.apiKey||'done') : (data.error||'failed');
-  if(res.ok && a!=='cancel') setTimeout(()=>location.reload(), 800);
-  if(res.ok && (a==='cancel'||a==='close')) setTimeout(()=>location.reload(), 800);
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + (res.ok ? 'ok' : 'err');
+  el.textContent = res.ok ? (data.message||data.apiKey||'done') : (data.error||'failed');
+  if (res.ok) setTimeout(()=>location.reload(), 900);
 }
 function addDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:false}); }
 function delDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:true}); }
-</script>`
+function copyKey(btn){
+  const v = document.getElementById('apikey').value;
+  const done = ()=>{ btn.textContent='copied'; setTimeout(()=>{btn.textContent='copy';},1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, done); } else { done(); }
+}
+</script>
+</body></html>`
+
 	tpl := template.Must(template.New("m").Parse(meHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{
@@ -148,7 +267,7 @@ function delDom(){ act('domain', {email, domain: document.getElementById('dom').
 		"Tier":       acct.Tier,
 		"Key":        acct.APIKey,
 		"MaxDomains": maxDomains,
-		"Domains":    domains,
+		"DomainList": acct.Domains,
 		"Expires":    expiresLabel(acct.ExpiresAt),
 	})
 }
