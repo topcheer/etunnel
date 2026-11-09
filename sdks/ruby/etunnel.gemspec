@@ -18,4 +18,5 @@ Gem::Specification.new do |s|
 
   s.add_runtime_dependency 'faye-websocket', '~> 0.11'
   s.metadata['source_code_uri'] = 'https://github.com/ggcode/etunnel'
+  s.add_development_dependency "rake", "~> 13.0"
 end
