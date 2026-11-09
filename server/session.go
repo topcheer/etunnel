@@ -48,7 +48,11 @@ type Session struct {
 	tier    *Tier
 	account *Account
 	expires time.Time // zero = no expiry
-	limiter *rate.Limiter
+	// ttlTimer expires the session; it is stopped on early close so a closed
+	// 30-day session is not retained until its expiry (#12). Written and read
+	// under mu: the callback can fire before the field is assigned.
+	ttlTimer *time.Timer
+	limiter  *rate.Limiter
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -56,6 +60,10 @@ type Session struct {
 	closed    chan struct{}
 	closeOnce sync.Once
 	closeMsg  atomic.Value // string
+	// byePending holds the bye message when the outbound queue was too full to
+	// take it: writeLoop writes it after draining, so the close reason is
+	// never silently lost (#12 review).
+	byePending atomic.Value // []byte
 
 	mu      sync.Mutex
 	streams map[uint32]*Stream
@@ -113,6 +121,16 @@ func (s *Session) streamCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.streams)
+}
+
+// accountTunnelLimitReached reports whether acct already holds the maximum
+// number of concurrent tunnels its plan allows (issue #10). Anonymous sessions
+// and unlimited plans (MaxTunnels <= 0) are never limited here.
+func (s *Server) accountTunnelLimitReached(acct *Account, tier *Tier) bool {
+	if acct == nil || tier == nil || tier.MaxTunnels <= 0 {
+		return false
+	}
+	return s.reg.countForAccount(acct.APIKey) >= tier.MaxTunnels
 }
 
 // --- websocket session entry ----------------------------------------------
@@ -189,6 +207,15 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	tier, ok := s.cfg.Tiers[tierID]
 	if !ok {
 		s.wsErrorClose(ws, protocol.ErrCodeUnauthorized, "account tier no longer exists")
+		return
+	}
+
+	// Per-account concurrent tunnel cap (issue #10): per-IP limits only cover
+	// anonymous tunnels, so without this one key could hold every subdomain and
+	// every registry/TLS slot it can request.
+	if s.accountTunnelLimitReached(acct, tier) {
+		s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
+			fmt.Sprintf("plan %s allows %d concurrent tunnel(s)", tier.Name, tier.MaxTunnels))
 		return
 	}
 
@@ -306,9 +333,13 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tier.TTL > 0 {
-		time.AfterFunc(time.Until(sess.expires), func() {
+		// Assign under mu: an already-expired TTL can run the callback
+		// immediately, and Close reads the field to stop it.
+		sess.mu.Lock()
+		sess.ttlTimer = time.AfterFunc(time.Until(sess.expires), func() {
 			sess.Close(protocol.ErrCodeTTlExpired)
 		})
+		sess.mu.Unlock()
 	}
 	go sess.pingLoop()
 	nowNano := time.Now().UnixNano()
@@ -384,7 +415,12 @@ func (s *Session) writeLoop() {
 			}
 		case <-s.closed:
 			// Flush anything already queued (e.g. the bye message) then stop.
-			for {
+			// The drain is bounded by a total budget: 256 queued frames against
+			// the 2s per-write deadline would otherwise stretch shutdown to
+			// ~8.5 minutes, holding the socket and goroutine open (#12).
+			deadline := time.Now().Add(5 * time.Second)
+		flush:
+			for time.Now().Before(deadline) {
 				select {
 				case m := <-s.out:
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -395,14 +431,22 @@ func (s *Session) writeLoop() {
 					_ = s.ws.Write(ctx, typ, m.data)
 					cancel()
 				default:
-					// Graceful close handshake first, then release the reader
-					// (canceling earlier would tear the connection down before
-					// the bye hits the wire).
-					_ = s.ws.Close(websocket.StatusNormalClosure, "bye")
-					s.cancel()
-					return
+					break flush
 				}
 			}
+			// A bye that could not be queued (full out queue) is written here,
+			// after the drain, so the close reason is never lost.
+			if v, ok := s.byePending.Load().([]byte); ok {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = s.ws.Write(ctx, websocket.MessageText, v)
+				cancel()
+			}
+			// Graceful close handshake first, then release the reader
+			// (canceling earlier would tear the connection down before the bye
+			// hits the wire).
+			_ = s.ws.Close(websocket.StatusNormalClosure, "bye")
+			s.cancel()
+			return
 		}
 	}
 }
@@ -555,12 +599,22 @@ func (s *Session) routeFrame(f protocol.Frame, stall time.Duration) bool {
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
 		s.closeMsg.Store(reason)
-		// Enqueue the bye BEFORE closing the signal so the writer always
-		// flushes it before exiting.
+		s.mu.Lock()
+		ttl := s.ttlTimer
+		s.mu.Unlock()
+		if ttl != nil {
+			ttl.Stop()
+		}
+		// Hand the bye to the writer BEFORE closing the signal so it is flushed
+		// ahead of the close frame. It is never dropped: when the outbound queue
+		// is full (a writer still busy on a slow socket) it is parked in
+		// byePending for the writer's drain path instead, so the peer always
+		// learns the close reason (#12 review).
 		b, _ := json.Marshal(&protocol.Bye{Type: protocol.MsgBye, Reason: reason})
 		select {
 		case s.out <- wsOut{text: true, data: b}:
 		default:
+			s.byePending.Store(b)
 		}
 		close(s.closed)
 		// NOTE: s.cancel() is deferred to the write loop (after the bye is

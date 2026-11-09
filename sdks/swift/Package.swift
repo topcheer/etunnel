@@ -9,7 +9,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "etunnel",
-            path: "."
+            path: ".",
+            exclude: ["example", "README.md"]
         )
     ]
 )

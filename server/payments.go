@@ -759,6 +759,11 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := 0; i < 3; i++ {
+		// A departed client must not keep this handler (and its HTTP client)
+		// busy for ~69s: the IPN activates the account anyway (#12).
+		if r.Context().Err() != nil {
+			return
+		}
 		st, err := s.nowpaymentsAPI("GET", "/v1/payment/"+url.PathEscape(pid), nil)
 		if err == nil {
 			status, _ := st["payment_status"].(string)
@@ -776,7 +781,11 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 	http.Error(w, "payment not confirmed yet - it will activate automatically via IPN when the network confirms", http.StatusAccepted)
 }

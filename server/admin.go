@@ -19,6 +19,16 @@ type registerLimiter struct {
 
 var regLimiter = &registerLimiter{seen: make(map[string]time.Time)}
 
+// regLimiterFor returns this server's throttle bucket, falling back to the
+// package default for hand-built Servers (tests) so the endpoint never runs
+// unthrottled.
+func (s *Server) regLimiterFor() *registerLimiter {
+	if s.regLimiter != nil {
+		return s.regLimiter
+	}
+	return regLimiter
+}
+
 func (l *registerLimiter) allow(ip string, every time.Duration) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -191,7 +201,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := remoteIP(r)
-	if !regLimiter.allow(ip, time.Minute) {
+	if !s.regLimiterFor().allow(ip, time.Minute) {
 		http.Error(w, "too many registrations, retry later", http.StatusTooManyRequests)
 		return
 	}
