@@ -177,12 +177,13 @@ jobs:
         run: |
           V=$(ruby -e "print Gem::Specification.load('sdks/ruby/etunnel.gemspec').version")
           for i in $(seq 1 20); do
-            if curl -sf "https://rubygems.org/api/v1/gems/etunnel/versions/${V}.json" > /dev/null; then
+            L=$(curl -sf "https://rubygems.org/api/v1/gems/etunnel.json" | ruby -e "require 'json';print JSON.parse(STDIN.read)['version'] rescue ''")
+            if [ "$L" = "$V" ]; then
               echo "rubygems: ${V} live"; exit 0
             fi
             sleep 15
           done
-          echo "rubygems: ${V} NOT visible after 5min - rake release may have skipped the push"; exit 1
+          echo "rubygems: ${V} NOT visible after 5min"; exit 1
 
   publish-nuget:
     # NuGet trusted publishing (OIDC, no API key) - configured Active on
