@@ -35,7 +35,7 @@ module Etunnel
     [kind].pack('C') + [sid].pack('N') + [payload.bytesize].pack('N') + payload
   end
 
-  def self.connect(server, local, token: nil, subdomain: nil)
+  def self.connect(server, local, token: nil, subdomain: nil, resume: nil)
     local = "127.0.0.1:#{local}" unless local.to_s.include?(':')
     ws = Faye::WebSocket::Client.new(server, ['etunnel-v1'])
 
@@ -57,6 +57,7 @@ module Etunnel
     hello = { type: 'hello', proto: 1, client: 'etunnel-ruby/1.0' }
     hello[:token] = token if token
     hello[:subdomain] = subdomain if subdomain
+    hello[:resume] = resume if resume && !resume.empty?
     ws.send(JSON.generate(hello))
 
     url = nil
@@ -69,6 +70,7 @@ module Etunnel
       m = JSON.parse(payload)
       if m['type'] == 'welcome'
         url = m['url']
+        resume_token = m['resumeToken'].to_s
         break
       elsif m['type'] == 'error'
         raise "etunnel: #{m['code']}: #{m['message']}"
@@ -116,6 +118,7 @@ module Etunnel
 
     tunnel = Object.new
     tunnel.define_singleton_method(:url) { url }
+    tunnel.define_singleton_method(:resume_token) { resume_token }
     tunnel.define_singleton_method(:close) do
       ws.send(JSON.generate({ type: 'bye', reason: 'client closed' }))
       ws.close
@@ -181,12 +184,14 @@ def Etunnel.main(argv = ARGV)
   end
 
   attempt = 0
+  resume = ''
   until stopped
     # The SDK exposes no close callback, but the reader thread it starts dies
     # with the websocket: watch it for the disconnect signal.
     before = Thread.list
     begin
-      tunnel = Etunnel.connect(server, local, token: token, subdomain: subdomain)
+      tunnel = Etunnel.connect(server, local, token: token, subdomain: subdomain, resume: resume)
+      resume = tunnel.resume_token if tunnel.respond_to?(:resume_token) && !tunnel.resume_token.empty?
     rescue StandardError => e
       warn(e.message.start_with?('etunnel:') ? e.message : "etunnel: #{e}")
       exit 1 unless reconnect

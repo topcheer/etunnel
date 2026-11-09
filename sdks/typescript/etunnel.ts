@@ -60,7 +60,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.onerror = () => rej(new Error('ws: connect failed'));
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.0' }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.0', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
     const to = setTimeout(() => rej(new Error('welcome timeout')), 15000);
@@ -125,6 +125,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     url: info.url,
     hostname: info.hostname,
     subdomain: info.subdomain,
+    resumeToken: info.resumeToken || '',
     plan: info.plan || '',
     close(reason = 'client closed') {
       if (closed) return;
@@ -189,9 +190,10 @@ async function supervise(server: string, local: string | number, opts: Options):
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
+  let resume = ''; // server-signed token: reclaim the same subdomain on reconnect
   for (let attempt = 0; !stopped; ) {
     try {
-      const { tunnel: t, ws } = await connectWatched(server, local, opts);
+      const { tunnel: t, ws } = await connectWatched(server, local, { ...opts, resume });
       tunnel = t;
       console.log('TUNNEL_URL: ' + t.url);
       attempt = 0; // a working session resets the backoff to 500ms

@@ -16,6 +16,8 @@ const MAXP = 32768;
 final class Etunnel
 {
     public readonly string $url;
+    /** Server-signed token: pass back as $resume to reclaim the subdomain. */
+    public static string $lastResumeToken = '';
     private $sock;
 
     private function __construct($sock, string $url)
@@ -24,7 +26,7 @@ final class Etunnel
         $this->url = $url;
     }
 
-    public static function connect(string $server, $local, ?string $token = null, ?string $subdomain = null, ?callable $onUrl = null): self
+    public static function connect(string $server, $local, ?string $token = null, ?string $subdomain = null, ?callable $onUrl = null, ?string $resume = null): self
     {
         if (is_numeric($local)) {
             $local = '127.0.0.1:' . $local;
@@ -62,6 +64,7 @@ final class Etunnel
         $hello = ['type' => 'hello', 'proto' => 1, 'client' => 'etunnel-php/1.0'];
         if ($token) $hello['token'] = $token;
         if ($subdomain) $hello['subdomain'] = $subdomain;
+        if ($resume !== null && $resume !== '') $hello['resume'] = $resume;
         self::sendText($sock, json_encode($hello));
 
         $streams = [];
@@ -72,6 +75,7 @@ final class Etunnel
                 $m = json_decode($payload, true);
                 if (($m['type'] ?? '') === 'welcome') {
                     $url = $m['url'];
+                    self::$lastResumeToken = (string)($m['resumeToken'] ?? '');
                     break;
                 }
                 if (($m['type'] ?? '') === 'error') {
@@ -286,6 +290,7 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
     }
 
     $attempt = 0;
+    $resume = '';
     while (!$stopped) {
         try {
             // connect() reports the URL through $onUrl, then serves until the
@@ -294,7 +299,8 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
                 function (string $u): void {
                     fwrite(STDOUT, "TUNNEL_URL: {$u}\n");
                     fflush(STDOUT);
-                });
+                }, $resume);
+            if (Etunnel::$lastResumeToken !== '') $resume = Etunnel::$lastResumeToken;
             $attempt = 0;
             if ($stopped || !$reconnect) {
                 break;

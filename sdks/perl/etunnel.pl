@@ -202,6 +202,7 @@ sub etunnel_connect {
         type => 'hello', proto => 1,
         ($opts->{subdomain} ? (subdomain => $opts->{subdomain}) : ()),
         ($opts->{token} ? (token => $opts->{token}) : ()),
+        ($opts->{resume} ? (resume => $opts->{resume}) : ()),
         client => 'etunnel-perl/1.0',
     }));
     my $info;
@@ -279,6 +280,7 @@ sub etunnel_connect {
 
     return {
         url => $info->{url},
+        resumeToken => ($info->{resumeToken} // ''),
         state => \%state,
         close => sub {
             return if $state{closed};
@@ -314,10 +316,12 @@ my $nap = sub {
 };
 
 my $attempt = 0;
+my $resume = ''; # server-signed token: reclaim the same subdomain on reconnect
 while (!$stopped) {
     my $t = eval {
         etunnel_connect($server, $local, {
             token => $ENV{ETUNNEL_TOKEN}, subdomain => $ENV{ETUNNEL_SUBDOMAIN},
+            resume => $resume,
         });
     };
     if (!$t) {
@@ -326,6 +330,7 @@ while (!$stopped) {
         print STDERR "etunnel: $err\n";
         exit 1 unless $reconnect;
     } else {
+        $resume = $t->{resumeToken} if $t->{resumeToken};
         print "TUNNEL_URL: $t->{url}\n";
         $attempt = 0;
         unless ($reconnect) {
