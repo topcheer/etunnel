@@ -659,8 +659,24 @@ func (s *Session) OpenStream() *Stream {
 	if len(s.streams) >= s.srv.cfg.MaxStreamsPerTunnel {
 		return nil
 	}
+	// IDs are odd and monotonic. On wraparound (2^31 streams on one very
+	// long-lived session) skip IDs still in use: overwriting a live stream
+	// would cross-talk its frames and leak its pump (#11). At most
+	// len(s.streams) probes can collide.
 	id := s.nextID
-	s.nextID += 2 // server-side IDs are odd
+	if id == 0 {
+		id = 1 // server-side IDs are odd; a zero-valued counter still starts correctly
+	}
+	for probe := 0; probe <= len(s.streams); probe++ {
+		if _, busy := s.streams[id]; !busy {
+			break
+		}
+		id += 2 // server-side IDs are odd
+	}
+	if _, busy := s.streams[id]; busy {
+		return nil // no free ID in the probe window: refuse rather than overwrite
+	}
+	s.nextID = id + 2
 	ctx, cancel := context.WithCancel(s.ctx)
 	pr, pw := io.Pipe()
 	st := &Stream{

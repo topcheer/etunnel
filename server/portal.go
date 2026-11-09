@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func envOr(k, def string) string {
@@ -112,7 +113,7 @@ button{background:#238636;color:#fff;border:0;border-radius:6px;padding:.5rem 1r
 h2{border-bottom:1px solid #21262d;padding-bottom:.4rem}</style>
 <h2>Signed in as {{.Email}}</h2>
 <p style="color:#8b949e">via {{.Provider}}{{if .Name}} &middot; {{.Name}}{{end}} &middot; <a href="/logout" style="color:#58a6ff">sign out</a></p>
-<p>Plan: <b>{{.Tier}}</b>{{if .MaxDomains}} (up to {{.MaxDomains}} custom subdomains){{end}}</p>
+<p>Plan: <b>{{.Tier}}</b>{{if .MaxDomains}} (up to {{.MaxDomains}} custom subdomains){{end}}{{if .Expires}}<br><span style="color:#8b949e">renews/expires: {{.Expires}}</span>{{end}}</p>
 <p>API key: <code>{{.Key}}</code> <button onclick="act('reset')">Reset key</button></p>
 <h3>Subscription</h3>
 <p><a href="/pricing" style="color:#58a6ff">Subscribe / change plan</a>
@@ -148,6 +149,7 @@ function delDom(){ act('domain', {email, domain: document.getElementById('dom').
 		"Key":        acct.APIKey,
 		"MaxDomains": maxDomains,
 		"Domains":    domains,
+		"Expires":    expiresLabel(acct.ExpiresAt),
 	})
 }
 
@@ -274,4 +276,16 @@ func removeStr(xs []string, v string) []string {
 		}
 	}
 	return out
+}
+
+// expiresLabel renders the subscription end date (empty for no-expiry).
+func expiresLabel(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	left := time.Until(t)
+	if left < 0 {
+		return t.Format("2006-01-02") + " (lapsed)"
+	}
+	return fmt.Sprintf("%s (%d days left)", t.Format("2006-01-02"), int(left.Hours()/24))
 }
