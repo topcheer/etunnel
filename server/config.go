@@ -90,8 +90,14 @@ type Config struct {
 
 	HeaderWaitTimeout time.Duration // wait for client response headers (default 30s)
 	StreamIdleTimeout time.Duration // per-write deadline when proxying bodies (default 10m)
-	PingInterval      time.Duration // app-level ping interval (default 30s)
-	PingTimeout       time.Duration // liveness threshold (default 150s)
+	// StreamStallTimeout bounds how long one stream may block the shared
+	// WebSocket reader waiting for its pump to drain. A stream that cannot
+	// drain in this window is reset on its own; without it one slow external
+	// consumer freezes every stream plus ping/pong handling and the session is
+	// killed at PingTimeout (issue #8). Default 30s, 0 disables the bound.
+	StreamStallTimeout time.Duration
+	PingInterval       time.Duration // app-level ping interval (default 30s)
+	PingTimeout        time.Duration // liveness threshold (default 150s)
 }
 
 // TLSConfig configures certificate management.
@@ -181,6 +187,9 @@ func (c *Config) normalize() error {
 	}
 	if c.StreamIdleTimeout == 0 {
 		c.StreamIdleTimeout = 10 * time.Minute
+	}
+	if c.StreamStallTimeout == 0 {
+		c.StreamStallTimeout = 30 * time.Second
 	}
 	if c.PingInterval == 0 {
 		c.PingInterval = 30 * time.Second

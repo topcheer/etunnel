@@ -493,15 +493,54 @@ func (s *Session) handleControl(b []byte) error {
 }
 
 func (s *Session) dispatchFrame(f protocol.Frame) {
+	stall := time.Duration(0)
+	if s.srv != nil {
+		stall = s.srv.cfg.StreamStallTimeout
+	}
+	s.routeFrame(f, stall)
+}
+
+// routeFrame delivers one stream frame to that stream's pump and reports
+// whether it was accepted. stall=0 keeps the unbounded handoff (tests and
+// embedders building a Session without a Server).
+//
+// With a positive stall the handoff is bounded: the pump drains st.frames into
+// the response pipe on its own goroutine, so a full queue means the external
+// consumer has stopped reading. Blocking here would freeze the shared read
+// loop - and with it ping/pong handling for every other stream - until the
+// session dies at PingTimeout (issue #8). Instead the stuck stream alone is
+// reset and the reader keeps serving the rest of the tunnel.
+func (s *Session) routeFrame(f protocol.Frame, stall time.Duration) bool {
 	s.mu.Lock()
 	st := s.streams[f.StreamID]
 	s.mu.Unlock()
 	if st == nil {
-		return // unknown or already finished stream: drop
+		return false // unknown or already finished stream: drop
 	}
+	if stall <= 0 {
+		select {
+		case st.frames <- f:
+			return true
+		case <-st.done:
+			return false
+		}
+	}
+	timer := time.NewTimer(stall)
+	defer timer.Stop()
 	select {
 	case st.frames <- f:
+		return true
 	case <-st.done:
+		return false
+	case <-timer.C:
+		if s.srv != nil {
+			s.srv.logf("session %s: stream %d stalled for %s with no consumer progress, resetting it", s.id, st.id, stall)
+		}
+		if s.out != nil {
+			_ = s.sendRst(st.id)
+		}
+		st.abort()
+		return false
 	}
 }
 
