@@ -135,6 +135,26 @@ func (s *AccountStore) LookupEmail(email string) (*Account, bool) {
 	return a, ok
 }
 
+// Snapshot resolves an API key to a deep copy of the account.
+//
+// Lookup returns the store's live *Account; callers that read its fields
+// outside s.mu (session handshake, stats) would race Mutate/SaveLocked
+// writers. Snapshot hands back a value the caller owns, so concurrent tier or
+// domain changes cannot tear a read (issue #4).
+func (s *AccountStore) Snapshot(key string) (Account, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	a, ok := s.byKey[key]
+	if !ok {
+		return Account{}, false
+	}
+	cp := *a
+	if len(a.Domains) > 0 { // copy the slice: a shared header can tear
+		cp.Domains = append([]string(nil), a.Domains...)
+	}
+	return cp, true
+}
+
 // Delete removes an account by API key.
 func (s *AccountStore) Delete(key string) bool {
 	s.mu.Lock()

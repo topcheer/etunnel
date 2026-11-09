@@ -166,15 +166,18 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve account + tier.
+	// Resolve account + tier. The handshake reads a private snapshot: the live
+	// *Account is mutated by billing/OAuth under the store lock, and this
+	// goroutine (plus the stats handler via sess.account) must not observe
+	// those writes unsynchronised (issue #4).
 	var acct *Account
 	if hello.Token != "" {
-		var found bool
-		acct, found = s.accounts.Lookup(hello.Token)
+		snap, found := s.accounts.Snapshot(hello.Token)
 		if !found {
 			s.wsErrorClose(ws, protocol.ErrCodeUnauthorized, "unknown API token")
 			return
 		}
+		acct = &snap
 	} else if s.cfg.RequireToken {
 		s.wsErrorClose(ws, protocol.ErrCodeUnauthorized, "this server requires an API token")
 		return
