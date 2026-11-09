@@ -1,6 +1,6 @@
 # etunnel for Clojure
 
-[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)
+[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)
 
 JDK HttpClient/WebSocket + cheshire.
 

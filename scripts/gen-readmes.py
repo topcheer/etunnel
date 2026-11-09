@@ -86,7 +86,7 @@ BADGES = {
  "ruby": "[![RubyGems](https://img.shields.io/gem/v/etunnel?label=RubyGems%20etunnel)](https://rubygems.org/gems/etunnel)",
  "php": "[![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)",
  "perl": "CPAN (pending PAUSE approval)",
- "clojure": "[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel)",
+ "clojure": "[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)",
  "elixir": "[![Hex](https://img.shields.io/hexpm/v/etunnel?label=Hex%20etunnel)](https://hex.pm/packages/etunnel)",
  "lua": "[![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)",
  "c": "[![GitHub release](https://img.shields.io/github/v/release/topcheer/etunnel?label=GitHub%20release)](https://github.com/topcheer/etunnel/releases)",
