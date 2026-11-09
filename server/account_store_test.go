@@ -111,3 +111,89 @@ func TestSnapshotStampsLastSeen(t *testing.T) {
 		t.Fatal("Snapshot did not stamp LastSeen; pruning would see the account as stale")
 	}
 }
+
+// A lapsed customer keeps the account: the tier reaper downgrades them to free,
+// so without the EverPaid marker the GC would delete a former paying user and
+// take their payment history and OAuth binding with it.
+func TestPruneInactiveKeepsLapsedPaidAccounts(t *testing.T) {
+	old := time.Now().Add(-90 * 24 * time.Hour)
+
+	// Shape produced by DowngradeToFree: tier back to free, ExpiresAt cleared,
+	// LapsedAt holding the first downgrade moment.
+	lapsed := &Account{
+		APIKey:   "et_lapsed",
+		Email:    "lapsed@x.com",
+		Tier:     "free",
+		Created:  old,
+		LastSeen: old,
+		LapsedAt: old,
+	}
+	// Identical shape except the marker: proves the guard is EverPaid, not Tier.
+	anonymous := &Account{
+		APIKey:   "et_anon",
+		Email:    "anon@x.com",
+		Tier:     "free",
+		Created:  old,
+		LastSeen: old,
+	}
+
+	s := &AccountStore{byKey: map[string]*Account{}, byMail: map[string]*Account{}}
+	for _, a := range []*Account{lapsed, anonymous} {
+		s.byKey[a.APIKey] = a
+		s.byMail[a.Email] = a
+	}
+
+	if !lapsed.EverPaid() {
+		t.Fatal("fixture is wrong: a lapsed account must report EverPaid()")
+	}
+	if anonymous.EverPaid() {
+		t.Fatal("fixture is wrong: a never-paid account must not report EverPaid()")
+	}
+
+	if got := s.PruneInactive(time.Now().Add(-30*24*time.Hour), "free"); got != 1 {
+		t.Fatalf("pruned %d accounts, want 1 (only the never-paid one)", got)
+	}
+	if _, ok := s.byKey[lapsed.APIKey]; !ok {
+		t.Fatal("lapsed paid account must be kept: EverPaid() protects it from GC")
+	}
+	if _, ok := s.byKey[anonymous.APIKey]; ok {
+		t.Fatal("never-paid stale free account should have been pruned")
+	}
+}
+
+// The handshake stamp lives in an atomic and is mirrored into LastSeen on save,
+// so pruning still sees activity after a daemon restart.
+func TestSnapshotStampPersistsAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+
+	store, err := NewAccountStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct, err := store.Create("persist@x.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := store.Snapshot(acct.APIKey)
+	if !ok {
+		t.Fatal("snapshot failed")
+	}
+
+	// Any normal mutation forces a save, which materialises the atomic stamp.
+	store.Mutate(acct.Email, func(a *Account) { a.Name = "touched" })
+
+	reloaded, err := NewAccountStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.LookupEmail("persist@x.com")
+	if !ok {
+		t.Fatal("account missing after reload")
+	}
+	if got.LastSeen.IsZero() {
+		t.Fatal("LastSeen was not persisted from the atomic stamp; pruning would see activity as stale after a restart")
+	}
+	if got.LastSeen.Unix() != snap.LastSeen.Unix() {
+		t.Fatalf("persisted LastSeen = %v, want %v", got.LastSeen, snap.LastSeen)
+	}
+}

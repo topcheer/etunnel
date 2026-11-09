@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +30,10 @@ type Account struct {
 	// can be pruned by activity, not by age - a long-lived paying account is
 	// not stale just because it is old (issue #18).
 	LastSeen time.Time `json:"lastSeen,omitempty"`
+	// seenP mirrors LastSeen as unix seconds and is stamped atomically by
+	// Snapshot, so the handshake fast path never takes the store's write lock
+	// (saveLocked holds it across file I/O). Materialised into LastSeen on save.
+	seenP *atomic.Int64 `json:"-"`
 	// OAuth identity (optional; anonymous email-registered accounts have none).
 	Provider string `json:"provider,omitempty"` // google | gitlab | apple
 	Subject  string `json:"subject,omitempty"`  // provider-stable user id
@@ -87,6 +92,10 @@ func NewAccountStore(path string) (*AccountStore, error) {
 		return s, nil
 	}
 	for _, a := range accounts {
+		a.seenP = new(atomic.Int64)
+		if !a.LastSeen.IsZero() {
+			a.seenP.Store(a.LastSeen.Unix())
+		}
 		s.byKey[a.APIKey] = a
 		s.byMail[a.Email] = a
 	}
@@ -99,6 +108,9 @@ func (s *AccountStore) saveLocked() error {
 	}
 	accounts := make([]*Account, 0, len(s.byKey))
 	for _, a := range s.byKey {
+		if ls := a.lastSeen(); !ls.IsZero() {
+			a.LastSeen = ls
+		}
 		accounts = append(accounts, a)
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].Created.Before(accounts[j].Created) })
@@ -134,6 +146,7 @@ func (s *AccountStore) Create(email, tier string) (*Account, error) {
 		Email:   email,
 		Tier:    tier,
 		Created: time.Now().UTC(),
+		seenP:   new(atomic.Int64),
 	}
 	s.byKey[a.APIKey] = a
 	s.byMail[a.Email] = a
@@ -163,34 +176,58 @@ func (s *AccountStore) LookupEmail(email string) (*Account, bool) {
 // writers. Snapshot hands back a value the caller owns, so concurrent tier or
 // domain changes cannot tear a read (issue #4).
 func (s *AccountStore) Snapshot(key string) (Account, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
 	a, ok := s.byKey[key]
 	if !ok {
+		s.mu.RUnlock()
 		return Account{}, false
 	}
-	a.LastSeen = time.Now() // activity stamp for pruning; persisted on next save
 	cp := *a
 	if len(a.Domains) > 0 { // copy the slice: a shared header can tear
 		cp.Domains = append([]string(nil), a.Domains...)
 	}
+	s.mu.RUnlock()
+
+	// Activity stamp for pruning, written outside the lock: the handshake path
+	// must not serialise on the store lock. The atomic is mirrored into
+	// LastSeen by the next saveLocked.
+	now := time.Now().UTC()
+	if a.seenP != nil {
+		a.seenP.Store(now.Unix())
+	}
+	cp.LastSeen = now
 	return cp, true
 }
 
-// PruneInactive removes free-tier accounts with no custom domains whose last
-// activity (LastSeen, falling back to Created) predates cutoff, and reports how
-// many were removed. Paid accounts and accounts holding custom domains are
-// never pruned: they carry entitlements. Live tunnels of a pruned account keep
+// lastSeen reports the most recent handshake activity, preferring the in-memory
+// atomic stamp over the last persisted value.
+func (a *Account) lastSeen() time.Time {
+	if a.seenP != nil {
+		if u := a.seenP.Load(); u > 0 {
+			return time.Unix(u, 0).UTC()
+		}
+	}
+	return a.LastSeen
+}
+
+// PruneInactive removes free-tier accounts whose last activity (LastSeen,
+// falling back to Created) predates cutoff, and reports how many were removed.
+//
+// Accounts that have ever held a paid subscription are never pruned - see
+// Account.EverPaid: a lapsed customer keeps their payment history and OAuth
+// binding for support, refunds and re-subscription, and must not be collected
+// like an anonymous free account. Accounts holding custom domains are kept as
+// well, as an extra guard on entitlements. Live tunnels of a pruned account keep
 // running until they close; only the API key stops working.
 func (s *AccountStore) PruneInactive(cutoff time.Time, freeTier string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := 0
 	for key, a := range s.byKey {
-		if a.Tier != freeTier || len(a.Domains) > 0 {
+		if a.Tier != freeTier || a.EverPaid() || len(a.Domains) > 0 {
 			continue
 		}
-		seen := a.LastSeen
+		seen := a.lastSeen()
 		if seen.IsZero() {
 			seen = a.Created
 		}
