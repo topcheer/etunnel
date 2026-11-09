@@ -136,17 +136,21 @@ func (s *Server) setStateCookie(w http.ResponseWriter) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	st := base64.RawURLEncoding.EncodeToString(b)
-	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: st, Path: "/auth",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: st, Path: "/",
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
 	return st
 }
 
 func (s *Server) checkStateCookie(w http.ResponseWriter, r *http.Request, state string) bool {
-	c, err := r.Cookie("et_oauth_state")
-	if err != nil || c.Value == "" || c.Value != state || state == "" {
+	if c, err := r.Cookie("et_oauth_state"); err != nil || c.Value == "" || c.Value != state || state == "" {
+		var got string
+		if c != nil {
+			got = c.Value
+		}
+		s.logf("auth: state mismatch (cookie=%q query=%q)", got, state)
 		return false
 	}
-	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: "", Path: "/auth", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: "", Path: "/", MaxAge: -1})
 	return true
 }
 
@@ -356,23 +360,36 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 func (s *Server) oauthToken(ctx context.Context, endpoint string, form url.Values) (map[string]string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// GitHub defaults to form-encoded; ask for JSON everywhere.
+	req.Header.Set("Accept", "application/json")
 	resp, err := oauthHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("token endpoint %s", resp.Status)
-	}
 	res := map[string]string{}
-	for k, v := range out {
-		if sv, ok := v.(string); ok {
-			res[k] = sv
+	// Try JSON first, then application/x-www-form-urlencoded (GitHub, some others).
+	if json.Unmarshal(raw, &res) != nil {
+		vals, ferr := url.ParseQuery(string(raw))
+		if ferr != nil {
+			return nil, fmt.Errorf("token endpoint %s (unparseable body)", resp.Status)
 		}
+		for k := range vals {
+			res[k] = vals.Get(k)
+		}
+	}
+	if resp.StatusCode >= 300 {
+		if e := res["error_description"]; e != "" {
+			return nil, fmt.Errorf("token endpoint %s: %s", resp.Status, e)
+		}
+		if e := res["error"]; e != "" {
+			return nil, fmt.Errorf("token endpoint %s: %s", resp.Status, e)
+		}
+		return nil, fmt.Errorf("token endpoint %s", resp.Status)
 	}
 	if res["access_token"] == "" && res["id_token"] == "" {
 		return nil, errors.New("no token in response")
