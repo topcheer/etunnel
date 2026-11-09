@@ -12,7 +12,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 
 ```
 ;; deps.edn
-{:deps {dev.ggcode/etunnel {:mvn/version "1.0.0"}}}
+{:deps {dev.ggcode/etunnel-clj {:mvn/version "1.0.0"}}}
 ```
 
 Requires JDK 11+.

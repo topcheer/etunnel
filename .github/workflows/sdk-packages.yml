@@ -320,6 +320,76 @@ jobs:
           else
             mvn -B -Pcentral -f sdks/java/pom.xml deploy
           fi
+
+  publish-crates:
+    # crates.io: long-lived account token in CARGO_REGISTRY_TOKEN (no OIDC
+    # support upstream). Idempotent via registry version check.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo publish (idempotent)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          V=$(grep -m1 '^version' sdks/rust/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/etunnel/$V")
+          if [ "$code" = "200" ]; then echo "crates: $V already published"; else
+            cd sdks/rust && cargo publish --token "$CARGO_REGISTRY_TOKEN"
+          fi
+
+  publish-luarocks:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leafo/gh-actions-lua@v10
+      - name: install luarocks
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq luarocks
+      - name: luarocks upload (idempotent)
+        env:
+          LR_KEY: ${{ secrets.LUAROCKS_API_KEY }}
+        run: |
+          V=$(grep -m1 '^version' sdks/lua/ggcode.etunnel-*-1.rockspec | sed 's/version = "\(.*\)-1"/\1/')
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://luarocks.org/modules/topcheer/ggcode.etunnel/${V}-1")
+          if [ "$code" = "200" ]; then echo "luarocks: $V already published"; else
+            cd sdks/lua && luarocks upload ggcode.etunnel-${V}-1.rockspec --api-key="$LR_KEY"
+          fi
+
+  publish-clojars:
+    # Clojure SDK keeps its own GAV (dev.ggcode:etunnel-clj) - it is a
+    # separate source (etunnel.clj), distinct from the Java artifact on
+    # Maven Central (Clojars forbids shadowing Central GAVs).
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Write clojars settings.xml
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<XML
+          <settings><servers><server>
+            <id>clojars</id>
+            <username>${{ secrets.CLOJARS_USERNAME }}</username>
+            <password>${{ secrets.CLOJARS_TOKEN }}</password>
+          </server></servers></settings>
+          XML
+      - name: Deploy etunnel-clj (idempotent)
+        run: |
+          V=$(grep -m1 '<version>' sdks/clojure/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://repo.clojars.org/dev/ggcode/etunnel-clj/${V}/")
+          if [ "$code" = "200" ]; then echo "clojars: $V already published"; else
+            cd sdks/clojure && jar cf /tmp/etunnel-clj.jar etunnel.clj && \
+            mvn -q deploy:deploy-file -DrepositoryId=clojars -Durl=https://repo.clojars.org \
+              -Dfile=/tmp/etunnel-clj.jar -DpomFile=pom.xml
+          fi
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:
