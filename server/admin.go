@@ -181,9 +181,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid email", http.StatusBadRequest)
 		return
 	}
-	if req.Tier == "" {
-		req.Tier = s.cfg.DefaultPaidTier
+	// SECURITY: /api/register is public and unauthenticated. It may only mint
+	// free-tier accounts - paid tiers must go through the billing checkout
+	// (/api/billing/checkout), which verifies payment before activation.
+	if req.Tier != "" && req.Tier != "free" {
+		http.Error(w, `{"error":"paid tiers require checkout","hint":"subscribe at /pricing"}`, http.StatusPaymentRequired)
+		return
 	}
+	req.Tier = "free"
 	tier, ok := s.cfg.Tiers[req.Tier]
 	if !ok {
 		http.Error(w, "unknown tier", http.StatusBadRequest)

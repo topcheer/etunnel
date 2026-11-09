@@ -225,3 +225,32 @@ func TestNowPaymentsIPNVerification(t *testing.T) {
 		t.Fatal("tampered IPN activated!")
 	}
 }
+
+// SECURITY regression: the public register endpoint must never mint paid tiers.
+func TestRegisterForcesFreeTier(t *testing.T) {
+	s := newBillingTestServer(t)
+	h := s.Handler()
+	for _, tc := range []struct {
+		tier string
+		want int
+	}{
+		{"pro", http.StatusPaymentRequired},
+		{"starter", http.StatusPaymentRequired},
+		{"", http.StatusOK},
+		{"free", http.StatusOK},
+	} {
+		body := `{"email":"r` + tc.tier + `@x.com","tier":"` + tc.tier + `"}`
+		r := httptest.NewRequest(http.MethodPost, "/api/register", strings.NewReader(body))
+		r.RemoteAddr = "10.0.0." + fmt.Sprint(len(tc.tier)+len(body)%50) + ":1234" // distinct IPs: bypass per-IP register limit
+		r.Header.Set("content-type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code != tc.want {
+			t.Fatalf("tier=%q: got %d want %d (%s)", tc.tier, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+	// any account created by register is free
+	if a, ok := s.accounts.LookupEmail("r@x.com"); ok && a.Tier != "free" {
+		t.Fatalf("register minted tier %q", a.Tier)
+	}
+}
