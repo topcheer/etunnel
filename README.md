@@ -86,6 +86,11 @@ open https://t.etun.uk/pricing   # sign in (Google/GitLab/GitHub/Apple), pick a 
 etunnel -server wss://t.etun.uk/tunnel -token et_... -subdomain mydev 3000
 ```
 
+Signing in claims the account bound to your verified email (an account may be
+created by checkout before you ever log in). If that account was created
+otherwise, its previous API key is rotated on claim: any tunnel still running
+on the old key disconnects and must be restarted with the key from `/me`.
+
 ## Server (etunneld)
 
 Single static binary, three TLS modes:
