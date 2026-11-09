@@ -43,7 +43,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			providers = append(providers, p)
 		}
 	}
-	const loginHTML = `<!doctype html><meta charset="utf-8"><title>etunnel login</title>
+	const loginHTML = `<!doctype html><meta charset="utf-8"><link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>etunnel login</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center}main{text-align:center}a{display:block;margin:.6rem auto;padding:.7rem 1.2rem;width:14rem;border-radius:8px;text-decoration:none;font-weight:600}</style>
 <main><h1>Sign in to etunnel</h1><p>Required before subscribing.</p>
 {{range .Providers}}<a href="/auth/{{.}}/login" style="background:#21262d;color:#e6edf3">{{.}}</a>{{end}}

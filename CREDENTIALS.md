@@ -26,6 +26,12 @@ gitlab.com → User Settings → Applications（或自建实例同路径）
 - Redirect URI：`https://<域名>/auth/gitlab/callback`，勾 `read_user`
 - 提供：`GITLAB_CLIENT_ID`、`GITLAB_CLIENT_SECRET`（自建另加 `GITLAB_URL`）
 
+### GitHub
+github.com → Settings → Developer settings → OAuth Apps → New OAuth App
+- Authorization callback URL：`https://<域名>/auth/github/callback`
+- 提供：`GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`（Generate a new client secret）
+- 私有邮箱自动回退：`/user/emails` 取 primary+verified，仍无则 `<login>@users.noreply.github.com`
+
 ### Apple
 developer.apple.com → Certificates, IDs & Profiles → Identifiers → 注册 App ID（勾 Sign in with Apple）→ 创建 Services ID + 关联 Key
 - Return URL：`https://<域名>/auth/apple/callback`

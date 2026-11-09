@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" width="720" height="160" role="img" aria-label="etunnel">
+  <rect width="720" height="160" rx="0" fill="none"/>
+  <g transform="translate(16,20) scale(0.234375)">
+    <rect width="512" height="512" rx="96" fill="#0d1117"/>
+    <rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/>
+    <line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/>
+  </g>
+  <text x="160" y="104" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="72" font-weight="600" letter-spacing="-2" fill="#e6edf3">etunnel</text>
+</svg>

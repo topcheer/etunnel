@@ -103,7 +103,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
 	}
 	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
-<title>{{.Domain}} - pricing</title>
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>{{.Domain}} - pricing</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:820px;margin:2rem auto;padding:0 1rem}
 table{border-collapse:collapse;width:100%;margin:1.5rem 0}
 th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
