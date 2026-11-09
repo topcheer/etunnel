@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,7 +190,13 @@ func (w *wildcardCert) obtain(ctx context.Context) (*tls.Certificate, error) {
 	}
 	user.reg = reg
 
+	// SAN set: the tunnel domain + wildcard, plus the registrable root and
+	// its www host so the apex domain can serve the landing page too.
 	domains := []string{w.domain, "*." + w.domain}
+	if i := strings.IndexByte(w.domain, '.'); i > 0 {
+		root := w.domain[i+1:]
+		domains = append(domains, root, "www."+root)
+	}
 	request := certificate.ObtainRequest{Domains: domains}
 	res, err := client.Certificate.Obtain(request)
 	if err != nil {

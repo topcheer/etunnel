@@ -55,7 +55,14 @@ func (s *Server) hostLabel(hostPort string) (sub string, isBase, isSub bool) {
 		host = strings.ToLower(h)
 	}
 	domain := strings.ToLower(s.cfg.Domain)
-	if host == domain || host == "www."+domain {
+	// Treat the base domain and its registrable root as "base" hosts: with
+	// Domain=t.example.com, both example.com and www.example.com serve the
+	// landing page alongside t.example.com.
+	root := domain
+	if i := strings.IndexByte(domain, '.'); i > 0 {
+		root = domain[i+1:]
+	}
+	if host == domain || host == "www."+domain || host == root || host == "www."+root {
 		return "", true, false
 	}
 	suffix := "." + domain

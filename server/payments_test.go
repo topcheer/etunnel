@@ -281,3 +281,17 @@ func TestAdminFailsClosedWithoutToken(t *testing.T) {
 		t.Fatalf("right token: %d", rec3.Code)
 	}
 }
+
+func TestHostLabelBaseDomains(t *testing.T) {
+	s := newBillingTestServer(t) // Domain = t.test
+	cases := map[string]bool{    // host -> isBase
+		"t.test": true, "www.t.test": true, "test": true, "www.test": true,
+		"sub.t.test": false, "evil.test": false,
+	}
+	for h, wantBase := range cases {
+		_, isBase, _ := s.hostLabel(h)
+		if isBase != wantBase {
+			t.Errorf("%s: isBase=%v want %v", h, isBase, wantBase)
+		}
+	}
+}
