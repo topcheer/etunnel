@@ -128,7 +128,7 @@ paid us in the twelve months before the claim.</p>
 establishment, without affecting consumer rights you have where you live.</p>
 
 <h2>8. Contact</h2>
-<p>Questions about these terms: <a href="mailto:support@` + d + `">support@` + d + `</a>.</p>
+<p>Questions about these terms: <a href="mailto:info@` + d + `">info@` + d + `</a>.</p>
 `
 	s.legalHTML(w, "Terms of Service", time.Now().Format("2006-01-02"), body)
 }
@@ -201,7 +201,7 @@ plan, expiry and custom subdomains we hold.</li>
 <li><strong>Deletion</strong>: "Close account" on the account page deletes the
 account, its API key and its subdomains immediately.</li>
 <li><strong>Anything else</strong>: write to
-<a href="mailto:privacy@` + d + `">privacy@` + d + `</a> and we will respond within
+<a href="mailto:info@` + d + `">info@` + d + `</a> and we will respond within
 30 days.</li>
 </ul>
 
@@ -222,7 +222,7 @@ for significant changes, mention it in the account page.</p>
 
 <h2>8. Contact</h2>
 <p>Operator of this instance: <strong>` + s.ownerName() + `</strong>.
-Privacy questions and requests: <a href="mailto:privacy@` + d + `">privacy@` + d + `</a>.</p>
+Privacy questions and requests: <a href="mailto:info@` + d + `">info@` + d + `</a>.</p>
 `
 	s.legalHTML(w, "Privacy Policy", time.Now().Format("2006-01-02"), body)
 }

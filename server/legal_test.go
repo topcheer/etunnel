@@ -19,12 +19,12 @@ func TestLegalPages(t *testing.T) {
 		"/terms": {
 			handle: s.handleTerms,
 			want: []string{"Terms of Service", "Acceptable use",
-				"Payments are processed by third parties", "support@"},
+				"Payments are processed by third parties", "info@"},
 		},
 		"/privacy": {
 			handle: s.handlePrivacy,
 			want: []string{"Privacy Policy", "What we collect", "Your rights",
-				"we do not sell", "privacy@"},
+				"we do not sell", "info@"},
 		},
 	}
 	for path, c := range cases {
