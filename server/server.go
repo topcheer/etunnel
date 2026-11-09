@@ -23,10 +23,14 @@ type metrics struct {
 
 // Server is an etunnel tunnel server.
 type Server struct {
-	cfg          Config
-	reg          *Registry
-	accounts     *AccountStore
-	metrics      *metrics
+	cfg      Config
+	reg      *Registry
+	accounts *AccountStore
+	metrics  *metrics
+	// regLimiter throttles /api/register per source IP. Per instance rather
+	// than process-global: two Servers in one process (tests, embedders) must
+	// not share one bucket, which made repeated runs fail with 429.
+	regLimiter   *registerLimiter
 	adminMux     *http.ServeMux
 	handler      http.Handler
 	adminHandler http.Handler
@@ -50,10 +54,11 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg:      cfg,
-		reg:      newRegistry(),
-		accounts: accounts,
-		metrics:  &metrics{startedAt: time.Now()},
+		cfg:        cfg,
+		reg:        newRegistry(),
+		accounts:   accounts,
+		metrics:    &metrics{startedAt: time.Now()},
+		regLimiter: &registerLimiter{seen: make(map[string]time.Time)},
 	}
 
 	mux := http.NewServeMux()
@@ -104,6 +109,7 @@ func (s *Server) Accounts() *AccountStore { return s.accounts }
 func (s *Server) Run(ctx context.Context) error {
 	var servers []*http.Server
 	s.startTelegram(ctx)
+	s.startTierReaper(ctx)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, srv := range servers {

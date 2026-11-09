@@ -1,36 +1,49 @@
-# etunnel SDKs — 20 languages, one wire protocol
+# etunnel SDKs - 20 languages, one wire protocol
 
-Expose a local service to the internet through an etunnel server
-(`wss://t.etun.uk/tunnel`) — instant public HTTPS, automatic TLS, zero
-signup. Every SDK speaks the same tiny protocol
-([PROTOCOL.md](../PROTOCOL.md)); the **Go SDK** is the canonical streaming
-implementation with full WebSocket pass-through, the other 19 are
-buffer-based ports (webhook/dashboard friendly; use Go for WS upgrade).
+[![protocol](https://img.shields.io/badge/protocol-1-informational)](../PROTOCOL.md)
+[![license](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 
-## Install matrix
+Every SDK is a small client for the same server: it opens one outbound
+WebSocket to `wss://<domain>/tunnel`, says `hello`, receives `welcome` with a
+public HTTPS URL, and then relays HTTP requests received over that socket to a
+local service.
 
-| # | Language | Package | Install | Registry |
-|---|----------|---------|---------|----------|
-| 0 | [Go](../sdk/) (canonical) | `github.com/topcheer/etunnel` | `go get github.com/topcheer/etunnel` | [Go proxy](https://pkg.go.dev/github.com/topcheer/etunnel) |
-| 1 | [Node.js](node/) | `@easytunnel/et-sdk` | `npm install @easytunnel/et-sdk` | [npm](https://www.npmjs.com/package/@easytunnel/et-sdk) |
-| 2 | [TypeScript](typescript/) | source-only (`etunnel.ts`) | copy `etunnel.ts`, or `npm install @easytunnel/et-sdk` | [npm (JS)](https://www.npmjs.com/package/@easytunnel/et-sdk) |
-| 3 | [Deno](deno/) | `@ggcode/etunnel` | `deno add @ggcode/etunnel` | [JSR](https://jsr.io/@ggcode/etunnel) |
-| 4 | [Python](python/) | `etunnel` | `pip install etunnel` | [PyPI](https://pypi.org/project/etunnel/) |
-| 5 | [Java](java/) | `dev.ggcode:etunnel` | Maven Central snippet below | [Maven Central](https://central.sonatype.com/artifact/dev.ggcode/etunnel) |
-| 6 | [Kotlin](kotlin/) | via Java artifact | see [java/](java/) | Maven Central |
-| 7 | [Scala](scala/) | via Java artifact | see [java/](java/) | Maven Central |
-| 8 | [C#](csharp/) | `etunnel` | `dotnet add package etunnel` | [NuGet](https://www.nuget.org/packages/etunnel) |
-| 9 | [Rust](rust/) | `etunnel` | `cargo install etunnel` | [crates.io](https://crates.io/crates/etunnel) |
-| 10 | [Swift](../Package.swift) | SPM executable | `.package(url: "https://github.com/topcheer/etunnel", from: "1.0.0")` | [SwiftPM](https://github.com/topcheer/etunnel) |
-| 11 | [Dart](dart/) | `etunnel` | `dart pub add etunnel` | [pub.dev](https://pub.dev/packages/etunnel) |
-| 12 | [Ruby](ruby/) | `etunnel` | `gem install etunnel` | [RubyGems](https://rubygems.org/gems/etunnel) |
-| 13 | [PHP](../composer.json) | `ggcode/etunnel` | `composer require ggcode/etunnel` | [Packagist](https://packagist.org/packages/ggcode/etunnel) |
-| 14 | [Perl](perl/) | `etunnel` | `cpanm etunnel` | CPAN (pending) |
-| 15 | [Clojure](clojure/) | `dev.ggcode/etunnel` | deps.edn snippet in [clojure/](clojure/) | [Clojars](https://clojars.org/dev.ggcode/etunnel) |
-| 16 | [Elixir](elixir/) | `etunnel` | `{:etunnel, "~> 1.0"}` | [Hex](https://hex.pm/packages/etunnel) |
-| 17 | [Lua](lua/) | `ggcode.etunnel` | `luarocks install ggcode.etunnel` | [LuaRocks](https://luarocks.org/modules/topcheer/ggcode.etunnel) |
-| 18 | [C](c/) | source tarball | `make` (see [c/](c/)) | [Releases](https://github.com/topcheer/etunnel/releases) |
-| 19 | [C++](cpp/) | source tarball | `cmake` (see [cpp/](cpp/)) | [Releases](https://github.com/topcheer/etunnel/releases) |
+```mermaid
+flowchart LR
+  V["visitor"] -->|HTTPS| E["etunneld<br/>wildcard TLS"]
+  E -->|"wss /tunnel<br/>multiplexed streams"| S["your SDK client"]
+  S -->|HTTP/1.1| A["localhost:3000"]
+  E -.->|"101 upgrade<br/>raw byte pipe"| A
+```
+
+There is no service account to create and nothing to install server-side: the
+client dials out, so it works from laptops, CI runners and containers behind
+NAT.
+
+## Pick a language
+
+| Language | Package | Install | Embed entry point | README |
+|---|---|---|---|---|
+| Go (reference) | `github.com/topcheer/etunnel/sdk` | `go get github.com/topcheer/etunnel/sdk` | `Connect(ctx, Options{})` | [sdk/](../sdk/README.md) |
+| Node.js | `@easytunnel/et-sdk` | `npm i @easytunnel/et-sdk` | `connect(server, 3000)` | [node/](node/README.md) |
+| TypeScript | `@easytunnel/et-sdk` / single file | `npm i @easytunnel/et-sdk` | `connect(server, 3000)` | [typescript/](typescript/README.md) |
+| Deno | `@ggcode/etunnel` (JSR) | `deno add jsr:@ggcode/etunnel` | `connect(server, 3000)` | [deno/](deno/README.md) |
+| Python | `etunnel` (PyPI) | `pip install etunnel` | `connect(server, 3000)` | [python/](python/README.md) |
+| Java | `dev.ggcode:etunnel` | Maven Central | `Etunnel.connect(server, 3000, null)` | [java/](java/README.md) |
+| Kotlin | `dev.ggcode:etunnel` | Maven Central | `Etunnel.connect(server, 3000)` | [kotlin/](kotlin/README.md) |
+| Scala | `dev.ggcode:etunnel` | Maven Central | `Etunnel.connect(server, 3000)` | [scala/](scala/README.md) |
+| C# | `etunnel` / single file | `dotnet add package etunnel` | `Etunnel.Connect(server, "3000")` | [csharp/](csharp/README.md) |
+| Rust | `etunnel` (crates.io) | `cargo install etunnel` | binary - spawn as child | [rust/](rust/README.md) |
+| Swift | single file (Foundation) | SPM / copy | `try await Etunnel(...).connect()` | [swift/](swift/README.md) |
+| Dart | `etunnel` (pub.dev) | `dart pub add etunnel` | `Etunnel.connect(server, '3000')` | [dart/](dart/README.md) |
+| Ruby | `etunnel` (RubyGems) | `gem install etunnel` | `Etunnel.connect(server, 3000)` | [ruby/](ruby/README.md) |
+| PHP | `ggcode/etunnel` | `composer require ggcode/etunnel` | `Etunnel::connect(server, 3000)` | [php/](php/README.md) |
+| Perl | single file (core modules) | `cpanm etunnel` | `etunnel_connect(server, local, {})` | [perl/](perl/README.md) |
+| Lua | `ggcode.etunnel` (LuaRocks) | `luarocks install ggcode.etunnel` | script | [lua/](lua/README.md) |
+| Clojure | `dev.ggcode/etunnel-clj` | deps.edn (Clojars) | `(connect! server 3000)` | [clojure/](clojure/README.md) |
+| Elixir | `etunnel` (Hex) | `{:etunnel, "~> 1.2"}` | `Etunnel.start_link(...)` | [elixir/](elixir/README.md) |
+| C | single file (`make`) | `make && make install` | binary - spawn as child | [c/](c/README.md) |
+| C++ | single file (`cmake`) | `cmake -B build` | binary - spawn as child | [cpp/](cpp/README.md) |
 
 Java coordinates:
 
@@ -42,63 +55,69 @@ Java coordinates:
 </dependency>
 ```
 
-## 60-second tour
+## Capability matrix
+
+| SDK | Streaming bodies | WebSocket (101) pass-through | Embeddable | Concurrency |
+|---|---|---|---|---|
+| Go | yes - chunked, flushes preserved | yes - raw byte pipe | library | full |
+| Node, TypeScript, Deno | buffered per stream | no | library | full (event loop) |
+| Python | buffered per stream | no | library | thread per tunnel |
+| Java, Kotlin, Scala, Clojure | buffered per stream | no | library | JDK WebSocket callbacks |
+| C#, Dart, Ruby, PHP, Perl, Swift | buffered per stream | no | library / single file | per client |
+| Elixir | buffered per stream | no | OTP child | per client |
+| Lua | buffered per stream | no | script | sequential (one request at a time) |
+| Rust, C, C++ | buffered per stream | no | binary | per client |
+
+"Buffered" means the request body is collected before it is forwarded and the
+response body is collected before it is returned: correct for webhooks, JSON
+APIs and dashboards, not for large uploads, SSE or WebSockets. Use the Go SDK
+when you need those, or when a single tunnel must carry heavy concurrency.
+
+## Run it in 60 seconds
 
 ```sh
-# any SDK CLI works the same way:
-etunnel 3000                      # or: npx @easytunnel/et-sdk 3000
-# TUNNEL_URL: https://quiet-frog-42.t.etun.uk   <- now live
+npx @easytunnel/et-sdk 3000
+#   TUNNEL_URL: https://quiet-frog-42.t.etun.uk
 ```
 
-Embedding (Node example; every SDK README has its own):
+Every SDK file is also a CLI: `etunnel 3000`, `python -m etunnel 3000`,
+`dotnet run Etunnel.cs 3000`, `swift etunnel.swift 3000`, ... They all honour:
 
-```js
-const { connect } = require('@easytunnel/et-sdk');
-const t = await connect('wss://t.etun.uk/tunnel', 3000);
-console.log(t.url);
-```
+| Variable | Meaning | Default |
+|---|---|---|
+| `ETUNNEL_SERVER` | tunnel server WebSocket URL | `wss://t.etun.uk/tunnel` |
+| `ETUNNEL_LOCAL` | local port or `host:port` (first argument wins) | `3000` |
+| `ETUNNEL_TOKEN` | paid-plan API key | - |
+| `ETUNNEL_SUBDOMAIN` | requested subdomain (paid plans) | random |
 
-## Examples
+## Protocol in one page
 
-Every SDK ships a runnable minimal example (local HTTP server + public URL):
+1. Client opens `wss://<domain>/tunnel` with subprotocol `etunnel-v1`.
+2. Client sends `{"type":"hello","proto":1,"token"?,"subdomain"?,"client"?}`.
+3. Server answers `{"type":"welcome","url":"https://...","hostname":"...","plan":"free","expiresIn":14400}`.
+4. For each inbound request the server sends `{"type":"req","streamId":N,"method":"GET","path":"/x","headers":{...}}`,
+   then binary frames `[kind|streamId|len|payload]`, then `fin`.
+5. The client replays the request locally and streams `data` frames back, ending
+   with `fin` (or `rst` to abort).
+6. `ping`/`pong` keep the tunnel alive; `bye` closes it (server-initiated on TTL
+   expiry, client-initiated on shutdown).
 
-```sh
-node sdks/node/example/basic.js 3000
-python3 sdks/python/example/basic.py 3000
-ruby -I sdks/ruby/lib sdks/ruby/example/basic.rb 3000
-javac -d out sdks/java/src/main/java/dev/ggcode/Etunnel.java sdks/java/example/Basic.java && java -cp out dev.ggcode.Basic
-cargo run --manifest-path sdks/rust/Cargo.toml --bin basic -- 3000
-dart run sdks/dart/example/basic.dart 3000
-sh sdks/c/example/basic.sh        # C/C++ SDKs are single-file CLIs
-```
+Full detail - every frame, header rule and error code - is in
+[PROTOCOL.md](../PROTOCOL.md).
 
-Full per-language example files: `sdks/<lang>/example/` (C/C++:
-`example/basic.sh`, TypeScript/Deno: `example/basic.ts`).
+## Adding a language
 
-## Pointing SDKs at your own server
+1. Copy an existing buffer-based port (Python or Node is the clearest) into a
+   new `sdks/<lang>/` directory.
+2. Implement: WebSocket connect with subprotocol `etunnel-v1`, `hello`/`welcome`,
+   `req` -> local HTTP request, data/fin frames, `ping`/`pong`, `bye`.
+3. Make the file runnable (`<lang> etunnel.<ext> 3000`) and print
+   `TUNNEL_URL: ...`.
+4. Add an entry to `sdks/README.md` and to `scripts/gen_sdk_readmes.py`, then
+   run `python3 scripts/gen_sdk_readmes.py` to regenerate that package's README.
+5. Verify against a real server (or a local `etunneld -tls-mode http`) before
+   publishing.
 
-Runtime: `ETUNNEL_SERVER=wss://your-host/tunnel ...` (all SDKs).
-Compile-time defaults, for embedding a private server address:
+## License
 
-| Language | Build flag |
-|---|---|
-| Go | `-ldflags "-X github.com/topcheer/etunnel/sdk.DefaultServer=wss://your/tunnel"` |
-| C / C++ | `-DETUNNEL_DEFAULT_SERVER="wss://your/tunnel"` |
-| Rust | `ETUNNEL_BUILD_SERVER=wss://your/tunnel cargo build` |
-| Dart | `--dart-define=ETUNNEL_DEFAULT_SERVER=wss://your/tunnel` |
-
-Interpreted SDKs use the runtime env only. Precedence: env > compiled default > built-in.
-
-## Choosing an SDK
-
-- **WebSockets / streaming bodies / long-lived SSE** → [Go SDK](../sdk/)
-  (101-upgrade pass-through, verified end-to-end on the live server)
-- **Webhooks, dashboards, demos, CI callbacks** → any language above
-  (buffered request/response per stream)
-- Environment variables everywhere: `ETUNNEL_SERVER`, `ETUNNEL_LOCAL`,
-  `ETUNNEL_TOKEN`, `ETUNNEL_SUBDOMAIN`
-
-## Server
-
-Single Go binary; see the [main README](../README.md) for a 60-second setup
-and the public instance at `wss://t.etun.uk/tunnel`.
+MIT - see [LICENSE](../LICENSE).

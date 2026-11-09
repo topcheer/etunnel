@@ -413,39 +413,7 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 
 func landingHTML(cfg Config) string {
 	server := "wss://" + cfg.Domain + cfg.WSPath
-	type qs struct{ ID, Name, Install string }
-	qsLangs := []qs{
-		{"node", "Node", "# no install needed - runs straight from npm\nnpx @easytunnel/et-sdk 3000"},
-		{"ts", "TypeScript", "# source-only: grab the file, run with Node >= 22\ncurl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/typescript/etunnel.ts\nnode etunnel.ts 3000"},
-		{"deno", "Deno", "deno run --allow-net https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/deno/etunnel.ts 3000"},
-		{"python", "Python", "pip install etunnel\netunnel 3000"},
-		{"go", "Go", "go install github.com/topcheer/etunnel/cmd/etunnel@latest\netunnel -server '" + server + "' 3000"},
-		{"java", "Java", "# single-file source launch (JDK 11+)\ncurl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/java/src/main/java/dev/ggcode/Etunnel.java\njava Etunnel.java 3000"},
-		{"kotlin", "Kotlin", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/kotlin/Etunnel.kt\nkotlinc Etunnel.kt -include-runtime -d etunnel.jar\njava -jar etunnel.jar 3000"},
-		{"scala", "Scala", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/scala/Etunnel.scala\nscala Etunnel.scala 3000"},
-		{"csharp", "C#", "# .NET 10 single-file app\ndotnet add package etunnel\ndotnet run 3000"},
-		{"rust", "Rust", "cargo install etunnel\netunnel 3000"},
-		{"swift", "Swift", "git clone https://github.com/topcheer/etunnel\ncd etunnel && swift build -c release\n.build/release/etunnel 3000"},
-		{"dart", "Dart", "dart pub add etunnel\ndart run etunnel.dart 3000"},
-		{"ruby", "Ruby", "gem install etunnel\netunnel 3000"},
-		{"php", "PHP", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/php/etunnel.php\nphp etunnel.php 3000"},
-		{"perl", "Perl", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/perl/etunnel.pl\nperl etunnel.pl 3000"},
-		{"lua", "Lua", "luarocks install ggcode.etunnel\nlua $(luarocks show ggcode.etunnel | awk '/Location/{print $2}')/etunnel.lua 3000"},
-		{"c", "C", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/c/etunnel.c\ncc -O2 -o etunnel etunnel.c -lwebsockets -lcurl -lssl -lcrypto\n./etunnel 3000"},
-		{"cpp", "C++", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/cpp/etunnel.cpp\nc++ -std=c++17 -O2 -o etunnel etunnel.cpp -lssl -lcrypto\n./etunnel 3000"},
-		{"clojure", "Clojure", "curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/clojure/etunnel.clj\nclojure -M -i etunnel.clj -e \"(et/-main \\\"3000\\\")\""},
-		{"elixir", "Elixir", "mix deps.get\nmix run --no-halt runner.exs 3000"},
-	}
-	var tb, pn strings.Builder
-	for i, l := range qsLangs {
-		on := ""
-		if i == 0 {
-			on = " on"
-		}
-		fmt.Fprintf(&tb, `<button class="qtab%s" data-id="%s" onclick="showLang(this)">%s</button>`, on, l.ID, l.Name)
-		fmt.Fprintf(&pn, `<div class="panel%s" id="p-%s"><div class="cmd" style="max-width:44rem;margin:0 auto;white-space:pre-wrap;text-align:left"><span id="c-%s">%s</span><button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('c-%s').textContent);this.textContent='copied'">copy</button></div></div>`, on, l.ID, l.ID, htmlEscapeText(l.Install), l.ID)
-	}
-	qsTabs, qsPanels := tb.String(), pn.String()
+	qsTabs, qsPanels := quickstartHTML(server)
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -501,6 +469,23 @@ pre .out{color:var(--green2)}
 .tabs button.qtab:hover{color:var(--fg)}
 .panel{display:none}
 .panel.on{display:block}
+/* code snippet */
+.snippet{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;max-width:52rem;margin:0 auto}
+.snip-head{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;padding:.6rem .9rem;border-bottom:1px solid var(--line);background:rgba(22,27,34,.6);font-size:.78rem}
+.snip-head .fname{color:var(--fg);font-weight:600}
+.snip-head .mode{font-size:.64rem;text-transform:uppercase;letter-spacing:.09em;border-radius:4px;padding:.05rem .4rem;border:1px solid var(--line);color:var(--dim)}
+.snip-head .mode.embed{color:var(--green2);border-color:rgba(63,185,80,.45)}
+.snip-head .dep{color:var(--dim)}
+.snip-head .snip-link{margin-left:auto;color:#58a6ff;font-size:.75rem}
+.snip-head .snip-copy{background:none;border:1px solid var(--line);border-radius:6px;color:var(--dim);font-family:inherit;font-size:.7rem;padding:.1rem .45rem;cursor:pointer}
+.snip-head .snip-copy:hover{color:var(--fg);border-color:var(--dim)}
+pre.code{margin:0;border:0;border-radius:0;background:transparent;padding:1rem 1.1rem;font-size:.8rem;line-height:1.72;overflow:auto;tab-size:4}
+pre.code .kw{color:#ff7b72}
+pre.code .st{color:#a5d6ff}
+pre.code .cm{color:#6e7681;font-style:italic}
+/* diagrams */
+.flow{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.5rem;overflow:auto;text-align:center}
+.flow pre.mermaid{background:transparent;border:0;margin:0;padding:0;font-size:.78rem;color:var(--dim)}
 /* pricing strip */
 .tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
 .tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.6rem}
@@ -555,11 +540,31 @@ footer .sep{margin:0 .6rem}
   </div>
 </section>
 
+<section id="how">
+  <h2>How it works</h2>
+  <p class="sub">One outbound WebSocket from your process. No inbound port, no router config, no firewall change.</p>
+  <div class="flow">
+    <pre class="mermaid">
+flowchart LR
+  V["visitor<br/>https://quiet-frog-42.t.etun.uk"] -->|HTTPS 443| E["etunneld<br/>wildcard TLS + plan limits"]
+  E -->|wss /tunnel<br/>multiplexed streams| C["SDK client<br/>inside your process"]
+  C -->|HTTP/1.1| A["localhost:3000<br/>your app"]
+  E -.->|101 upgrade<br/>raw byte pipe| A
+    </pre>
+  </div>
+  <div class="grid" style="margin-top:1rem">
+    <div class="card"><h3>1. Your process dials out</h3><p>The SDK opens <code>wss://&lt;domain&gt;/tunnel</code> and says <code>hello</code>. The server answers <code>welcome</code> with the public URL and the plan's TTL.</p></div>
+    <div class="card"><h3>2. A request lands</h3><p>The server matches the <code>Host</code> header to your tunnel, allocates a stream id and forwards the request as JSON metadata plus binary body frames.</p></div>
+    <div class="card"><h3>3. Your app answers</h3><p>The SDK replays the request against <code>localhost:3000</code> and streams the response back over the same socket. Upgrades become a raw byte pipe.</p></div>
+  </div>
+</section>
+
 <section id="quickstart">
-  <h2>Quickstart - 20 languages</h2>
-  <p class="sub">Pick your stack; the CLI is the same everywhere. Free tunnels need no account.</p>
+  <h2>Quickstart</h2>
+  <p class="sub">The same protocol in 20 languages. Copy the snippet into your service and your app is reachable from the internet; run the file on its own and it doubles as a CLI. Free tunnels need no account.</p>
   <div class="tabs" id="langtabs">` + qsTabs + `</div>
   ` + qsPanels + `
+  <p class="sub" style="text-align:center;margin:1.4rem 0 0">Custom subdomain, 30-day lifetime and 10 Mbps come with an API key - pass <code>token</code> (and <code>subdomain</code>) to the same call, see <a href="/pricing">pricing</a>.</p>
 </section>
 
 <section id="pricing">
@@ -583,6 +588,17 @@ function showLang(btn){
   var ps = document.querySelectorAll('.panel');
   for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].id === 'p-' + id);
 }
+function copySnippet(btn){
+  var pre = btn.closest('.snippet').querySelector('pre.code');
+  var done = function(){ btn.textContent = 'copied'; setTimeout(function(){ btn.textContent = 'copy'; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(pre.textContent).then(done, done);
+  } else { done(); }
+}
+</script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:true,theme:'dark',themeVariables:{fontFamily:'ui-monospace, SF Mono, Menlo, monospace',fontSize:'13px',lineColor:'#30363d',primaryColor:'#161b22',primaryTextColor:'#e6edf3',primaryBorderColor:'#3fb950',edgeLabelBackground:'#0d1117'}});
 </script>
 </footer>
 </body></html>`

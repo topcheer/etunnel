@@ -1,23 +1,144 @@
-# etunnel SDK for Go (canonical)
+# etunnel SDK for Go (reference client)
 
-The reference SDK: full **streaming** bodies and **WebSocket (101 upgrade)
-pass-through** — everything the buffer-based ports in `../sdks/` build down to.
+[![Go Reference](https://pkg.go.dev/badge/github.com/topcheer/etunnel/sdk.svg)](https://pkg.go.dev/github.com/topcheer/etunnel/sdk)
+[![Go](https://img.shields.io/github/go-mod/go-version/topcheer/etunnel?label=Go%20module)](https://pkg.go.dev/github.com/topcheer/etunnel)
 
-```go
-import "github.com/topcheer/etunnel/sdk"
+The canonical client, and the only one that is not buffer-based:
 
-t, err := sdk.Connect("wss://t.etun.uk/tunnel", "127.0.0.1:3000",
-    sdk.Options{Token: os.Getenv("ETUNNEL_TOKEN")})
-// t.URL() -> https://<subdomain>.t.etun.uk
-defer t.Close()
+- **Streaming bodies** - responses are relayed chunk by chunk, flushes are
+  preserved, `Transfer-Encoding: chunked` and server-sent events work.
+- **WebSocket pass-through** - a `101 Switching Protocols` response hijacks both
+  sides into a raw byte pipe, so a realtime service behind a tunnel behaves
+  exactly as it does locally.
+- **No dependencies** outside the standard library (`github.com/coder/websocket`).
+
+The other 19 languages in [`../sdks/`](../sdks/README.md) are buffer-based ports
+of the same wire protocol; they cover webhooks, dashboards and APIs.
+
+## Install
+
+```sh
+go get github.com/topcheer/etunnel/sdk@latest
 ```
 
-- Zero dependencies outside the Go standard library.
-- Manifest: the module's root `go.mod` (`module etunnel`) — installed via
-  `go get github.com/topcheer/etunnel@v1.0.2` once the repo is tagged, served by proxy.golang.org.
-- Distributed through the Go module proxy (git tags); no package upload step.
-- Race-detector-enabled integration tests live at the repo root
-  (`integration_test.go`).
+## Embed in your app
 
-See [../PROTOCOL.md](../PROTOCOL.md) for the wire protocol and
-[../sdks/README.md](../sdks/README.md) for the other 19 languages.
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/topcheer/etunnel/sdk"
+)
+
+func main() {
+	tunnel, err := etunnel.Connect(context.Background(), etunnel.Options{
+		Server:    "wss://t.etun.uk/tunnel",
+		LocalAddr: "127.0.0.1:3000",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tunnel.Close("app exiting")
+
+	log.Printf("public URL: %s", tunnel.URL())
+
+	// Tunnel.Done() closes when the server drops the tunnel (TTL expiry, kick).
+	// Start your own server here, or block:
+	select {}
+}
+```
+
+```mermaid
+flowchart LR
+  V["visitor"] -->|HTTPS| E["etunneld"]
+  E -->|"wss /tunnel"| S["sdk.Connect"]
+  S -->|"HTTP/1.1 streaming"| L["localhost:3000"]
+  E -.->|"101 upgrade: raw pipe"| L
+```
+
+## CLI
+
+```sh
+go install github.com/topcheer/etunnel/cmd/etunnel@latest
+etunnel -server wss://t.etun.uk/tunnel 3000
+```
+
+`etunnel` prints `TUNNEL_URL: https://<subdomain>.<domain>` and keeps the tunnel
+open until `Ctrl-C`; `-token` and `-subdomain` select a paid plan.
+
+## API
+
+| Symbol | Returns / effect |
+|---|---|
+| `Connect(ctx, Options)` | `(*Tunnel, error)` - returns after the server's `welcome` |
+| `Tunnel.URL()` | `string` - public HTTPS URL |
+| `Tunnel.Hostname()` / `Subdomain()` / `Plan()` | connection facts |
+| `Tunnel.ExpiresAt()` | `time.Time` - plan TTL deadline |
+| `Tunnel.Done()` | `<-chan struct{}` closed when the tunnel ends |
+| `Tunnel.CloseReason()` | why the server closed it (`ttl_expired`, `kicked`, ...) |
+| `Tunnel.Close(reason)` | graceful shutdown; the subdomain is freed immediately |
+| `APIError` | policy rejection during handshake (`Code` + `Message`) |
+
+### Options
+
+| Field | Meaning |
+|---|---|
+| `Server` | tunnel endpoint; a bare host gets `wss://` and `/tunnel` |
+| `LocalAddr` | local service address, `"127.0.0.1:3000"` (`":3000"` also works) |
+| `Token` | paid-plan API key |
+| `Subdomain` | custom subdomain, requires a paid plan |
+| `Client` | free-form client identifier sent in `hello` |
+| `OnLog` | `func(format string, args ...any)` lifecycle log sink |
+
+`DefaultServer` is the connect target when `Server` is empty. Override it at
+build time for an internal deployment:
+
+```sh
+go build -ldflags "-X github.com/topcheer/etunnel/sdk.DefaultServer=wss://tunnel.internal/tunnel" ./cmd/etunnel
+```
+
+## Behaviour details
+
+- **Header hygiene** - hop-by-hop headers (`Connection`, `Keep-Alive`,
+  `Transfer-Encoding`, `Upgrade`, `Proxy-*`, `TE`, `Trailer`) are stripped in
+  both directions. `etunneld` is the edge: it sets `X-Forwarded-For` and
+  `X-Forwarded-Proto` itself and discards any client-supplied value.
+- **Streams** - one WebSocket carries many concurrent streams, each with a
+  32-bit id. The server sends `req` metadata, then binary data frames, then
+  `fin`; a client can answer with `rst` to abort.
+- **Liveness** - application-level `ping`/`pong` plus WebSocket pings. A stalled
+  stream is reset individually instead of freezing the tunnel.
+- **Grace** - `Close(reason)` sends `bye`, waits for the writer to drain and
+  closes the socket. Dropping the process has the same effect server-side.
+
+## Environment variables
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `ETUNNEL_SERVER` | tunnel server WebSocket URL | `wss://t.etun.uk/tunnel` |
+| `ETUNNEL_LOCAL` | local port or `host:port` (CLI) | `3000` |
+| `ETUNNEL_TOKEN` | paid-plan API key (CLI) | - |
+| `ETUNNEL_SUBDOMAIN` | requested subdomain (CLI, paid plans) | random |
+
+The `Connect` API itself takes everything through `Options`; the environment
+variables are read by `cmd/etunnel`.
+
+## Tests
+
+Race-detector-enabled end-to-end tests live at the repository root - they start
+an in-process `etunneld` and drive it with this SDK, the CLI and raw
+HTTP/WebSocket clients:
+
+```sh
+go test -race ./...
+```
+
+## See also
+
+- [Wire protocol](../PROTOCOL.md)
+- [All 20 SDKs](../sdks/README.md)
+- [Runnable example](../examples/basic/main.go)
+- [LICENSE](../LICENSE) - MIT
