@@ -82,6 +82,7 @@ func (s *Server) sessionCookie(email string) *http.Cookie {
 	mac := hmacStr(s.sessionKey(), fmt.Sprintf("%s|%d", email, exp))
 	v := fmt.Sprintf("%s|%d|%s", email, exp, mac)
 	return &http.Cookie{Name: "et_session", Value: v, Path: "/", HttpOnly: true,
+		Secure:   s.cfg.TLS.Mode != TLSModeHTTP, // #6: never ride plaintext HTTP when TLS is on
 		SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600}
 }
 
@@ -236,10 +237,13 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 	if a, ok := s.accounts.FindByProvider(provider, id.subject); ok {
 		acct = a
 	} else if _, ok := s.accounts.LookupEmail(id.email); ok {
-		// claim an existing anonymous (billing-created) account
+		// Claim an existing anonymous (register-created) account. The API key
+		// is rotated on claim (#2): whoever pre-registered this address loses
+		// the key they were handed, so email squatting yields no persistence.
 		s.accounts.Mutate(id.email, func(a *Account) {
 			a.Provider, a.Subject, a.Name = provider, id.subject, id.name
 		})
+		s.accounts.ResetKey(id.email)
 		acct, _ = s.accounts.LookupEmail(id.email)
 	} else {
 		acct, err = s.accounts.Create(id.email, "free")

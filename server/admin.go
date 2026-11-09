@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -38,7 +39,7 @@ func (s *Server) buildAdmin() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok\n")
 	})
-	mux.HandleFunc("/stats", s.handleStats)
+	mux.HandleFunc("/stats", s.adminAuthOptional(s.handleStats))
 	mux.HandleFunc("/admin/accounts", s.adminAuth(s.handleAdminAccounts))
 	mux.HandleFunc("/admin/accounts/", s.adminAuth(s.handleAdminAccountDelete))
 	s.adminHandler = mux
@@ -50,6 +51,24 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 		// entirely (previously any caller passed when the token was unset).
 		if s.cfg.AdminToken == "" {
 			http.Error(w, "admin API disabled: set -admin-token", http.StatusServiceUnavailable)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// adminAuthOptional guards read-only ops routes (/stats): it enforces the
+// token when one is configured, but stays open when AdminToken is unset so
+// local `curl 127.0.0.1:9090/stats` keeps working. Mutating admin routes use
+// adminAuth, which fails closed.
+func (s *Server) adminAuthOptional(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AdminToken == "" {
+			next(w, r)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
@@ -184,6 +203,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email)) // match the OAuth paths: Bob@x.com == bob@x.com
 	if !strings.Contains(req.Email, "@") || len(req.Email) > 254 {
 		http.Error(w, "invalid email", http.StatusBadRequest)
 		return
@@ -203,7 +223,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := s.accounts.Create(req.Email, req.Tier)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		if errors.Is(err, ErrEmailTaken) {
+			http.Error(w, "email already registered", http.StatusConflict)
+			return
+		}
+		s.logf("register: create account: %v", err)
+		http.Error(w, "registration failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
