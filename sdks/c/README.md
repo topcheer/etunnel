@@ -48,6 +48,8 @@ Options: Positional local port or `host:port`; the rest comes from the environme
 
 The tunnel keeps the URL for the lifetime of the process (or the plan TTL, whichever comes first); the server closes it with `bye` when the TTL expires, and `close()` releases it early.
 
+Each account may hold as many concurrent tunnels as its plan allows (free 2, starter 5, pro 20); anonymous tunnels are additionally capped per source IP. Starting one too many is rejected with `limit_reached`.
+
 ## Environment variables
 
 | Variable | Meaning | Default |

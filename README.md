@@ -165,9 +165,11 @@ Capability differences (streaming bodies, WebSocket pass-through) are in the
 | Subdomain | random `word-word-42` | 1 custom | 5 custom |
 | Tunnel lifetime | 4 hours | 72 hours | 30 days |
 | Bandwidth | 1 Mbps | 10 Mbps | 10 Mbps |
+| Concurrent tunnels | 2 per account (5 per IP when anonymous) | 5 | 20 |
 
 Tiers are configuration, not code: `etunneld -tiers tiers.json` maps a tier id to
-`{name, ttlHours, customDomains, bandwidthMbps}`.
+`{name, ttlHours, customDomains, bandwidthMbps, maxTunnels}` (`maxTunnels: 0`
+means unlimited).
 
 ## Paid plans
 
@@ -229,8 +231,10 @@ migration (static wildcard cert from the ACME directory, not renewed).
 
 ### Operational limits
 
-- Per-IP concurrent anonymous tunnels (`-max-tunnels-per-ip`), per-tunnel stream
-  cap (`-max-streams`), plan TTL and bandwidth (token bucket, both directions).
+- Per-IP concurrent anonymous tunnels (`-max-tunnels-per-ip`) and a per-account
+  cap that scales with the tier (`Tier.MaxTunnels`, rejection code
+  `limit_reached`), per-tunnel stream cap (`-max-streams`), plan TTL and
+  bandwidth (token bucket, both directions).
 - Heartbeats both ways (`ping`/`pong` plus WS ping), stalled streams are reset
   instead of freezing the tunnel.
 - Accounts persist to a JSON file with atomic writes.

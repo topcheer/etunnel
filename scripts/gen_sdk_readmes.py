@@ -520,6 +520,9 @@ def render(d: dict) -> str:
         "The tunnel keeps the URL for the lifetime of the process (or the plan TTL, "
         "whichever comes first); the server closes it with `bye` when the TTL expires, "
         "and `close()` releases it early.\n",
+        "Each account may hold as many concurrent tunnels as its plan allows "
+        "(free 2, starter 5, pro 20); anonymous tunnels are additionally capped per "
+        "source IP. Starting one too many is rejected with `limit_reached`.\n",
         "## Environment variables\n",
         ENV + "\n",
         "## Notes and limits\n",
