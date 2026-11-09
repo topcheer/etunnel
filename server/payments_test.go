@@ -358,3 +358,39 @@ func TestActivateSetsExpiry(t *testing.T) {
 		t.Fatal("renewal did not extend the expiry")
 	}
 }
+
+func TestHumanTTL(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		10 * 24 * time.Hour: "10d",
+		72 * time.Hour:      "3d",
+		4 * time.Hour:       "4h",
+		90 * time.Minute:    "1h30m0s",
+		0:                   "unlimited",
+	} {
+		if got := humanTTL(d); got != want {
+			t.Errorf("humanTTL(%v)=%q want %q", d, got, want)
+		}
+	}
+}
+
+// Mobile audit fixes must stay applied: phones need the viewport meta, the
+// 5-column price table scrolls inside its own container, and the TTL column
+// must not print Go's raw duration ("720h0m0s").
+func TestPricingPageMobileShape(t *testing.T) {
+	s := newBillingTestServer(t)
+	rec := httptest.NewRecorder()
+	s.handlePricing(rec, httptest.NewRequest(http.MethodGet, "/pricing", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`name="viewport" content="width=device-width`,
+		`overflow-x:auto`,
+		`<td>30d</td>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pricing page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "h0m0s") {
+		t.Error("raw Go duration leaked into the pricing table")
+	}
+}
