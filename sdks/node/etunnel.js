@@ -125,6 +125,7 @@ async function connect(server, local, opts = {}) {
     url: info.url,
     hostname: info.hostname,
     subdomain: info.subdomain,
+    resumeToken: info.resumeToken || '',
     plan: info.plan || '',
     close(reason = 'client closed') {
       if (state.closed) return;
@@ -138,10 +139,82 @@ async function connect(server, local, opts = {}) {
 
 module.exports = { connect };
 
+// CLI supervisor: keep the tunnel up across drops (ETUNNEL_RECONNECT=0 opts out).
+const RETRY_MIN = 500;
+const RETRY_MAX = 30000;
+
+// Jittered exponential backoff: 500ms doubling to a 30s ceiling, +/-20% noise
+// so a fleet of clients does not stampede after a server restart.
+function retryDelay(attempt) {
+  const base = Math.min(RETRY_MIN * Math.pow(2, attempt), RETRY_MAX);
+  return Math.round(base * (0.8 + Math.random() * 0.4));
+}
+
+// connect() does not expose its socket, so capture the WebSocket it constructs
+// (the global is only patched for the duration of the call) and watch that.
+async function connectWatched(server, local, opts) {
+  const Real = globalThis.WebSocket;
+  let ws = null;
+  const Watch = function (...args) { const s = new Real(...args); ws = s; return s; };
+  globalThis.WebSocket = Watch;
+  try {
+    return { tunnel: await connect(server, local, opts), ws };
+  } finally {
+    globalThis.WebSocket = Real;
+  }
+}
+
+// Resolve once the session is over: explicit close(), server bye, or a drop.
+function waitClosed(ws) {
+  return new Promise((res) => {
+    if (!ws || ws.readyState === 3) return res();
+    ws.addEventListener('close', () => res(), { once: true });
+  });
+}
+
+async function supervise(server, local, opts) {
+  let stopped = false;
+  let tunnel = null;
+  const shutdown = (sig) => {
+    if (stopped) return;
+    stopped = true; // never reconnect after a signal
+    if (tunnel) { try { tunnel.close('received ' + sig); } catch {} }
+    process.exit(0);
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  let resume = ''; // server-signed token: reclaim the same subdomain on reconnect
+  for (let attempt = 0; !stopped; ) {
+    try {
+      const { tunnel: t, ws } = await connectWatched(server, local, { ...opts, resume });
+      tunnel = t;
+      resume = t.resumeToken || resume;
+      console.log('TUNNEL_URL: ' + t.url);
+      attempt = 0; // a working session resets the backoff to 500ms
+      await waitClosed(ws);
+      if (stopped) return;
+      console.error('etunnel: tunnel closed, reconnecting');
+    } catch (e) {
+      if (stopped) return;
+      console.error('etunnel:', e.message);
+    }
+    const wait = retryDelay(attempt++);
+    console.error('etunnel: retrying in ' + wait + 'ms');
+    await new Promise((res) => setTimeout(res, wait));
+  }
+}
+
 if (require.main === module) {
   const server = process.env.ETUNNEL_SERVER || 'wss://t.etun.uk/tunnel';
   const local = process.env.ETUNNEL_LOCAL || process.argv[2] || '3000';
-  connect(server, local, { token: process.env.ETUNNEL_TOKEN, subdomain: process.env.ETUNNEL_SUBDOMAIN })
-    .then((t) => { console.log('TUNNEL_URL: ' + t.url); })
-    .catch((e) => { console.error('etunnel:', e.message); process.exit(1); });
+  const opts = { token: process.env.ETUNNEL_TOKEN, subdomain: process.env.ETUNNEL_SUBDOMAIN };
+  if (process.env.ETUNNEL_RECONNECT === '0') {
+    // legacy: connect once, disconnect ends the process
+    connect(server, local, opts)
+      .then((t) => { console.log('TUNNEL_URL: ' + t.url); })
+      .catch((e) => { console.error('etunnel:', e.message); process.exit(1); });
+  } else {
+    supervise(server, local, opts).catch((e) => { console.error('etunnel:', e.message); process.exit(1); });
+  }
 }

@@ -7,11 +7,17 @@
 //   g++ -std=c++17 etunnel.cpp -lcurl -o etunnel
 // Run:
 //   ETUNNEL_SERVER=wss://t.etun.uk/tunnel ./etunnel 3000
+// Env: ETUNNEL_SERVER, ETUNNEL_LOCAL, ETUNNEL_TOKEN, ETUNNEL_SUBDOMAIN;
+//      ETUNNEL_RECONNECT=0 disables the reconnect supervisor.
 #include <websocketpp/config/asio_client.hpp>
 #include <websocketpp/client.hpp>
 #include <curl/curl.h>
+#include <algorithm>
 #include <atomic>
+#include <csignal>
 #include <cstdint>
+#include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -25,6 +31,12 @@ using WsMessagePtr = WsClient::message_ptr;
 using JsonHeaders = std::map<std::string, std::vector<std::string>>;
 
 static const size_t MAXP = 32768;
+
+// ---- CLI supervisor -----------------------------------------------------------
+
+// Set by SIGINT/SIGTERM only: the tunnel loop must not reconnect after it.
+static volatile sig_atomic_t g_stopped = 0;
+static void on_signal(int sig) { (void) sig; g_stopped = 1; }
 
 // ---- tiny JSON helpers (flat messages) ---------------------------------------
 
@@ -169,73 +181,110 @@ int main(int argc, char **argv) {
     if (argc > 1) local_port = atoi(argv[1]);
     else if (localEnv) local_port = atoi(localEnv);
 
-    WsClient client;
-    client.init_asio();
-    client.set_tls_init_handler([](websocketpp::connection_hdl) {
-        return websocketpp::lib::make_shared<websocketpp::lib::asio::ssl::context>(
-            websocketpp::lib::asio::ssl::context::tlsv12);
-    });
+    // supervisor: connect, wait for the disconnect, back off, retry. The message
+    // handler prints TUNNEL_URL on every welcome frame, so a reconnect
+    // re-announces the URL. ETUNNEL_RECONNECT=0 restores the old behaviour.
+    const char *reconnectEnv = getenv("ETUNNEL_RECONNECT");
+    const bool reconnect = !(reconnectEnv && std::string(reconnectEnv) == "0");
+    long backoff_ms = 500;
+    std::srand((unsigned) std::time(nullptr));
 
-    std::mutex mtx;
-    std::map<uint32_t, StreamBuf> streams;
-    std::atomic<bool> gotUrl{false};
+    while (!g_stopped) {
+        WsClient client;
+        client.init_asio();
+        client.set_tls_init_handler([](websocketpp::connection_hdl) {
+            return websocketpp::lib::make_shared<websocketpp::lib::asio::ssl::context>(
+                websocketpp::lib::asio::ssl::context::tlsv12);
+        });
 
-    client.set_message_handler([&](websocketpp::connection_hdl hdl, WsMessagePtr msg) {
-        std::lock_guard<std::mutex> lk(mtx);
-        if (msg->get_opcode() == websocketpp::frame::opcode::text) {
-            std::string t = msg->get_payload();
-            if (t.find("\"type\":\"welcome\"") != std::string::npos) {
-                std::cout << "TUNNEL_URL: " << json_str_field(t, "url") << std::endl;
-                gotUrl = true;
-            } else if (t.find("\"type\":\"req\"") != std::string::npos) {
-                uint32_t sid = (uint32_t) json_num_field(t, "streamId");
-                streams[sid] = {json_str_field(t, "method"), json_str_field(t, "path"), ""};
-            } else if (t.find("\"type\":\"ping\"") != std::string::npos) {
-                long ts = json_num_field(t, "ts");
-                websocketpp::lib::error_code ec;
-                client.send(hdl, "{\"type\":\"pong\",\"ts\":" + std::to_string(ts) + "}",
-                            websocketpp::frame::opcode::text, ec);
+        std::mutex mtx;
+        std::map<uint32_t, StreamBuf> streams;
+        std::atomic<bool> gotUrl{false};
+        std::atomic<bool> closed{false};
+
+        client.set_message_handler([&](websocketpp::connection_hdl hdl, WsMessagePtr msg) {
+            std::lock_guard<std::mutex> lk(mtx);
+            if (msg->get_opcode() == websocketpp::frame::opcode::text) {
+                std::string t = msg->get_payload();
+                if (t.find("\"type\":\"welcome\"") != std::string::npos) {
+                    std::cout << "TUNNEL_URL: " << json_str_field(t, "url") << std::endl;
+                    gotUrl = true;
+                } else if (t.find("\"type\":\"req\"") != std::string::npos) {
+                    uint32_t sid = (uint32_t) json_num_field(t, "streamId");
+                    streams[sid] = {json_str_field(t, "method"), json_str_field(t, "path"), ""};
+                } else if (t.find("\"type\":\"ping\"") != std::string::npos) {
+                    long ts = json_num_field(t, "ts");
+                    websocketpp::lib::error_code ec;
+                    client.send(hdl, "{\"type\":\"pong\",\"ts\":" + std::to_string(ts) + "}",
+                                websocketpp::frame::opcode::text, ec);
+                }
+            } else if (msg->get_opcode() == websocketpp::frame::opcode::binary) {
+                const std::string &b = msg->get_payload();
+                if (b.size() < 9) return;
+                uint8_t kind = b[0];
+                uint32_t sid = ((uint32_t)(uint8_t) b[1] << 24) | ((uint32_t)(uint8_t) b[2] << 16)
+                    | ((uint32_t)(uint8_t) b[3] << 8) | (uint8_t) b[4];
+                uint32_t n = ((uint32_t)(uint8_t) b[5] << 24) | ((uint32_t)(uint8_t) b[6] << 16)
+                    | ((uint32_t)(uint8_t) b[7] << 8) | (uint8_t) b[8];
+                auto it = streams.find(sid);
+                if (it == streams.end()) return;
+                if (kind == 0x01) {
+                    it->second.body.append(b, 9, std::min((size_t) n, b.size() - 9));
+                } else if (kind == 0x02) {
+                    StreamBuf st = it->second;
+                    streams.erase(it);
+                    std::thread(serve, &client, hdl, st.method, st.path, st.body, sid, local_port).detach();
+                } else if (kind == 0x03) {
+                    streams.erase(it);
+                }
             }
-        } else if (msg->get_opcode() == websocketpp::frame::opcode::binary) {
-            const std::string &b = msg->get_payload();
-            if (b.size() < 9) return;
-            uint8_t kind = b[0];
-            uint32_t sid = ((uint32_t)(uint8_t) b[1] << 24) | ((uint32_t)(uint8_t) b[2] << 16)
-                | ((uint32_t)(uint8_t) b[3] << 8) | (uint8_t) b[4];
-            uint32_t n = ((uint32_t)(uint8_t) b[5] << 24) | ((uint32_t)(uint8_t) b[6] << 16)
-                | ((uint32_t)(uint8_t) b[7] << 8) | (uint8_t) b[8];
-            auto it = streams.find(sid);
-            if (it == streams.end()) return;
-            if (kind == 0x01) {
-                it->second.body.append(b, 9, std::min((size_t) n, b.size() - 9));
-            } else if (kind == 0x02) {
-                StreamBuf st = it->second;
-                streams.erase(it);
-                std::thread(serve, &client, hdl, st.method, st.path, st.body, sid, local_port).detach();
-            } else if (kind == 0x03) {
-                streams.erase(it);
+        });
+        client.set_open_handler([&](websocketpp::connection_hdl hdl) {
+            websocketpp::lib::error_code ec;
+            std::string token = getenv("ETUNNEL_TOKEN") ? getenv("ETUNNEL_TOKEN") : "";
+            std::string sub = getenv("ETUNNEL_SUBDOMAIN") ? getenv("ETUNNEL_SUBDOMAIN") : "";
+            std::string hello = "{\"type\":\"hello\",\"proto\":1";
+            if (!sub.empty()) hello += ",\"subdomain\":\"" + json_escape(sub) + "\"";
+            if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
+            hello += ",\"client\":\"etunnel-cpp/1.0\"}";
+            client.send(hdl, hello, websocketpp::frame::opcode::text, ec);
+        });
+        // the supervisor's only view of the connection lifecycle
+        client.set_fail_handler([&](websocketpp::connection_hdl) { closed = true; });
+        client.set_close_handler([&](websocketpp::connection_hdl) { closed = true; });
+
+        websocketpp::lib::error_code ec;
+        auto con = client.get_connection(server, ec);
+        if (ec) {
+            std::cerr << "etunnel: " << ec.message() << std::endl;
+            closed = true;
+        } else {
+            con->add_subprotocol("etunnel-v1");
+            client.connect(con);
+            // Drive the asio loop by hand instead of client.run(), so that a
+            // signal can break out of a live connection.
+            while (!g_stopped && !closed) {
+                if (client.poll() == 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
             }
         }
-    });
-    client.set_open_handler([&](websocketpp::connection_hdl hdl) {
-        websocketpp::lib::error_code ec;
-        std::string token = getenv("ETUNNEL_TOKEN") ? getenv("ETUNNEL_TOKEN") : "";
-        std::string sub = getenv("ETUNNEL_SUBDOMAIN") ? getenv("ETUNNEL_SUBDOMAIN") : "";
-        std::string hello = "{\"type\":\"hello\",\"proto\":1";
-        if (!sub.empty()) hello += ",\"subdomain\":\"" + json_escape(sub) + "\"";
-        if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
-        hello += ",\"client\":\"etunnel-cpp/1.0\"}";
-        client.send(hdl, hello, websocketpp::frame::opcode::text, ec);
-    });
+        client.stop();
 
-    websocketpp::lib::error_code ec;
-    auto con = client.get_connection(server, ec);
-    if (ec) {
-        std::cerr << "etunnel: " << ec.message() << std::endl;
-        return 1;
+        if (g_stopped) break;      // SIGINT/SIGTERM: no reconnect
+        if (!reconnect) break;     // ETUNNEL_RECONNECT=0: no reconnect
+
+        if (gotUrl) backoff_ms = 500;   // a successful connect resets the backoff
+
+        long wait_ms = (long) (backoff_ms * (0.8 + 0.4 * ((double) rand() / (double) RAND_MAX)));
+        std::cerr << "etunnel: disconnected, reconnecting in " << wait_ms << "ms" << std::endl;
+        for (long slept = 0; slept < wait_ms && !g_stopped; ) {  // sliced: signal-responsive
+            long slice = std::min<long>(100, wait_ms - slept);
+            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+            slept += slice;
+        }
+        backoff_ms = std::min<long>(backoff_ms * 2, 30000);
     }
-    con->add_subprotocol("etunnel-v1");
-    client.connect(con);
-    client.run();
+
     return 0;
 }

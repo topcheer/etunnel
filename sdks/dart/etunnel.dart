@@ -142,20 +142,74 @@ class _StreamBuf {
   _StreamBuf(this.req);
 }
 
+int _backoffMs(int attempt) {
+  // 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter.
+  final base = (500 * (1 << (attempt > 6 ? 6 : attempt))).clamp(0, 30000);
+  final pct = 800 + DateTime.now().microsecondsSinceEpoch % 401; // 800..1200‰
+  return base * pct ~/ 1000;
+}
+
 Future<void> main(List<String> args) async {
   const String kDefaultServer = String.fromEnvironment(
         'ETUNNEL_DEFAULT_SERVER',
         defaultValue: 'wss://t.etun.uk/tunnel');
     final server = Platform.environment['ETUNNEL_SERVER'] ?? kDefaultServer;
   final local = args.isNotEmpty ? args[0] : Platform.environment['ETUNNEL_LOCAL'] ?? '3000';
-  try {
-    final t = await Etunnel.connect(server, local,
-        token: Platform.environment['ETUNNEL_TOKEN'],
-        subdomain: Platform.environment['ETUNNEL_SUBDOMAIN']);
-    print('TUNNEL_URL: ${t.url}');
-  } catch (e) {
-    stderr.writeln('etunnel: $e');
-    exit(1);
+  final token = Platform.environment['ETUNNEL_TOKEN'];
+  final subdomain = Platform.environment['ETUNNEL_SUBDOMAIN'];
+  // ETUNNEL_RECONNECT=0 restores the one-shot behaviour.
+  final reconnect = Platform.environment['ETUNNEL_RECONNECT'] != '0';
+
+  // Ctrl-C / SIGTERM stop the supervisor: the tunnel is closed and no
+  // reconnection is attempted.
+  var stopped = false;
+  Etunnel? current;
+  final signals = <StreamSubscription<ProcessSignal>>[];
+  for (final sig in [ProcessSignal.sigint, ProcessSignal.sigterm]) {
+    try {
+      signals.add(sig.watch().listen((_) {
+        stopped = true;
+        try {
+          current?.close(); // unblocks ws.done so the loop can exit
+        } catch (_) {
+          // socket already gone; nothing left to close
+        }
+      }));
+    } catch (_) {
+      // signals are not supported on every platform
+    }
   }
-  await Completer<void>().future; // run forever
+
+  var attempt = 0;
+  while (!stopped) {
+    try {
+      final t = await Etunnel.connect(server, local, token: token, subdomain: subdomain);
+      current = t;
+      print('TUNNEL_URL: ${t.url}');
+      attempt = 0;
+      if (!reconnect) {
+        await Completer<void>().future; // run forever
+      }
+      await t.ws.done; // completes when the connection ends
+      current = null;
+      if (stopped) break;
+      stderr.writeln('etunnel: connection lost, reconnecting');
+    } catch (e) {
+      current = null;
+      stderr.writeln('etunnel: $e');
+      if (!reconnect) exit(1);
+      if (stopped) break;
+    }
+    final wait = _backoffMs(attempt);
+    attempt++;
+    stderr.writeln('etunnel: reconnect in ${wait}ms');
+    final deadline = DateTime.now().add(Duration(milliseconds: wait));
+    while (!stopped && DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+  }
+  for (final s in signals) {
+    await s.cancel();
+  }
+  exit(0);
 }

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -20,6 +21,12 @@ pub struct Options {
 
 pub struct Tunnel {
     pub url: String,
+    /// Server-signed resume token: pass it back on reconnect to reclaim the
+    /// same subdomain instead of getting a fresh random one.
+    pub resume_token: String,
+    /// Set once the reader loop sees the connection end (error, close or bye).
+    /// The CLI supervisor polls it to decide when to reconnect.
+    pub closed: Arc<AtomicBool>,
 }
 
 impl Tunnel {
@@ -143,6 +150,12 @@ pub fn connect(server: &str, local_port: u16, token: Option<&str>, subdomain: Op
 }
 
 pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdomain: Option<&str>) -> Result<Tunnel, String> {
+    connect_full_resume(server, local_addr, token, subdomain, None)
+}
+
+/// Like [`connect_full`], plus an optional resume token from a previous
+/// session so the server hands back the same subdomain after a drop.
+pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, subdomain: Option<&str>, resume: Option<&str>) -> Result<Tunnel, String> {
     let mut request = server
         .into_client_request()
         .map_err(|e| format!("bad url: {}", e))?;
@@ -165,10 +178,16 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
     if let Some(t) = token {
         hello.push_str(&format!(",\"token\":\"{}\"", json_escape(t)));
     }
+    if let Some(r) = resume {
+        if !r.is_empty() {
+            hello.push_str(&format!(",\"resume\":\"{}\"", json_escape(r)));
+        }
+    }
     hello.push_str(",\"client\":\"etunnel-rust/1.0\"}");
     ws.lock().unwrap().send(Message::Text(hello.into())).ok();
 
     let mut url = String::new();
+    let mut resume_token = String::new();
     loop {
         let msg = ws.lock().unwrap().read().map_err(|e| format!("read welcome: {}", e))?;
         if let Message::Text(t) = msg {
@@ -176,6 +195,7 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
             if let Some(u) = extract_str(t, "url") {
                 if t.contains("\"type\":\"welcome\"") {
                     url = u;
+                    resume_token = extract_str(t, "resumeToken").unwrap_or_default();
                     break;
                 }
             }
@@ -186,8 +206,10 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
         }
     }
 
+    let closed = Arc::new(AtomicBool::new(false));
     let ws2 = Arc::clone(&ws);
     let local = local_addr.to_string();
+    let closed2 = Arc::clone(&closed);
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
         loop {
@@ -195,7 +217,7 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
                 let mut w = ws2.lock().unwrap();
                 match w.read() {
                     Ok(m) => m,
-                    Err(_) => return,
+                    Err(_) => break,
                 }
             };
             match msg {
@@ -214,7 +236,7 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
                         let mut w = ws2.lock().unwrap();
                         w.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
                     } else if t.contains("\"type\":\"bye\"") {
-                        return;
+                        break;
                     }
                 }
                 Message::Binary(b) => {
@@ -236,13 +258,14 @@ pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdoma
                         _ => {}
                     }
                 }
-                Message::Close(_) => return,
+                Message::Close(_) => break,
                 _ => {}
             }
         }
+        closed2.store(true, Ordering::SeqCst);
     });
 
-    Ok(Tunnel { url })
+    Ok(Tunnel { url, resume_token, closed })
 }
 
 fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, local: String, sid: u32, st: StreamBuf) {
@@ -307,6 +330,16 @@ fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, loca
     w.send(frame(0x02, sid, b"")).ok();
 }
 
+fn backoff_ms(attempt: u32) -> u64 {
+    // 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter.
+    let base = (500u64 << attempt.min(6)).min(30_000);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    base * (800 + nanos % 401) / 1000
+}
+
 fn main() {
     let server = std::env::var("ETUNNEL_SERVER").unwrap_or_else(|_| option_env!("ETUNNEL_BUILD_SERVER").unwrap_or("wss://t.etun.uk/tunnel").into());
     let local = std::env::args().nth(1)
@@ -316,16 +349,48 @@ fn main() {
     let (host, port) = local.rsplit_once(':').unwrap();
     let port: u16 = port.parse().unwrap_or(3000);
     let local = format!("{}:{}", host, port);
-    match connect_full(&server, &local,
-        std::env::var("ETUNNEL_TOKEN").ok().as_deref(),
-        std::env::var("ETUNNEL_SUBDOMAIN").ok().as_deref()) {
-        Ok(t) => {
-            println!("TUNNEL_URL: {}", t.url);
-            loop { thread::sleep(std::time::Duration::from_secs(3600)); }
+    let token = std::env::var("ETUNNEL_TOKEN").ok();
+    let subdomain = std::env::var("ETUNNEL_SUBDOMAIN").ok();
+    // ETUNNEL_RECONNECT=0 restores the one-shot behaviour (exit on first error).
+    let reconnect = std::env::var("ETUNNEL_RECONNECT").map(|v| v != "0").unwrap_or(true);
+
+    // SIGINT/SIGTERM keep their default disposition: the process dies at once,
+    // so a stopped CLI never reconnects.
+    let mut attempt: u32 = 0;
+    // Carried across drops so a reconnect reclaims the same subdomain.
+    let mut resume: Option<String> = None;
+    loop {
+        match connect_full_resume(
+            &server,
+            &local,
+            token.as_deref(),
+            subdomain.as_deref(),
+            resume.as_deref(),
+        ) {
+            Ok(t) => {
+                println!("TUNNEL_URL: {}", t.url);
+                attempt = 0;
+                if !t.resume_token.is_empty() {
+                    resume = Some(t.resume_token.clone());
+                }
+                if !reconnect {
+                    loop { thread::sleep(std::time::Duration::from_secs(3600)); }
+                }
+                while !t.closed.load(Ordering::SeqCst) {
+                    thread::sleep(std::time::Duration::from_millis(200));
+                }
+                eprintln!("etunnel: connection lost, reconnecting");
+            }
+            Err(e) => {
+                eprintln!("etunnel: {}", e);
+                if !reconnect {
+                    std::process::exit(1);
+                }
+            }
         }
-        Err(e) => {
-            eprintln!("etunnel: {}", e);
-            std::process::exit(1);
-        }
+        let delay = backoff_ms(attempt);
+        attempt = attempt.saturating_add(1);
+        eprintln!("etunnel: reconnect in {}ms", delay);
+        thread::sleep(std::time::Duration::from_millis(delay));
     }
 }

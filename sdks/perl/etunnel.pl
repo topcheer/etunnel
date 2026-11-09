@@ -14,6 +14,7 @@ use Digest::SHA qw(sha1_base64);
 use MIME::Base64;
 use JSON::PP;
 use Errno qw(EAGAIN EWOULDBLOCK);
+use Time::HiRes qw(time);
 
 my $MAXP = 32768;
 my $JSON = JSON::PP->new->utf8;
@@ -212,7 +213,7 @@ sub etunnel_connect {
         if ($m->{type} eq 'error') { die "etunnel: $m->{code}: $m->{message}\n"; }
     }
     my %streams;
-    my %state = (closed => 0);
+    my %state : shared = (closed => 0);
 
     threads->create(sub {
         $SIG{PIPE} = 'IGNORE';
@@ -272,11 +273,13 @@ sub etunnel_connect {
                 }
             }
         }
+        $state{closed} = 1;
         close $ws->{sock};
     })->detach;
 
     return {
         url => $info->{url},
+        state => \%state,
         close => sub {
             return if $state{closed};
             eval { ws_send_text($ws, $JSON->encode({ type => 'bye', reason => 'client closed' })) };
@@ -291,9 +294,53 @@ $| = 1; # unbuffered stdout
 my $server = $ENV{ETUNNEL_SERVER} || 'wss://t.etun.uk/tunnel';
 my $local = $ARGV[0] || $ENV{ETUNNEL_LOCAL} || '3000';
 $local = "127.0.0.1:$local" unless $local =~ /:/;
-my $t = etunnel_connect($server, $local, {
-    token => $ENV{ETUNNEL_TOKEN}, subdomain => $ENV{ETUNNEL_SUBDOMAIN},
-});
-print "TUNNEL_URL: $t->{url}\n";
-$SIG{INT} = $SIG{TERM} = sub { $t->{close}->(); exit 0 };
-sleep 1 while 1;
+my $reconnect = ($ENV{ETUNNEL_RECONNECT} // '1') ne '0';
+my $stopped : shared = 0;
+$SIG{INT} = $SIG{TERM} = sub { $stopped = 1 };
+
+# 500ms doubling, capped at 30s, +-20% jitter.
+my $backoff = sub {
+    my $base = 0.5 * (2 ** $_[0]);
+    $base = 30 if $base > 30;
+    return $base * (0.8 + rand() * 0.4);
+};
+my $nap = sub {
+    my $deadline = time() + $_[0];
+    while (!$stopped) {
+        my $left = $deadline - time();
+        last if $left <= 0;
+        select(undef, undef, undef, $left > 0.2 ? 0.2 : $left);
+    }
+};
+
+my $attempt = 0;
+while (!$stopped) {
+    my $t = eval {
+        etunnel_connect($server, $local, {
+            token => $ENV{ETUNNEL_TOKEN}, subdomain => $ENV{ETUNNEL_SUBDOMAIN},
+        });
+    };
+    if (!$t) {
+        my $err = $@ || "connect failed\n";
+        chomp $err;
+        print STDERR "etunnel: $err\n";
+        exit 1 unless $reconnect;
+    } else {
+        print "TUNNEL_URL: $t->{url}\n";
+        $attempt = 0;
+        unless ($reconnect) {
+            sleep 1 while !$stopped;
+            eval { $t->{close}->() };
+            last;
+        }
+        # the reader thread raises the shared flag when the socket goes away
+        select(undef, undef, undef, 0.25) while !$stopped && !$t->{state}{closed};
+        if ($stopped) { eval { $t->{close}->() }; last; }
+        print STDERR "etunnel: connection lost\n";
+    }
+    my $delay = $backoff->($attempt);
+    $attempt++;
+    last if $stopped;
+    printf STDERR "etunnel: reconnecting in %.1fs\n", $delay;
+    $nap->($delay);
+}

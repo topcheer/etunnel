@@ -78,9 +78,15 @@ object MiniJson {
 }
 
 object Etunnel {
+  /** A live tunnel: the assigned URL plus the token that reclaims it on reconnect. */
+  case class Tunnel(url: String, resumeToken: String)
+
   val MAXP = 32768
   private val HOP = Set("connection", "transfer-encoding", "keep-alive", "upgrade",
     "proxy-connection", "te", "trailer", "content-length", "host")
+
+  // Handle of the last established socket, so the CLI can watch for a disconnect.
+  @volatile var lastWs: WebSocket = _
 
   class Handler(http: HttpClient, port: Int) extends WebSocket.Listener {
     val welcome = new CountDownLatch(1)
@@ -229,7 +235,8 @@ object Etunnel {
     }
   }
 
-  def connect(server: String, localPort: Int, token: String = null, subdomain: String = null): String = {
+  def connect(server: String, localPort: Int, token: String = null, subdomain: String = null,
+              resume: String = null): Tunnel = {
     val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
     val h = new Handler(http, localPort)
     val ws = HttpClient.newHttpClient()
@@ -239,32 +246,82 @@ object Etunnel {
       .buildAsync(URI.create(server), h)
       .join()
     h.ws = ws
+    lastWs = ws
 
     val hello = new StringBuilder("{\"type\":\"hello\",\"proto\":1")
     if (subdomain != null) hello.append(",\"subdomain\":\"").append(MiniJson.esc(subdomain)).append('"')
     if (token != null) hello.append(",\"token\":\"").append(MiniJson.esc(token)).append('"')
+    // resume: server-signed token from a previous welcome; the server then
+    // hands back the same subdomain instead of allocating a new one.
+    if (resume != null && resume.nonEmpty)
+      hello.append(",\"resume\":\"").append(MiniJson.esc(resume)).append('"')
     hello.append(",\"client\":\"etunnel-scala/1.0\"}")
     ws.sendText(hello.toString, true).join()
 
     h.welcome.await()
     if (h.err != null) throw new RuntimeException(s"etunnel: ${h.err}")
-    h.info("url").toString
+    Tunnel(h.info("url").toString, h.info.get("resumeToken").map(_.toString).getOrElse(""))
   }
 }
 
 object Main {
+  /** Exponential backoff step, capped at 30s. */
+  private def nextDelay(delay: Long): Long = math.min(30000L, delay * 2)
+
+  /** +/-20% jitter so many clients don't retry in lockstep. */
+  private def jitter(delay: Long): Long = (delay * (0.8 + scala.util.Random.nextDouble() * 0.4)).toLong
+
+  private def closed(ws: WebSocket): Boolean = ws == null || ws.isInputClosed || ws.isOutputClosed
+
   def main(args: Array[String]): Unit = {
     val server = sys.env.getOrElse("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
     val port = (args.headOption orElse sys.env.get("ETUNNEL_LOCAL")).getOrElse("3000").toInt
-    try {
-      val url = Etunnel.connect(server, port, sys.env.get("ETUNNEL_TOKEN").orNull,
-        sys.env.get("ETUNNEL_SUBDOMAIN").orNull)
-      println(s"TUNNEL_URL: $url")
+    val token = sys.env.get("ETUNNEL_TOKEN").orNull
+    val subdomain = sys.env.get("ETUNNEL_SUBDOMAIN").orNull
+
+    if (sys.env.get("ETUNNEL_RECONNECT").contains("0")) {
+      // original single-shot behavior
+      try {
+        val url = Etunnel.connect(server, port, token, subdomain)
+        println(s"TUNNEL_URL: $url")
+      } catch {
+        case e: Exception =>
+          System.err.println(s"etunnel: ${e.getMessage}")
+          sys.exit(1)
+      }
       Thread.currentThread().join()
-    } catch {
-      case e: Exception =>
-        System.err.println(s"etunnel: ${e.getMessage}")
-        sys.exit(1)
+      return
+    }
+
+    val stopped = new java.util.concurrent.atomic.AtomicBoolean(false)
+    Runtime.getRuntime.addShutdownHook(new Thread(() => stopped.set(true), "etunnel-shutdown"))
+
+    var delay = 500L
+    var resume = "" // server-signed token: reclaim the same subdomain on reconnect
+    while (!stopped.get()) {
+      var tunnel: Etunnel.Tunnel = null
+      try tunnel = Etunnel.connect(server, port, token, subdomain, if (resume.isEmpty) null else resume)
+      catch { case e: Exception => System.err.println(s"etunnel: ${e.getMessage}") }
+
+      if (tunnel == null) {
+        if (stopped.get()) return
+        try Thread.sleep(jitter(delay)) catch { case _: InterruptedException => return }
+        delay = nextDelay(delay)
+      } else {
+        delay = 500L // reset after a successful connect
+        if (tunnel.resumeToken.nonEmpty) resume = tunnel.resumeToken
+        println(s"TUNNEL_URL: ${tunnel.url}")
+
+        val ws = Etunnel.lastWs
+        while (!stopped.get() && !closed(ws)) {
+          try Thread.sleep(200) catch { case _: InterruptedException => return }
+        }
+        if (stopped.get()) return
+
+        System.err.println("etunnel: disconnected, reconnecting")
+        try Thread.sleep(jitter(delay)) catch { case _: InterruptedException => return }
+        delay = nextDelay(delay)
+      }
     }
   }
 }

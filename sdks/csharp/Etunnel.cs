@@ -3,16 +3,61 @@
 //
 // Run: dotnet run Etunnel.cs 3000
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
 var server = Environment.GetEnvironmentVariable("ETUNNEL_SERVER") ?? "wss://t.etun.uk/tunnel";
 var local = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("ETUNNEL_LOCAL") ?? "3000";
-var t = await Etunnel.Connect(server, local,
-    token: Environment.GetEnvironmentVariable("ETUNNEL_TOKEN"),
-    subdomain: Environment.GetEnvironmentVariable("ETUNNEL_SUBDOMAIN"));
-Console.WriteLine($"TUNNEL_URL: {t.Url}");
-await Task.Delay(Timeout.Infinite);
+var token = Environment.GetEnvironmentVariable("ETUNNEL_TOKEN");
+var subdomain = Environment.GetEnvironmentVariable("ETUNNEL_SUBDOMAIN");
+// ETUNNEL_RECONNECT=0 restores the one-shot behaviour (exit on first error).
+var reconnect = Environment.GetEnvironmentVariable("ETUNNEL_RECONNECT") != "0";
+
+// Ctrl-C / SIGTERM stop the supervisor: the tunnel is closed and nothing is retried.
+using var stop = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+{
+    ctx.Cancel = true;
+    stop.Cancel();
+});
+
+var attempt = 0;
+while (!stop.IsCancellationRequested)
+{
+    try
+    {
+        var t = await Etunnel.Connect(server, local, token: token, subdomain: subdomain);
+        Console.WriteLine($"TUNNEL_URL: {t.Url}");
+        attempt = 0;
+        if (!reconnect) await Task.Delay(Timeout.Infinite);
+        while (!stop.IsCancellationRequested && t.State == WebSocketState.Open)
+            await Task.Delay(200);
+        try { await t.Close(); } catch { }
+        if (stop.IsCancellationRequested) break;
+        Console.Error.WriteLine("[etunnel] connection lost, reconnecting");
+    }
+    catch (Exception e)
+    {
+        if (stop.IsCancellationRequested) break;
+        Console.Error.WriteLine($"etunnel: {e.Message}");
+        if (!reconnect) Environment.Exit(1);
+    }
+
+    var wait = BackoffMs(attempt);
+    attempt++;
+    Console.Error.WriteLine($"[etunnel] reconnect in {wait}ms");
+    try { await Task.Delay((int)wait, stop.Token); }
+    catch (TaskCanceledException) { break; }
+}
+
+// 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter.
+static long BackoffMs(int attempt)
+{
+    var baseMs = Math.Min(30_000L, 500L << Math.Min(attempt, 6));
+    return (long)Math.Round(baseMs * (0.8 + Random.Shared.NextDouble() * 0.4));
+}
 
 public sealed class Etunnel
 {
@@ -21,6 +66,8 @@ public sealed class Etunnel
     public sealed class Tunnel
     {
         public string Url { get; }
+        /// <summary>Live socket state; the CLI supervisor polls it to detect a drop.</summary>
+        public WebSocketState State => _ws.State;
         private readonly ClientWebSocket _ws;
         internal Tunnel(ClientWebSocket ws, string url) { _ws = ws; Url = url; }
         public async Task Close()

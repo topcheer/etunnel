@@ -271,15 +271,50 @@ final class Etunnel
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
     $server = getenv('ETUNNEL_SERVER') ?: 'wss://t.etun.uk/tunnel';
     $local = $argv[1] ?? getenv('ETUNNEL_LOCAL') ?? '3000';
-    try {
-        $t = Etunnel::connect($server, $local, getenv('ETUNNEL_TOKEN') ?: null, getenv('ETUNNEL_SUBDOMAIN') ?: null,
-            function (string $u): void {
-                fwrite(STDOUT, "TUNNEL_URL: {$u}\n");
-                flush();
-            });
-    } catch (RuntimeException $e) {
-        fwrite(STDERR, $e->getMessage() . "\n");
-        exit(1);
+    $reconnect = getenv('ETUNNEL_RECONNECT') !== '0';
+
+    // SIGINT/SIGTERM only flip the flag (and stop reconnecting) when pcntl is
+    // available; without it the default disposition terminates the process.
+    $stopped = false;
+    if (function_exists('pcntl_async_signals')) {
+        pcntl_async_signals(true);
+        $onSignal = function () use (&$stopped): void {
+            $stopped = true;
+        };
+        pcntl_signal(SIGINT, $onSignal);
+        pcntl_signal(SIGTERM, $onSignal);
     }
-    // connection ended
+
+    $attempt = 0;
+    while (!$stopped) {
+        try {
+            // connect() reports the URL through $onUrl, then serves until the
+            // connection ends (bye, close or EOF) and returns.
+            Etunnel::connect($server, $local, getenv('ETUNNEL_TOKEN') ?: null, getenv('ETUNNEL_SUBDOMAIN') ?: null,
+                function (string $u): void {
+                    fwrite(STDOUT, "TUNNEL_URL: {$u}\n");
+                    fflush(STDOUT);
+                });
+            $attempt = 0;
+            if ($stopped || !$reconnect) {
+                break;
+            }
+            fwrite(STDERR, "etunnel: connection lost\n");
+        } catch (RuntimeException $e) {
+            fwrite(STDERR, $e->getMessage() . "\n");
+            if (!$reconnect) {
+                exit(1);
+            }
+        }
+
+        // 500ms doubling, capped at 30s, +-20% jitter.
+        $base = min(0.5 * (2 ** $attempt), 30.0);
+        $delay = $base * (0.8 + (mt_rand() / mt_getrandmax()) * 0.4);
+        $attempt++;
+        fwrite(STDERR, sprintf("etunnel: reconnecting in %.1fs\n", $delay));
+        $until = microtime(true) + $delay;
+        while (!$stopped && microtime(true) < $until) {
+            usleep(50000);
+        }
+    }
 }

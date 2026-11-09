@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import signal
 import sys
 import threading
+import time
 import urllib.request
 import urllib.error
 from typing import Any, Optional
@@ -167,17 +169,63 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
 def _main() -> None:
     server = os.environ.get("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
     local = os.environ.get("ETUNNEL_LOCAL") or (sys.argv[1] if len(sys.argv) > 1 else "3000")
-    try:
-        t = connect(server, local, {
-            "token": os.environ.get("ETUNNEL_TOKEN"),
-            "subdomain": os.environ.get("ETUNNEL_SUBDOMAIN"),
-        })
-    except Exception as e:  # noqa: BLE001
-        print(f"etunnel: {e}", file=sys.stderr)
-        sys.exit(1)
-    print("TUNNEL_URL:", t["url"], flush=True)
-    signal.signal(signal.SIGINT, lambda *_: (t["close"](), sys.exit(0)))
-    signal.pause()
+    opts = {
+        "token": os.environ.get("ETUNNEL_TOKEN"),
+        "subdomain": os.environ.get("ETUNNEL_SUBDOMAIN"),
+    }
+    reconnect = os.environ.get("ETUNNEL_RECONNECT", "1") != "0"
+    stopped = threading.Event()
+
+    def on_signal(*_args: Any) -> None:
+        stopped.set()
+
+    def backoff(attempt: int) -> float:
+        # 500ms doubling, capped at 30s, +-20% jitter.
+        return min(0.5 * (2 ** attempt), 30.0) * (0.8 + random.random() * 0.4)
+
+    def nap(seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while not stopped.is_set() and time.monotonic() < deadline:
+            stopped.wait(0.25)
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+
+    attempt = 0
+    while not stopped.is_set():
+        lost = threading.Event()
+        try:
+            t = connect(server, local, dict(opts, on_close=lambda _reason: lost.set()))
+        except Exception as e:  # noqa: BLE001
+            print(f"etunnel: {e}", file=sys.stderr, flush=True)
+            if not reconnect:
+                sys.exit(1)
+        else:
+            print("TUNNEL_URL:", t["url"], flush=True)
+            attempt = 0
+            if not reconnect:
+                while not stopped.is_set():
+                    stopped.wait(0.5)
+                try:
+                    t["close"]()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            while not stopped.is_set() and not lost.wait(0.25):
+                pass
+            if stopped.is_set():
+                try:
+                    t["close"]()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            print("etunnel: connection lost", file=sys.stderr, flush=True)
+        delay = backoff(attempt)
+        attempt += 1
+        if stopped.is_set():
+            break
+        print(f"etunnel: reconnecting in {delay:.1f}s", file=sys.stderr, flush=True)
+        nap(delay)
 
 
 if __name__ == "__main__":

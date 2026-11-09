@@ -159,16 +159,66 @@ end
 def Etunnel.main(argv = ARGV)
   server = ENV['ETUNNEL_SERVER'] || 'wss://t.etun.uk/tunnel'
   local = argv[0] || ENV['ETUNNEL_LOCAL'] || '3000'
-  begin
-    t = Etunnel.connect(server, local,
-                        token: ENV['ETUNNEL_TOKEN'], subdomain: ENV['ETUNNEL_SUBDOMAIN'])
-  rescue StandardError => e
-    warn "etunnel: #{e}"
-    exit 1
-  end
+  token = ENV['ETUNNEL_TOKEN']
+  subdomain = ENV['ETUNNEL_SUBDOMAIN']
+  reconnect = ENV['ETUNNEL_RECONNECT'] != '0'
+
   $stdout.sync = true
-  puts "TUNNEL_URL: #{t.url}"
-  trap(:INT) { t.close; exit 0 }
-  sleep 1 while true
+  stopped = false
+  trap(:INT) { stopped = true }
+  trap(:TERM) { stopped = true }
+
+  # 500ms doubling, capped at 30s, +-20% jitter.
+  backoff = ->(attempt) { [0.5 * (2**attempt), 30.0].min * (0.8 + (rand * 0.4)) }
+  nap = lambda do |seconds|
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+    sleep 0.25 while !stopped && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+  end
+  shutdown = lambda do |tunnel|
+    tunnel.close
+  rescue StandardError
+    nil
+  end
+
+  attempt = 0
+  until stopped
+    # The SDK exposes no close callback, but the reader thread it starts dies
+    # with the websocket: watch it for the disconnect signal.
+    before = Thread.list
+    begin
+      tunnel = Etunnel.connect(server, local, token: token, subdomain: subdomain)
+    rescue StandardError => e
+      warn(e.message.start_with?('etunnel:') ? e.message : "etunnel: #{e}")
+      exit 1 unless reconnect
+
+      delay = backoff.call(attempt)
+      attempt += 1
+      warn format('etunnel: reconnecting in %.1fs', delay)
+      nap.call(delay)
+      next
+    end
+
+    workers = Thread.list - before
+    puts "TUNNEL_URL: #{tunnel.url}"
+    attempt = 0
+
+    unless reconnect
+      sleep 0.25 until stopped
+      shutdown.call(tunnel)
+      break
+    end
+
+    sleep 0.25 while !stopped && workers.any?(&:alive?)
+    if stopped
+      shutdown.call(tunnel)
+      break
+    end
+
+    delay = backoff.call(attempt)
+    attempt += 1
+    warn 'etunnel: connection lost'
+    warn format('etunnel: reconnecting in %.1fs', delay)
+    nap.call(delay)
+  end
 end
 Etunnel.main if $PROGRAM_NAME == __FILE__

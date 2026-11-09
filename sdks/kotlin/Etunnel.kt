@@ -15,6 +15,7 @@ import java.time.Duration
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 
 object Json {
     // minimal JSON reader for flat control messages
@@ -86,11 +87,14 @@ object Json {
     fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 }
 
-class Etunnel private constructor(val url: String) {
+class Etunnel private constructor(val url: String, val resumeToken: String) {
     companion object {
         const val MAXP = 32768
         private val HOP = setOf("connection", "transfer-encoding", "keep-alive", "upgrade",
             "proxy-connection", "te", "trailer", "content-length", "host")
+
+        // Handle of the last established socket, so the CLI can watch for a disconnect.
+        @Volatile var lastWs: WebSocket? = null
 
         class Handler(val http: HttpClient, val port: Int) : WebSocket.Listener {
             val welcome = CountDownLatch(1)
@@ -233,7 +237,8 @@ class Etunnel private constructor(val url: String) {
             }
         }
 
-        fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null): Etunnel {
+        fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null,
+                    resume: String? = null): Etunnel {
             val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
             val h = Handler(http, localPort)
             val ws = HttpClient.newHttpClient()
@@ -243,18 +248,23 @@ class Etunnel private constructor(val url: String) {
                 .buildAsync(URI.create(server), h)
                 .join()
             h.ws = ws
+            lastWs = ws
 
             val hello = buildString {
                 append("{\"type\":\"hello\",\"proto\":1")
                 subdomain?.let { append(",\"subdomain\":\"${Json.esc(it)}\"") }
                 token?.let { append(",\"token\":\"${Json.esc(it)}\"") }
+                // resume: server-signed token from a previous welcome; the server then
+                // hands back the same subdomain instead of allocating a new one.
+                resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
                 append(",\"client\":\"etunnel-kotlin/1.0\"}")
             }
             ws.sendText(hello, true).join()
 
             h.welcome.await()
             h.error?.let { throw RuntimeException("etunnel: $it") }
-            return Etunnel((h.info ?: error("no welcome"))["url"] as String)
+            val info = h.info ?: error("no welcome")
+            return Etunnel(info["url"] as String, info["resumeToken"] as? String ?: "")
         }
     }
 
@@ -266,13 +276,59 @@ class Etunnel private constructor(val url: String) {
 fun main(args: Array<String>) {
     val server = System.getenv("ETUNNEL_SERVER") ?: "wss://t.etun.uk/tunnel"
     val port = (args.getOrNull(0) ?: System.getenv("ETUNNEL_LOCAL") ?: "3000").toInt()
-    try {
-        val t = Etunnel.connect(server, port,
-            System.getenv("ETUNNEL_TOKEN"), System.getenv("ETUNNEL_SUBDOMAIN"))
-        println("TUNNEL_URL: ${t.url}")
-    } catch (e: Exception) {
-        System.err.println("etunnel: ${e.message}")
-        kotlin.system.exitProcess(1)
+    val token = System.getenv("ETUNNEL_TOKEN")
+    val subdomain = System.getenv("ETUNNEL_SUBDOMAIN")
+
+    if (System.getenv("ETUNNEL_RECONNECT") == "0") {
+        // original single-shot behavior
+        try {
+            val t = Etunnel.connect(server, port, token, subdomain)
+            println("TUNNEL_URL: ${t.url}")
+        } catch (e: Exception) {
+            System.err.println("etunnel: ${e.message}")
+            kotlin.system.exitProcess(1)
+        }
+        Thread.currentThread().join()
+        return
     }
-    Thread.currentThread().join()
+
+    val stopped = AtomicBoolean(false)
+    Runtime.getRuntime().addShutdownHook(Thread({ stopped.set(true) }, "etunnel-shutdown"))
+
+    var delay = 500L
+    var resume = "" // server-signed token: reclaim the same subdomain on reconnect
+    while (!stopped.get()) {
+        var t: Etunnel? = null
+        try {
+            t = Etunnel.connect(server, port, token, subdomain, resume.ifEmpty { null })
+        } catch (e: Exception) {
+            System.err.println("etunnel: ${e.message ?: e.toString()}")
+        }
+        if (t == null) {
+            if (stopped.get()) break
+            try { Thread.sleep(jitter(delay)) } catch (ie: InterruptedException) { break }
+            delay = nextDelay(delay)
+            continue
+        }
+
+        delay = 500L // reset after a successful connect
+        if (t.resumeToken.isNotEmpty()) resume = t.resumeToken
+        println("TUNNEL_URL: ${t.url}")
+
+        val ws = Etunnel.lastWs
+        while (!stopped.get() && ws != null && !ws.isInputClosed && !ws.isOutputClosed) {
+            try { Thread.sleep(200) } catch (ie: InterruptedException) { break }
+        }
+        if (stopped.get()) break
+
+        System.err.println("etunnel: disconnected, reconnecting")
+        try { Thread.sleep(jitter(delay)) } catch (ie: InterruptedException) { break }
+        delay = nextDelay(delay)
+    }
 }
+
+/** Exponential backoff step, capped at 30s. */
+private fun nextDelay(delay: Long): Long = minOf(30000L, delay * 2)
+
+/** +/-20% jitter so many clients don't retry in lockstep. */
+private fun jitter(delay: Long): Long = (delay * (0.8 + Math.random() * 0.4)).toLong()

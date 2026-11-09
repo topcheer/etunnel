@@ -81,6 +81,8 @@
   (case (:type m)
     "welcome" (reset! (:state ctx)
                 {:url (:url m) :ws ws
+                 ;; server-signed token: reclaim the same subdomain on reconnect
+                 :resume-token (or (:resumeToken m) "")
                  :close! (fn []
                            (send-text! ws (json/generate-string
                                             {:type "bye" :reason "client closed"}))
@@ -133,7 +135,7 @@
   "Connects to the etunnel server exposing the local service at local
   (\"127.0.0.1:3000\" or a port number). Returns a deref-able state map with
   :url filled once the server assigns the hostname, plus :ws and :close!."
-  [server local & {:keys [token subdomain]}]
+  [server local & {:keys [token subdomain resume]}]
   (let [local (let [s (str local)]
                 (if (re-matches #"\d+" s) (str "127.0.0.1:" s) s))
         state (atom nil)
@@ -170,24 +172,74 @@
         _ (send-text! ws (json/generate-string
                            (cond-> {:type "hello" :proto 1 :client "etunnel-clojure/1.0"}
                              subdomain (assoc :subdomain subdomain)
-                             token (assoc :token token))))
+                             token (assoc :token token)
+                             (seq resume) (assoc :resume resume))))
         deadline (+ (System/currentTimeMillis) 15000)]
     (while (and (nil? @state) (< (System/currentTimeMillis) deadline))
       (Thread/sleep 50))
     (or @state (throw (RuntimeException. "etunnel: welcome timeout")))))
 
+(defn- next-delay
+  "Exponential backoff step, capped at 30s."
+  [delay]
+  (min 30000 (* delay 2)))
+
+(defn- jitter
+  "+/-20% jitter so many clients don't retry in lockstep."
+  [delay]
+  (long (* delay (+ 0.8 (* (rand) 0.4)))))
+
+(defn- try-connect!
+  "connect! that reports failures on stderr and returns nil instead of throwing."
+  [server local token subdomain resume]
+  (try
+    (connect! server local :token token :subdomain subdomain :resume resume)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "etunnel:" (.getMessage e)))
+      nil)))
+
+(defn- await-disconnect
+  "Blocks while the socket is still open, or until stopped is set."
+  [^WebSocket ws stopped]
+  (while (and (not @stopped) (not (.isInputClosed ws)) (not (.isOutputClosed ws)))
+    (Thread/sleep 200)))
+
 (defn -main [& args]
   (let [server (or (System/getenv "ETUNNEL_SERVER") "wss://t.etun.uk/tunnel")
-        local (or (first args) (System/getenv "ETUNNEL_LOCAL") "3000")]
-    (try
-      (let [t (connect! server local
-                        :token (System/getenv "ETUNNEL_TOKEN")
-                        :subdomain (System/getenv "ETUNNEL_SUBDOMAIN"))]
-        (println "TUNNEL_URL:" (:url t))
-        (flush)
-        ;; keep alive until interrupted
-        @(promise))
-      (catch Exception e
-        (binding [*out* *err*]
-          (println "etunnel:" (.getMessage e)))
-        (System/exit 1)))))
+        local (or (first args) (System/getenv "ETUNNEL_LOCAL") "3000")
+        token (System/getenv "ETUNNEL_TOKEN")
+        subdomain (System/getenv "ETUNNEL_SUBDOMAIN")]
+    (if (= "0" (System/getenv "ETUNNEL_RECONNECT"))
+      ;; original single-shot behavior: connect once, keep alive until interrupted
+      (try
+        (let [t (connect! server local :token token :subdomain subdomain)]
+          (println "TUNNEL_URL:" (:url t))
+          (flush)
+          @(promise))
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "etunnel:" (.getMessage e)))
+          (System/exit 1)))
+      (let [stopped (atom false)]
+        (.addShutdownHook (Runtime/getRuntime)
+                          (Thread. (reify Runnable
+                                     (run [_] (reset! stopped true)))))
+        (let [resume (atom "")] ; server-signed token: reclaim the same subdomain
+          (loop [delay 500]
+          (let [t (try-connect! server local token subdomain
+                                (let [r @resume] (when (seq r) r)))]
+            (if (nil? t)
+              (when-not @stopped
+                (Thread/sleep (jitter delay))
+                (recur (next-delay delay)))
+              (do
+                (when (seq (:resume-token t)) (reset! resume (:resume-token t)))
+                (println "TUNNEL_URL:" (:url t))
+                (flush)
+                (await-disconnect (:ws t) stopped)
+                (when-not @stopped
+                  (binding [*out* *err*]
+                    (println "etunnel: disconnected, reconnecting"))
+                  (Thread/sleep (jitter 500)) ; delay resets after a success
+                  (recur 1000))))))))))

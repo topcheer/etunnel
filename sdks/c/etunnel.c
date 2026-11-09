@@ -7,6 +7,8 @@
  *   gcc etunnel.c -o etunnel -lwebsockets -lcurl -ljson-c
  * Run:
  *   ETUNNEL_SERVER=wss://t.etun.uk/tunnel ./etunnel 3000
+ * Env: ETUNNEL_SERVER, ETUNNEL_LOCAL, ETUNNEL_TOKEN, ETUNNEL_SUBDOMAIN;
+ *      ETUNNEL_RECONNECT=0 disables the reconnect supervisor.
  */
 #include <libwebsockets.h>
 #include <curl/curl.h>
@@ -17,6 +19,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <ctype.h>
+#include <time.h>
 
 #define MAXP 32768
 
@@ -263,10 +266,33 @@ static const struct lws_protocols protocols[] = {
     {NULL, NULL, 0, 0, 0, NULL, 0}
 };
 
-static void on_sigint(int sig) { (void) sig; g_stop = 1; }
+/* ---- CLI supervisor ----------------------------------------------------------- */
+
+/* Set by SIGINT/SIGTERM only: the tunnel loop must not reconnect after it. */
+static volatile sig_atomic_t g_stopped = 0;
+
+static void on_sigint(int sig) { (void) sig; g_stopped = 1; g_stop = 1; }
+
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Drop per-stream buffers: stream ids are only meaningful on the connection
+ * that handed them out, so nothing may survive a reconnect. */
+static void reset_streams(void) {
+    pthread_mutex_lock(&g_streams_mtx);
+    for (int i = 0; i < MAX_STREAMS; i++) {
+        free(g_streams[i].body);
+        memset(&g_streams[i], 0, sizeof(g_streams[i]));
+    }
+    pthread_mutex_unlock(&g_streams_mtx);
+}
 
 int main(int argc, char **argv) {
     signal(SIGINT, on_sigint);
+    signal(SIGTERM, on_sigint);
     if (argc > 1) g_local_port = atoi(argv[1]);
     else if (getenv("ETUNNEL_LOCAL")) g_local_port = atoi(getenv("ETUNNEL_LOCAL"));
     #ifndef ETUNNEL_DEFAULT_SERVER
@@ -284,39 +310,75 @@ int main(int argc, char **argv) {
     struct lws_context *ctx = lws_create_context(&info);
     if (!ctx) return 1;
 
-    /* parse wss://host/path */
+    /* parse ws[s]://host[:port]/path */
     char host[256] = {0}, path[256] = "/tunnel";
     int port = 443, ssl = 1;
     const char *hp = strstr(server, "://");
     if (hp) {
         hp += 3;
         const char *slash = strchr(hp, '/');
-        if (slash) {
-            memcpy(host, hp, slash - hp < 255 ? slash - hp : 255);
-            snprintf(path, sizeof(path), "%s", slash);
-        } else {
-            snprintf(host, sizeof(host), "%s", hp);
-        }
+        size_t hlen = slash ? (size_t) (slash - hp) : strlen(hp);
+        if (hlen > sizeof(host) - 1) hlen = sizeof(host) - 1;
+        memcpy(host, hp, hlen);
+        if (slash) snprintf(path, sizeof(path), "%s", slash);
         if (!strncmp(server, "ws://", 5)) { port = 80; ssl = 0; }
+        char *colon = strrchr(host, ':');   /* an explicit port wins */
+        if (colon && colon[1]) { *colon = 0; port = atoi(colon + 1); }
     }
 
-    struct lws_client_connect_info cc;
-    memset(&cc, 0, sizeof(cc));
-    cc.context = ctx;
-    cc.address = host;
-    cc.port = port;
-    cc.path = path;
-    cc.host = host;
-    cc.origin = host;
-    cc.protocol = "etunnel-v1";
-    if (ssl) cc.ssl_connection = LCCSCF_USE_SSL;
+    /* supervisor: connect, wait for the disconnect, back off, retry.
+     * The client itself still prints TUNNEL_URL on every welcome frame, so a
+     * reconnect re-announces the URL. ETUNNEL_RECONNECT=0 restores the old
+     * single-attempt behaviour. */
+    const char *rc = getenv("ETUNNEL_RECONNECT");
+    int reconnect = !(rc && !strcmp(rc, "0"));
+    long backoff_ms = 500;
+    srand((unsigned) time(NULL));
 
-    struct lws *wsi = lws_client_connect_via_info(&cc);
-    if (!wsi) return 1;
+    while (!g_stopped) {
+        struct lws_client_connect_info cc;
+        memset(&cc, 0, sizeof(cc));
+        cc.context = ctx;
+        cc.address = host;
+        cc.port = port;
+        cc.path = path;
+        cc.host = host;
+        cc.origin = host;
+        cc.protocol = "etunnel-v1";
+        if (ssl) cc.ssl_connection = LCCSCF_USE_SSL;
 
-    while (!g_stop) {
-        lws_service(ctx, 100);
-        lws_callback_on_writable(wsi);
+        long long t0 = now_ms();
+        g_stop = 0;
+        struct lws *wsi = lws_client_connect_via_info(&cc);
+        if (!wsi) {
+            fprintf(stderr, "etunnel: connect to %s failed\n", server);
+        } else {
+            while (!g_stop && !g_stopped) {
+                lws_service(ctx, 100);
+                /* the close/error callback may have freed wsi above */
+                if (!g_stop && !g_stopped) lws_callback_on_writable(wsi);
+            }
+        }
+
+        if (g_stopped) break;      /* SIGINT/SIGTERM: no reconnect */
+        if (!reconnect) break;     /* ETUNNEL_RECONNECT=0: no reconnect */
+
+        /* a connection that stayed up counts as a success: reset the backoff */
+        if (now_ms() - t0 >= 1000) backoff_ms = 500;
+
+        long wait_ms = (long) (backoff_ms * (0.8 + 0.4 * ((double) rand() / (double) RAND_MAX)));
+        fprintf(stderr, "etunnel: disconnected, reconnecting in %ldms\n", wait_ms);
+        while (wait_ms > 0 && !g_stopped) {  /* sliced: stay signal-responsive */
+            struct timespec ts;
+            long slice = wait_ms > 100 ? 100 : wait_ms;
+            ts.tv_sec = slice / 1000;
+            ts.tv_nsec = (slice % 1000) * 1000000L;
+            nanosleep(&ts, NULL);
+            wait_ms -= slice;
+        }
+
+        reset_streams();
+        backoff_ms = backoff_ms * 2 > 30000 ? 30000 : backoff_ms * 2;
     }
     lws_context_destroy(ctx);
     return 0;

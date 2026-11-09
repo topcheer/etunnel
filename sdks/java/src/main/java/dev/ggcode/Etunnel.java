@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 // etunnel SDK for Java (11+, java.net.http only, zero dependencies).
 // Buffer-based protocol client (bodies buffered per stream; no WS upgrades).
@@ -25,11 +26,11 @@ public class Etunnel {
     static final int MAXP = 32768;
 
     public static class Options {
-        public String token, subdomain;
+        public String token, subdomain, resume;
     }
 
     public static class Tunnel {
-        public final String url, hostname, subdomain, plan;
+        public final String url, hostname, subdomain, plan, resumeToken;
         private final WebSocket ws;
         Tunnel(WebSocket ws, Map<String, Object> info) {
             this.ws = ws;
@@ -37,6 +38,7 @@ public class Etunnel {
             this.hostname = str(info.get("hostname"));
             this.subdomain = str(info.get("subdomain"));
             this.plan = str(info.get("plan"));
+            this.resumeToken = str(info.get("resumeToken"));
         }
         public void close() {
             try { ws.sendText("{\"type\":\"bye\",\"reason\":\"client closed\"}", true); } catch (Exception ignored) {}
@@ -59,8 +61,13 @@ public class Etunnel {
         h.ws = ws;
 
         StringBuilder hello = new StringBuilder("{\"type\":\"hello\",\"proto\":1");
-        if (opts.subdomain != null) hello.append(",\"subdomain\":\"").append(opts.subdomain).append("\"");
-        if (opts.token != null) hello.append(",\"token\":\"").append(opts.token).append("\"");
+        if (opts.subdomain != null) hello.append(",\"subdomain\":\"").append(jsonEsc(opts.subdomain)).append("\"");
+        if (opts.token != null) hello.append(",\"token\":\"").append(jsonEsc(opts.token)).append("\"");
+        // resume: server-signed token from a previous welcome; the server then
+        // hands back the same subdomain instead of allocating a new one.
+        if (opts.resume != null && !opts.resume.isEmpty()) {
+            hello.append(",\"resume\":\"").append(jsonEsc(opts.resume)).append("\"");
+        }
         hello.append(",\"client\":\"etunnel-java/1.0\"}");
         ws.sendText(hello.toString(), true).join();
 
@@ -69,6 +76,20 @@ public class Etunnel {
     }
 
     static String str(Object o) { return o == null ? "" : o.toString(); }
+
+    /** Minimal JSON string escaping for control-message fields. */
+    static String jsonEsc(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' || c == '\\') b.append('\\').append(c);
+            else if (c == '\n') b.append("\\n");
+            else if (c == '\r') b.append("\\r");
+            else if (c == '\t') b.append("\\t");
+            else b.append(c);
+        }
+        return b.toString();
+    }
 
     static class WelcomeLatch {
         volatile Map<String, Object> value;
@@ -305,6 +326,17 @@ public class Etunnel {
         }
     }
 
+    static final AtomicBoolean STOPPED = new AtomicBoolean(false);
+
+    /** Exponential backoff step with +/-20% jitter, capped at 30s. */
+    static long nextDelay(long delay) {
+        return Math.min(30000L, delay * 2);
+    }
+
+    static long jitter(long delay) {
+        return (long) (delay * (0.8 + Math.random() * 0.4));
+    }
+
     public static void main(String[] args) throws Exception {
         String server = System.getenv().getOrDefault("ETUNNEL_SERVER", "wss://t.ggcode.uk/tunnel");
         int port = Integer.parseInt(args.length > 0 ? args[0]
@@ -312,8 +344,47 @@ public class Etunnel {
         Options o = new Options();
         o.token = System.getenv("ETUNNEL_TOKEN");
         o.subdomain = System.getenv("ETUNNEL_SUBDOMAIN");
-        Tunnel t = connect(server, port, o);
-        System.out.println("TUNNEL_URL: " + t.url);
-        Thread.currentThread().join();
+
+        if ("0".equals(System.getenv("ETUNNEL_RECONNECT"))) {
+            // original single-shot behavior
+            Tunnel t = connect(server, port, o);
+            System.out.println("TUNNEL_URL: " + t.url);
+            Thread.currentThread().join();
+            return;
+        }
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> STOPPED.set(true), "etunnel-shutdown"));
+
+        long delay = 500;
+        String resume = ""; // server-signed token: reclaim the same subdomain on reconnect
+        while (!STOPPED.get()) {
+            Tunnel t = null;
+            o.resume = resume.isEmpty() ? null : resume;
+            try {
+                t = connect(server, port, o);
+            } catch (Exception e) {
+                System.err.println("etunnel: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+            }
+            if (t == null) {
+                if (STOPPED.get()) break;
+                try { Thread.sleep(jitter(delay)); } catch (InterruptedException ie) { break; }
+                delay = nextDelay(delay);
+                continue;
+            }
+
+            delay = 500; // reset after a successful connect
+            if (!t.resumeToken.isEmpty()) resume = t.resumeToken;
+            System.out.println("TUNNEL_URL: " + t.url);
+
+            WebSocket ws = t.ws;
+            while (!STOPPED.get() && !ws.isInputClosed() && !ws.isOutputClosed()) {
+                try { Thread.sleep(200); } catch (InterruptedException ie) { break; }
+            }
+            if (STOPPED.get()) break;
+
+            System.err.println("etunnel: disconnected, reconnecting");
+            try { Thread.sleep(jitter(delay)); } catch (InterruptedException ie) { break; }
+            delay = nextDelay(delay);
+        }
     }
 }

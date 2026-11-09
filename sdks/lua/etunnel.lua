@@ -272,13 +272,49 @@ end
 
 local server = os.getenv("ETUNNEL_SERVER") or "wss://t.etun.uk/tunnel"
 local local_port = tonumber(arg and arg[1] or os.getenv("ETUNNEL_LOCAL") or "3000")
+local token, subdomain = os.getenv("ETUNNEL_TOKEN"), os.getenv("ETUNNEL_SUBDOMAIN")
 
-local ok, t = pcall(connect, server, local_port,
-  os.getenv("ETUNNEL_TOKEN"), os.getenv("ETUNNEL_SUBDOMAIN"))
-if not ok then
-  io.stderr:write("etunnel: " .. tostring(t) .. "\n")
-  os.exit(1)
+-- supervisor: connect, wait for the disconnect, back off, retry. connect()
+-- already prints nothing about the URL, so the URL is announced here on every
+-- (re)connect. ETUNNEL_RECONNECT=0 restores the old single-attempt behaviour.
+--
+-- Lua has no built-in signal API: SIGINT/SIGTERM keep their default
+-- disposition, which terminates the process immediately -- i.e. exactly the
+-- required "stop, never reconnect" semantics, without adding a dependency.
+local reconnect = os.getenv("ETUNNEL_RECONNECT") ~= "0"
+local socket = require("socket")
+local backoff_ms = 500
+
+while true do
+  local ok, t = pcall(connect, server, local_port, token, subdomain)
+  if ok then
+    backoff_ms = 500 -- a successful connect resets the backoff
+    print("TUNNEL_URL: " .. tostring(t.url))
+    io.stdout:flush()
+    local rok, rerr = pcall(t.run) -- blocks until the tunnel drops
+    if not rok then io.stderr:write("etunnel: " .. tostring(rerr) .. "\n") end
+    pcall(t.close) -- best effort: the socket may already be gone
+    if not rok then
+      io.stderr:write("etunnel: disconnected: " .. tostring(rerr) .. "\n")
+    else
+      io.stderr:write("etunnel: disconnected\n")
+    end
+  else
+    io.stderr:write("etunnel: " .. tostring(t) .. "\n")
+  end
+
+  if not reconnect then
+    if not ok then os.exit(1) end
+    break -- original behaviour: the script ends when the tunnel drops
+  end
+
+  local wait_ms = math.floor(backoff_ms * (0.8 + 0.4 * math.random()))
+  io.stderr:write(("etunnel: reconnecting in %dms\n"):format(wait_ms))
+  local slept = 0
+  while slept < wait_ms do -- sliced sleep, mirrors the other SDKs
+    local slice = math.min(100, wait_ms - slept)
+    socket.sleep(slice / 1000)
+    slept = slept + slice
+  end
+  backoff_ms = math.min(backoff_ms * 2, 30000)
 end
-print("TUNNEL_URL: " .. t.url)
-io.stdout:flush()
-t.run()

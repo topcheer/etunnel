@@ -42,6 +42,22 @@ final class Etunnel: @unchecked Sendable {
     let localPort: Int
     let session: URLSession
     let store = StreamStore()
+  private let stateLock = NSLock()
+  private var closedFlag = false
+
+  /// True once the receive loop is over (socket error, close or bye).
+  /// The CLI supervisor polls it to decide when to reconnect.
+  var isClosed: Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return closedFlag
+  }
+
+  func markClosed() {
+    stateLock.lock()
+    closedFlag = true
+    stateLock.unlock()
+  }
 
     init(server: String, local: String) {
         if let i = local.lastIndex(of: ":"), let p = Int(local[local.index(after: i)...]) {
@@ -87,8 +103,9 @@ final class Etunnel: @unchecked Sendable {
         Task.detached { await self.loop() }
     }
 
-    func loop() async {
-        while true {
+  func loop() async {
+    defer { markClosed() }
+    while true {
             guard let msg = try? await task.receive() else { return }
             switch msg {
             case .string(let text):
