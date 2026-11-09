@@ -438,12 +438,12 @@ func landingHTML(cfg Config) string {
 	}
 	var tb, pn strings.Builder
 	for i, l := range qsLangs {
-		cls := ""
+		on := ""
 		if i == 0 {
-			cls = ` class="on"`
+			on = " on"
 		}
-		fmt.Fprintf(&tb, `<button%s onclick="showLang('%s')">%s</button>`, cls, l.ID, l.Name)
-		fmt.Fprintf(&pn, `<div class="panel%s" id="p-%s"><div class="cmd" style="max-width:44rem;margin:0 auto;white-space:pre-wrap;text-align:left"><span id="c-%s">%s</span><button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('c-%s').textContent);this.textContent='copied'">copy</button></div></div>`, cls, l.ID, l.ID, htmlEscapeText(l.Install), l.ID)
+		fmt.Fprintf(&tb, `<button class="qtab%s" data-id="%s" onclick="showLang(this)">%s</button>`, on, l.ID, l.Name)
+		fmt.Fprintf(&pn, `<div class="panel%s" id="p-%s"><div class="cmd" style="max-width:44rem;margin:0 auto;white-space:pre-wrap;text-align:left"><span id="c-%s">%s</span><button class="copy" onclick="navigator.clipboard.writeText(document.getElementById('c-%s').textContent);this.textContent='copied'">copy</button></div></div>`, on, l.ID, l.ID, htmlEscapeText(l.Install), l.ID)
 	}
 	qsTabs, qsPanels := tb.String(), pn.String()
 	return `<!doctype html>
@@ -496,9 +496,9 @@ pre .cm{color:var(--dim)}pre .k{color:#ff7b72}pre .s{color:#a5d6ff}pre .f{color:
 pre .out{color:var(--green2)}
 /* quickstart tabs */
 .tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
-.tabs button{background:none;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:.35rem .75rem;font-size:.8rem;font-family:inherit;cursor:pointer}
-.tabs button.on{background:var(--panel);border-color:rgba(63,185,80,.5);color:var(--fg)}
-.tabs button:hover{color:var(--fg)}
+.tabs button.qtab{background:none;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:.35rem .75rem;font-size:.8rem;font-family:inherit;cursor:pointer}
+.tabs button.qtab.on{background:var(--panel);border-color:rgba(63,185,80,.5);color:var(--fg)}
+.tabs button.qtab:hover{color:var(--fg)}
 .panel{display:none}
 .panel.on{display:block}
 /* pricing strip */
@@ -576,9 +576,12 @@ footer .sep{margin:0 .6rem}
   <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a>
   <br><span style="opacity:.6">etunnel - one binary, twenty SDKs, your localhost worldwide.</span>
 <script>
-function showLang(id){
-  document.querySelectorAll('#langtabs button').forEach(b=>b.classList.toggle('on',b.textContent===document.querySelector('[onclick="showLang(\''"+id+"\')"]')?.textContent));
-  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.id==='p-'+id));
+function showLang(btn){
+  var id = btn.getAttribute('data-id');
+  var tabs = document.querySelectorAll('#langtabs button');
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle('on', tabs[i] === btn);
+  var ps = document.querySelectorAll('.panel');
+  for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].id === 'p-' + id);
 }
 </script>
 </footer>
