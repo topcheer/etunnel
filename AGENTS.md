@@ -33,6 +33,10 @@ Commands as actually used by Makefile and CI
 - Package all SDK artifacts into `dist/packages/`: `make pack-all`
 - Version gate (CI requires this on `v*` tags):
   `python3 scripts/bump-release.py --check [X.Y.Z]`
+- Reconnect/subdomain retention guard:
+  `go test -run TestReconnectKeepsSubdomainAcrossServerRestart` — hard-closes
+  the server's sockets (restart simulation), then asserts the SAME hostname
+  returns and serves traffic. No network needed.
 - CI publishes to registries (npm/PyPI/RubyGems/... via OIDC trusted
   publishing) only on `v*` tags; it runs on ubuntu-22.04 and installs all
   language toolchains there.
@@ -49,7 +53,10 @@ Commands as actually used by Makefile and CI
     wire protocol changes.
 - `sdk/` — the canonical Go SDK (`Connect`, `Options`, `Tunnel`,
   `stream.go`). It is package path `etunnel/sdk` inside this module;
-  `sdk.DefaultServer` is overridable via `-ldflags -X`.
+  `sdk.DefaultServer` is overridable via `-ldflags -X`. `reconnect.go` holds
+  `ConnectReconnecting`, a supervisor that rebuilds a dropped tunnel with
+  exponential backoff and replays `resumeToken` so the subdomain is reclaimed
+  (not re-randomised); `Connect` stays one-shot.
 - `server/` — the `etunneld` server: `session.go` (one WS connection per
   tunnel, multiplexed streams, TTL expiry, token-bucket bandwidth),
   `proxy.go` (HTTP reverse proxy by hostname + WebSocket pass-through,
@@ -57,7 +64,9 @@ Commands as actually used by Makefile and CI
   `auth.go` (API keys + OAuth), `payments.go`, `portal.go` (user portal:
   `/login` + `/me` actions), `account.go` (JSON account
   store), `admin.go` (stats/admin API), `telegram.go`, `tls.go` (ondemand /
-  dns / static TLS modes), `acme_dns.go` (DNS-01 via lego), `config.go`.
+  dns / static TLS modes), `acme_dns.go` (DNS-01 via lego), `config.go`,
+  `resume.go` (self-signed `resumeToken`: HMAC over `sub|exp`, 30 min TTL,
+  used by reconnecting clients).
 - `cmd/etunnel/` — client CLI (`etunnel -server ... 3000`).
 - `cmd/etunneld/` — server daemon entrypoint.
 - `sdks/` — 19 additional single-file, dependency-light language SDKs
@@ -69,6 +78,18 @@ Commands as actually used by Makefile and CI
 - Root `integration_test.go`, `upgrade_passthrough_test.go` — black-box
   end-to-end tests (package `etunnel_test`) spinning up a real server +
   tunnel via `httptest`.
+
+## Secrets and operational invariants
+
+- `SESSION_SECRET` keys **two** things: OAuth session cookies and the
+  `resumeToken` HMAC. Set it and keep it stable in production — without it
+  both are per-process, so a restart logs everyone out and makes in-flight
+  resume tokens unverifiable (reconnects land on a fresh random subdomain).
+  Rotating it has the same effect by design.
+- Every other credential is env-only and disables its feature when unset:
+  `STRIPE_*`, `PAYPAL_*`, `NOWPAYMENTS_*`,
+  `GOOGLE_*`/`GITLAB_*`/`GITHUB_*`/`APPLE_*` (APPLE_PRIVATE_KEY accepts a file
+  path), `TELEGRAM_*`, `ADMIN_TOKEN`.
 
 ## Coding Conventions
 
