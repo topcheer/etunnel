@@ -156,32 +156,23 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: ruby/setup-ruby@v1
-        with: { ruby-version: '3.3' }
-      # Manual OIDC exchange: rubygems/configure-rubygems-credentials has no
-      # `owner` input in any release, but the exchange endpoint accepts it in
-      # the JSON body (required while the pending trusted publisher exists).
-      - name: OIDC exchange (owner-bound) + gem build
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: sdks/ruby
+      # Official trusted-publisher credential exchange (writes ~/.gem/credentials)
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - name: Build and push (idempotent, official creds path)
+        working-directory: sdks/ruby
         run: |
-          set -e
-          OIDC=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=rubygems.org" | jq -r .value)
-          KEY=$(curl -fsS -X POST https://rubygems.org/api/v1/oidc/trusted_publisher/exchange_token \
-            -H 'content-type: application/json' \
-            -d "{\"jwt\":\"$OIDC\"}" \
-            | tee /tmp/exch.json | jq -r '.rubygems_api_key // .rubygemsApiKey // empty')
-          if [ -z "$KEY" ]; then cat /tmp/exch.json; echo; echo "exchange failed"; exit 1; fi
-          echo "exchange ok, key owner: $(jq -r '.owner // "?"' /tmp/exch.json), id: $(jq -r '.id // "?"' /tmp/exch.json), scopes: $(jq -c '.scopes // "?"' /tmp/exch.json)"
-          echo "::add-mask::$KEY"
-          echo "GEM_HOST_API_KEY=$KEY" >> "$GITHUB_ENV"
-          cd sdks/ruby && gem build etunnel.gemspec
-      - name: gem push (idempotent)
-        run: |
-          V=$(ruby -e "print Gem::Specification.load('sdks/ruby/etunnel.gemspec').version")
+          V=$(ruby -e "print Gem::Specification.load('etunnel.gemspec').version")
           if curl -sf "https://rubygems.org/api/v1/gems/etunnel/versions/${V}.json" > /dev/null; then
             echo "rubygems: ${V} already published, skipping"
           else
-            gem push sdks/ruby/etunnel-*.gem
+            gem build etunnel.gemspec
+            gem push etunnel-${V}.gem
           fi
 
   publish-nuget:
