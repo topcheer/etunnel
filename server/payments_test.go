@@ -358,3 +358,17 @@ func TestActivateSetsExpiry(t *testing.T) {
 		t.Fatal("renewal did not extend the expiry")
 	}
 }
+
+func TestHumanTTL(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		10 * 24 * time.Hour: "10d",
+		72 * time.Hour:      "3d",
+		4 * time.Hour:       "4h",
+		90 * time.Minute:    "1h30m0s",
+		0:                   "unlimited",
+	} {
+		if got := humanTTL(d); got != want {
+			t.Errorf("humanTTL(%v)=%q want %q", d, got, want)
+		}
+	}
+}
