@@ -35,6 +35,12 @@ type Account struct {
 	// (free tier, or an account granted a tier manually). The reaper in
 	// Server.startTierReaper downgrades expired accounts to free.
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// LapsedAt records when a paid subscription expired (zero = never paid).
+	// It survives the downgrade to free so retention logic can keep the
+	// account: a lapsed customer must never be garbage-collected like an
+	// anonymous free account - their payment history and OAuth binding are
+	// worth keeping for support, refunds and re-subscription.
+	LapsedAt time.Time `json:"lapsedAt,omitempty"`
 }
 
 // AccountStore persists accounts in a JSON file.
@@ -261,6 +267,16 @@ func (s *AccountStore) DowngradeToFree(email string) bool {
 	}
 	a.Tier = "free"
 	a.ExpiresAt = time.Time{}
+	if a.LapsedAt.IsZero() {
+		a.LapsedAt = time.Now() // keep the first lapse; do not overwrite
+	}
 	_ = s.saveLocked()
 	return true
+}
+
+// EverPaid reports whether the account has ever had a paid subscription
+// (currently paid or lapsed). Retention/GC logic must never delete such an
+// account: it carries payment history and an OAuth binding.
+func (a *Account) EverPaid() bool {
+	return a.Tier != "free" || !a.LapsedAt.IsZero()
 }
