@@ -150,6 +150,16 @@ OAuth login (Google / GitLab / Apple) gates subscriptions: see /login and
 subdomains are ownership-gated - paid users claim names they added in /me.
 Full credential list: [CREDENTIALS.md](CREDENTIALS.md).
 
+## Running your own server
+
+```sh
+etunneld --domain t.example.com --addr :443 --http-addr :80 \
+  --tls-mode dns --dns-provider cloudflare --acme-dir /var/lib/etunnel/acme
+```
+
+`--alias-domain t.old.com` serves a legacy domain alongside `--domain`
+during migrations (static wildcard cert from the acme dir, not renewed).
+
 ## Billing (PayPal + Stripe)
 
 Self-hosted payments for paid tiers, zero third-party Go dependencies:

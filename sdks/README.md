@@ -58,6 +58,20 @@ const t = await connect('wss://t.ggcode.uk/tunnel', 3000);
 console.log(t.url);
 ```
 
+## Pointing SDKs at your own server
+
+Runtime: `ETUNNEL_SERVER=wss://your-host/tunnel ...` (all SDKs).
+Compile-time defaults, for embedding a private server address:
+
+| Language | Build flag |
+|---|---|
+| Go | `-ldflags "-X github.com/topcheer/etunnel/sdk.DefaultServer=wss://your/tunnel"` |
+| C / C++ | `-DETUNNEL_DEFAULT_SERVER="wss://your/tunnel"` |
+| Rust | `ETUNNEL_BUILD_SERVER=wss://your/tunnel cargo build` |
+| Dart | `--dart-define=ETUNNEL_DEFAULT_SERVER=wss://your/tunnel` |
+
+Interpreted SDKs use the runtime env only. Precedence: env > compiled default > built-in.
+
 ## Choosing an SDK
 
 - **WebSockets / streaming bodies / long-lived SSE** → [Go SDK](../sdk/)
