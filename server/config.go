@@ -35,6 +35,10 @@ type Tier struct {
 	// Bandwidth is the tunnel bandwidth cap in bits per second (applied to the
 	// combined tunnel traffic). Zero means unlimited.
 	Bandwidth int `json:"bandwidth"`
+	// MaxTunnels is how many concurrent tunnels one account may hold. Zero
+	// means unlimited. Per-IP limits cover anonymous tunnels; without this a
+	// single key could hold every subdomain (issue #10).
+	MaxTunnels int `json:"maxTunnels,omitempty"`
 }
 
 // TierFile is the on-disk format for custom tier definitions.
@@ -127,18 +131,21 @@ func DefaultTiers() map[string]*Tier {
 			TTL:           4 * time.Hour,
 			CustomDomains: 0,
 			Bandwidth:     1 * 1000 * 1000, // 1 Mbps
+			MaxTunnels:    2,
 		},
 		"starter": {
 			Name:          "Starter",
 			TTL:           72 * time.Hour,
 			CustomDomains: 1,
 			Bandwidth:     10 * 1000 * 1000, // 10 Mbps
+			MaxTunnels:    5,
 		},
 		"pro": {
 			Name:          "Pro",
 			TTL:           30 * 24 * time.Hour,
 			CustomDomains: 5,
 			Bandwidth:     10 * 1000 * 1000,
+			MaxTunnels:    20,
 		},
 	}
 }

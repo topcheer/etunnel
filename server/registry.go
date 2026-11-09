@@ -89,6 +89,28 @@ func (r *Registry) Snapshot() []*Session {
 	return out
 }
 
+// countForAccount counts live tunnels (any subdomain) belonging to the account
+// with the given API key.
+func (r *Registry) countForAccount(apiKey string) int {
+	if apiKey == "" {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, s := range r.subs {
+		if s.account == nil || s.account.APIKey != apiKey {
+			continue
+		}
+		select {
+		case <-s.closed:
+		default:
+			n++
+		}
+	}
+	return n
+}
+
 // countCustomForAccount counts live tunnels on custom (non-random) subdomains
 // belonging to the given account.
 func (r *Registry) countCustomForAccount(acct *Account) int {

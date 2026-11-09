@@ -123,6 +123,16 @@ func (s *Session) streamCount() int {
 	return len(s.streams)
 }
 
+// accountTunnelLimitReached reports whether acct already holds the maximum
+// number of concurrent tunnels its plan allows (issue #10). Anonymous sessions
+// and unlimited plans (MaxTunnels <= 0) are never limited here.
+func (s *Server) accountTunnelLimitReached(acct *Account, tier *Tier) bool {
+	if acct == nil || tier == nil || tier.MaxTunnels <= 0 {
+		return false
+	}
+	return s.reg.countForAccount(acct.APIKey) >= tier.MaxTunnels
+}
+
 // --- websocket session entry ----------------------------------------------
 
 // handleTunnelWS upgrades, authenticates, assigns a subdomain and runs the
@@ -197,6 +207,15 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	tier, ok := s.cfg.Tiers[tierID]
 	if !ok {
 		s.wsErrorClose(ws, protocol.ErrCodeUnauthorized, "account tier no longer exists")
+		return
+	}
+
+	// Per-account concurrent tunnel cap (issue #10): per-IP limits only cover
+	// anonymous tunnels, so without this one key could hold every subdomain and
+	// every registry/TLS slot it can request.
+	if s.accountTunnelLimitReached(acct, tier) {
+		s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
+			fmt.Sprintf("plan %s allows %d concurrent tunnel(s)", tier.Name, tier.MaxTunnels))
 		return
 	}
 
