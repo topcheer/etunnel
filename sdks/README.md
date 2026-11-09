@@ -51,7 +51,7 @@ Java coordinates:
 <dependency>
   <groupId>dev.ggcode</groupId>
   <artifactId>etunnel</artifactId>
-  <version>1.2.4</version>
+  <version>1.3.0</version>
 </dependency>
 ```
 
