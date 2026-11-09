@@ -22,7 +22,7 @@ func main() {
 		addr       = flag.String("addr", ":443", "main HTTPS listen address")
 		httpAddr   = flag.String("http-addr", ":80", "plain HTTP listen address (redirect + ACME); empty disables")
 		adminAddr  = flag.String("admin-addr", "127.0.0.1:9090", "admin/stats listen address")
-		adminToken = flag.String("admin-token", "", "token required for admin endpoints (X-Admin-Token)")
+		adminToken = flag.String("admin-token", os.Getenv("ADMIN_TOKEN"), "token required for admin endpoints (X-Admin-Token; env ADMIN_TOKEN)")
 		wsPath     = flag.String("ws-path", "/tunnel", "WebSocket endpoint path")
 
 		tlsMode   = flag.String("tls-mode", "http", "http | static | ondemand | dns")
