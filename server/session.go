@@ -537,7 +537,14 @@ func (s *Session) routeFrame(f protocol.Frame, stall time.Duration) bool {
 			s.srv.logf("session %s: stream %d stalled for %s with no consumer progress, resetting it", s.id, st.id, stall)
 		}
 		if s.out != nil {
-			_ = s.sendRst(st.id)
+			// Best-effort RST: never block the reader here. enqueue() waits on
+			// a full out channel, which would reintroduce the very head-of-line
+			// stall this path exists to break. Dropping the frame is fine - the
+			// stream is aborted locally either way.
+			select {
+			case s.out <- wsOut{data: protocol.Frame{Kind: protocol.KindRst, StreamID: st.id}.Encode()}:
+			default:
+			}
 		}
 		st.abort()
 		return false
