@@ -414,9 +414,12 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 func landingHTML(cfg Config) string {
 	return `<!doctype html>
 <html><head><meta charset="utf-8"><link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>etunnel</title>
-<style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:640px;padding:2rem}h1{color:#7ee787}code{background:#161b22;padding:.2em .4em;border-radius:4px}pre{background:#161b22;padding:1rem;border-radius:8px;overflow:auto}</style>
+<style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:640px;padding:2rem}h1{color:#7ee787}code{background:#161b22;padding:.2em .4em;border-radius:4px}pre{background:#161b22;padding:1rem;border-radius:8px;overflow:auto}.brand{display:flex;align-items:center;gap:.7rem;margin:0 0 1.4rem}.brand svg{flex:none}.brand h1{margin:0;font-size:1.5rem}</style>
 </head><body><main>
-<h1>etunnel is running</h1>
+<div class="brand">
+  <svg width="48" height="48" viewBox="0 0 512 512" aria-label="etunnel"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>
+  <h1>etunnel is running</h1>
+</div>
 <p>Expose your local service to the internet in one line:</p>
 <pre>etunnel -s wss://` + cfg.Domain + cfg.WSPath + ` 8080</pre>
 <p>or from Go:</p>
