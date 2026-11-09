@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "historyId": "c499254c-37f3-40b5-a5ac-5d95429b756c",
+  "currentRevision": null,
+  "pendingChanges": false,
+  "files": {
+    "BRIEF.md": {
+      "hash": "b15af672ecb87735969a1f06d42ab729bb2a8f5eda53f0400dbb67beec56e750",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/b1/b15af672ecb87735969a1f06d42ab729bb2a8f5eda53f0400dbb67beec56e750"
+    },
+    "compositions/hero.html": {
+      "hash": "45c2b98dda36c8aba26f724973fd6575383bb9f1879783d5fbcdb854ad9e5a30",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/45/45c2b98dda36c8aba26f724973fd6575383bb9f1879783d5fbcdb854ad9e5a30"
+    },
+    "hyperframes.json": {
+      "hash": "35a6d4ea79ebe911f0d81705f7aace5d8ff0316b745b0311d56af50c9c237cb7",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/35/35a6d4ea79ebe911f0d81705f7aace5d8ff0316b745b0311d56af50c9c237cb7"
+    },
+    "index.html": {
+      "hash": "101a132efb92192e9d4111919f0e096e1aa9cfbcdd2d9319e1ccf0327f5e3d2d",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/10/101a132efb92192e9d4111919f0e096e1aa9cfbcdd2d9319e1ccf0327f5e3d2d"
+    },
+    "meta.json": {
+      "hash": "0f6373ff6195edd09d0bf5561e19138591f44ff70de11d69fa5d82838e58dfd7",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/0f/0f6373ff6195edd09d0bf5561e19138591f44ff70de11d69fa5d82838e58dfd7"
+    },
+    "package.json": {
+      "hash": "a75310b4e55865d24f641d695853ee59b08e3331979a66af4c8b74e9fd12f4c5",
+      "content": "/Users/zhanju/.cache/hyperframes/history/c499254c-37f3-40b5-a5ac-5d95429b756c/blobs/a7/a75310b4e55865d24f641d695853ee59b08e3331979a66af4c8b74e9fd12f4c5"
+    }
+  },
+  "revisions": {},
+  "checks": {
+    "latest": {
+      "revision": null,
+      "id": "67a6af9b-a03b-4370-a20d-2538ca51c2ed"
+    },
+    "revisions": {},
+    "unversioned": [
+      {
+        "id": "67a6af9b-a03b-4370-a20d-2538ca51c2ed",
+        "scope": "project",
+        "report": "/Volumes/new/ggai/et/assets/hero-video/.hyperframes/artifacts/checks/67a6af9b-a03b-4370-a20d-2538ca51c2ed.json",
+        "metadata": {
+          "ok": true,
+          "browserSkipped": false,
+          "options": {
+            "samples": 9,
+            "atTransitions": false,
+            "maxIssues": 80,
+            "collapseStatic": true,
+            "tolerance": 2,
+            "timeout": 45000,
+            "cache": true,
+            "contrast": true,
+            "craft": true,
+            "strict": false,
+            "snapshots": false,
+            "browserGpuMode": "auto",
+            "includeUnmounted": false
+          }
+        },
+        "createdAt": 1794223100071,
+        "contentHash": "6553d2a102aa3bba3ca264d971d98bca2a9bd724d460a347b6b1225eb8d16922",
+        "revision": null,
+        "inputFingerprint": "0c6b053c2850b9239e60b95f2cab32ab6e0c29884dd1c6944324e4ec72ba02d5",
+        "inputScope": "local-project-files",
+        "attribution": "unversioned"
+      }
+    ]
+  },
+  "snapshots": {
+    "latest": null,
+    "revisions": {},
+    "unversioned": []
+  },
+  "renders": {
+    "latest": {
+      "id": "a7a6f880-672f-4352-8d00-fe2dc200e7e9",
+      "completedAt": 1794223196255,
+      "output": "/Volumes/new/ggai/et/assets/hero-loop.mp4",
+      "status": "completed",
+      "revision": null
+    },
+    "retainedRevisions": []
+  },
+  "pendingArtifactCleanup": []
+}

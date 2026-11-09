@@ -1,0 +1,460 @@
+<template>
+  <style>
+    #root {
+      position: absolute;
+      inset: 0;
+      background: #0d1117;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    }
+    #root-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* keeps the bundled monospace face loaded for canvas text */
+    #root-font-warmup {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 400;
+      opacity: 0;
+      pointer-events: none;
+    }
+  </style>
+  <div id="root" data-composition-id="hero" data-width="1920" data-height="1080" data-duration="10">
+    <canvas id="root-canvas" width="1920" height="1080"></canvas>
+    <span id="root-font-warmup">quiet-frog-42 https://</span>
+  </div>
+  <script>
+    (function () {
+      // ---- deterministic loop ------------------------------------------------
+      // Video is 300 frames @ 30fps (10.000 s). Animation period is exactly
+      // 299 frames (299/30 s), so frame 299 renders the same state as frame 0
+      // and the wrap 299 -> 0 is seamless. Everything below is a pure function
+      // of time: no Date.now, no Math.random, no timers.
+      const LOOP = 299 / 30; // 9.9667 s
+      const P = LOOP / 3; // beat period (3 beats per loop)
+      const TRAVEL = P - 0.35; // packet transit time; arrival 0.35 s before next beat
+      const REN = 0.32; // subdomain crossfade duration
+      const NAMES = ["quiet-frog-42", "amber-otter-97", "violet-lynx-23"];
+
+      // ---- palette -----------------------------------------------------------
+      const BG = "#0d1117";
+      const FG = "#e6edf3";
+      const MUT = "#8b949e";
+      const WIN = "#161b22";
+      const GREEN = "#3fb950";
+      const GREEN2 = "#56d364";
+      const GREEN3 = "#7ee787";
+      const MONO = '"JetBrains Mono", "SF Mono", Menlo, monospace';
+
+      // ---- layout ------------------------------------------------------------
+      const W = 1920,
+        H = 1080,
+        CY = 540;
+      const TX0 = 150,
+        TY0 = 400,
+        TX1 = 560,
+        TY1 = 680; // terminal window
+      const PX0 = 1300,
+        PY0 = 500,
+        PX1 = 1820,
+        PY1 = 580; // address pill
+      const LX = 585,
+        RX = 1290; // packet travel range
+
+      const canvas = document.getElementById("root-canvas");
+      const ctx = canvas.getContext("2d");
+
+      function cl(v) {
+        return v < 0 ? 0 : v > 1 ? 1 : v;
+      }
+      function phase(t) {
+        let p = t % LOOP;
+        if (LOOP - p < 1e-9 || p < 1e-12) p = 0;
+        return p;
+      }
+      function rr(x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+      }
+
+      // ---- layers ------------------------------------------------------------
+      function drawBackground() {
+        ctx.fillStyle = BG;
+        ctx.fillRect(0, 0, W, H);
+
+        // faint terminal grid
+        ctx.strokeStyle = "rgba(230,237,243,0.026)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 96; x < W; x += 96) {
+          ctx.moveTo(x + 0.5, 0);
+          ctx.lineTo(x + 0.5, H);
+        }
+        for (let y = 96; y < H; y += 96) {
+          ctx.moveTo(0, y + 0.5);
+          ctx.lineTo(W, y + 0.5);
+        }
+        ctx.stroke();
+      }
+
+      function drawVignette() {
+        const g = ctx.createRadialGradient(W / 2, CY, H * 0.32, W / 2, CY, H * 1.05);
+        g.addColorStop(0, "rgba(1,4,9,0)");
+        g.addColorStop(1, "rgba(1,4,9,0.5)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // vertical light sweeps: fully invisible at phase 0 and phase LOOP
+      const SWEEPS = [
+        { ph: P * 0.35, dur: 2.6, x: 520 },
+        { ph: P * 1.75, dur: 2.4, x: 1345 },
+      ];
+      function drawSweeps(p) {
+        for (const s of SWEEPS) {
+          const u = (p - s.ph) / s.dur;
+          if (u <= 0 || u >= 1) continue;
+          const y = -400 + u * (H + 800);
+          const env = Math.sin(Math.PI * u);
+          const g = ctx.createLinearGradient(s.x - 150, 0, s.x + 150, 0);
+          g.addColorStop(0, "rgba(63,185,80,0)");
+          g.addColorStop(0.5, "rgba(63,185,80," + (0.05 * env).toFixed(4) + ")");
+          g.addColorStop(1, "rgba(63,185,80,0)");
+          ctx.fillStyle = g;
+          ctx.fillRect(s.x - 150, y - 340, 300, 680);
+        }
+      }
+
+      function drawTunnel(p) {
+        // soft channel glow (fades at both ends)
+        let g = ctx.createLinearGradient(TX1, 0, PX0, 0);
+        g.addColorStop(0, "rgba(63,185,80,0)");
+        g.addColorStop(0.06, "rgba(63,185,80,0.05)");
+        g.addColorStop(0.5, "rgba(63,185,80,0.085)");
+        g.addColorStop(0.94, "rgba(63,185,80,0.05)");
+        g.addColorStop(1, "rgba(63,185,80,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(TX1, CY - 26, PX0 - TX1, 52);
+
+        // brighter core band
+        g = ctx.createLinearGradient(TX1, 0, PX0, 0);
+        g.addColorStop(0, "rgba(63,185,80,0)");
+        g.addColorStop(0.08, "rgba(63,185,80,0.10)");
+        g.addColorStop(0.5, "rgba(63,185,80,0.16)");
+        g.addColorStop(0.92, "rgba(63,185,80,0.10)");
+        g.addColorStop(1, "rgba(63,185,80,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(TX1, CY - 9, PX0 - TX1, 18);
+
+        // slow dashed data hints scrolling right; offset is proportional to
+        // p so frame 0 and frame 299 are identical
+        ctx.save();
+        ctx.strokeStyle = "rgba(126,231,135,0.13)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 30]);
+        const span = PX0 - TX1;
+        const pat = 33;
+        ctx.lineDashOffset = -((p / LOOP) * (pat * Math.ceil(span / pat)));
+        ctx.beginPath();
+        ctx.moveTo(TX1, CY + 0.5);
+        ctx.lineTo(PX0, CY + 0.5);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawTerminal(p) {
+        // window
+        ctx.save();
+        ctx.shadowColor = "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = 28;
+        ctx.shadowOffsetY = 8;
+        ctx.fillStyle = WIN;
+        rr(TX0, TY0, TX1 - TX0, TY1 - TY0, 12);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.strokeStyle = "rgba(240,246,252,0.11)";
+        ctx.lineWidth = 1;
+        rr(TX0 + 0.5, TY0 + 0.5, TX1 - TX0 - 1, TY1 - TY0 - 1, 12);
+        ctx.stroke();
+
+        // title bar
+        const dots = [
+          "rgba(255,95,87,0.55)",
+          "rgba(254,188,46,0.55)",
+          "rgba(63,185,80,0.7)",
+        ];
+        dots.forEach((c, i) => {
+          ctx.fillStyle = c;
+          ctx.beginPath();
+          ctx.arc(TX0 + 24 + i * 23, TY0 + 21, 5.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.fillStyle = MUT;
+        ctx.font = '400 16px "JetBrains Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("localhost:3000 — etunnel", (TX0 + TX1) / 2, TY0 + 22);
+        ctx.strokeStyle = "rgba(240,246,252,0.06)";
+        ctx.beginPath();
+        ctx.moveTo(TX0 + 1, TY0 + 43.5);
+        ctx.lineTo(TX1 - 1, TY0 + 43.5);
+        ctx.stroke();
+
+        // content
+        ctx.textAlign = "left";
+        ctx.font = '400 21px "JetBrains Mono", monospace';
+        ctx.fillStyle = "rgba(139,148,158,0.9)";
+        ctx.fillText("$", TX0 + 26, TY0 + 84);
+        ctx.fillStyle = "rgba(230,237,243,0.88)";
+        ctx.fillText("etunnel --port 3000", TX0 + 42, TY0 + 84);
+
+        ctx.fillStyle = MUT;
+        ctx.fillText("forwarding via t.etun.uk", TX0 + 26, TY0 + 122);
+
+        // status: green dot + online
+        ctx.fillStyle = GREEN;
+        ctx.beginPath();
+        ctx.arc(TX0 + 33, TY0 + 160, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(230,237,243,0.72)";
+        ctx.fillText("tunnel online", TX0 + 48, TY0 + 160);
+
+        // prompt line with blinking cursor (12 blinks per loop, phase-safe)
+        ctx.fillStyle = "rgba(139,148,158,0.9)";
+        ctx.fillText("~", TX0 + 26, TY0 + 198);
+        const raw = Math.sin(2 * Math.PI * 12 * (p / LOOP));
+        const blink = raw > 0 ? 1 : 0.14;
+        ctx.fillStyle = "rgba(230,237,243," + (0.85 * blink).toFixed(3) + ")";
+        ctx.fillRect(TX0 + 42, TY0 + 189, 11, 20);
+
+        // emit dot on right edge: pulses at every beat, including a ghost
+        // pulse at exactly t = LOOP so frame 299 matches frame 0
+        for (let k = 0; k <= 3; k++) {
+          const u2 = (p - k * P) / 0.5;
+          if (u2 <= 0 || u2 >= 1) continue;
+          const f = (1 - u2) * (1 - u2);
+          ctx.save();
+          ctx.shadowColor = GREEN;
+          ctx.shadowBlur = 18 * f;
+          ctx.fillStyle = "rgba(63,185,80," + (0.35 + 0.6 * f).toFixed(3) + ")";
+          ctx.beginPath();
+          ctx.arc(TX1 + 12, CY, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      // packet capsules: main packets (one per beat) + small streaks
+      const LANES = [-4, 3, -1];
+      const MINI_LANES = [7, -8, 2];
+      function drawPacket(x, y, w, h, alpha, glow, mini) {
+        if (alpha <= 0.002) return;
+        // trail
+        const tl = mini ? 64 : 116;
+        const g = ctx.createLinearGradient(x - tl, 0, x, 0);
+        const ta = (mini ? 0.14 : 0.3) * alpha * (0.55 + 0.45 * glow);
+        g.addColorStop(0, "rgba(63,185,80,0)");
+        g.addColorStop(1, "rgba(63,185,80," + ta.toFixed(4) + ")");
+        ctx.strokeStyle = g;
+        ctx.lineWidth = mini ? 3 : 5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x - tl, y + 0.5);
+        ctx.lineTo(x - w * 0.3, y + 0.5);
+        ctx.stroke();
+        // capsule
+        ctx.save();
+        ctx.shadowColor = GREEN;
+        ctx.shadowBlur = (mini ? 8 : 13) + (mini ? 10 : 22) * glow;
+        const cg = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+        cg.addColorStop(0, "rgba(63,185,80," + (alpha * (0.75 + 0.25 * glow)).toFixed(4) + ")");
+        cg.addColorStop(1, "rgba(126,231,135," + (alpha * (0.85 + 0.15 * glow)).toFixed(4) + ")");
+        ctx.fillStyle = cg;
+        rr(x - w / 2, y - h / 2, w, h, h / 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawPackets(p) {
+        // small streaks: depart mid-beat, quick transit, no flash
+        for (let k = 0; k < 3; k++) {
+          const dep = k * P + P * 0.5;
+          const dur = P * 0.44;
+          const u = (p - dep) / dur;
+          if (u <= 0 || u >= 1) continue;
+          const e = Math.pow(u, 1.45);
+          const x = LX + (RX - LX) * e;
+          const alpha = cl(u / 0.12) * cl((1 - u) / 0.1) * 0.45;
+          drawPacket(x, CY + MINI_LANES[k], 16, 5, alpha, 0, true);
+        }
+        // main packets
+        for (let k = 0; k < 3; k++) {
+          const u = (p - k * P) / TRAVEL;
+          if (u <= 0 || u >= 1) continue;
+          const e = Math.pow(u, 1.45); // slight acceleration through the tunnel
+          const x = LX + (RX - LX) * e;
+          const glow = Math.pow(Math.sin(Math.PI * cl((u - 0.12) / 0.76)), 2); // mid-tunnel pulse
+          const alpha = cl(u / 0.07) * cl((1 - u) / 0.06);
+          drawPacket(x, CY + LANES[k], 30, 9, alpha, glow, false);
+        }
+      }
+
+      // arrivals: packet k departs at k*P, lands at k*P + TRAVEL (0.35 s
+      // before the next beat), triggering flash + rename + next departure
+      function arrivals(p) {
+        const out = [];
+        for (let k = 0; k < 3; k++) {
+          const a = k * P + TRAVEL;
+          const uf = (p - a) / 0.35; // flash envelope
+          const un = (p - a) / REN; // rename crossfade
+          out.push({ a: a, flash: uf > 0 && uf < 1 ? (1 - uf) * (1 - uf) : 0, rename: cl(un), k: k });
+        }
+        return out;
+      }
+
+      function drawAddressBar(p) {
+        const arr = arrivals(p);
+        const flash = Math.max(arr[0].flash, arr[1].flash, arr[2].flash);
+
+        // pill
+        ctx.save();
+        if (flash > 0.002) {
+          ctx.shadowColor = GREEN;
+          ctx.shadowBlur = 30 * flash;
+        } else {
+          ctx.shadowColor = "rgba(0,0,0,0.45)";
+          ctx.shadowBlur = 24;
+          ctx.shadowOffsetY = 6;
+        }
+        ctx.fillStyle = WIN;
+        rr(PX0, PY0, PX1 - PX0, PY1 - PY0, 40);
+        ctx.fill();
+        ctx.restore();
+
+        // border (brightens toward green on arrival)
+        const bc = flash > 0 ? "rgba(63,185,80," + (0.22 + 0.6 * flash).toFixed(3) + ")" : "rgba(240,246,252,0.13)";
+        ctx.strokeStyle = bc;
+        ctx.lineWidth = 1.5;
+        rr(PX0 + 0.75, PY0 + 0.75, PX1 - PX0 - 1.5, PY1 - PY0 - 1.5, 40);
+        ctx.stroke();
+
+        // inner flash wash
+        if (flash > 0.002) {
+          ctx.fillStyle = "rgba(63,185,80," + (0.1 * flash).toFixed(4) + ")";
+          rr(PX0 + 2, PY0 + 2, PX1 - PX0 - 4, PY1 - PY0 - 4, 38);
+          ctx.fill();
+        }
+
+        // inlet glow where packets land
+        if (flash > 0.002) {
+          const g = ctx.createRadialGradient(PX0 + 4, CY, 2, PX0 + 4, CY, 70);
+          g.addColorStop(0, "rgba(126,231,135," + (0.3 * flash).toFixed(4) + ")");
+          g.addColorStop(1, "rgba(126,231,135,0)");
+          ctx.fillStyle = g;
+          ctx.fillRect(PX0 - 70, CY - 70, 140, 140);
+        }
+
+        // lock icon
+        const lx = PX0 + 32,
+          ly = CY;
+        ctx.strokeStyle = "rgba(139,148,158,0.95)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(lx, ly - 4, 6, Math.PI, 0);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(139,148,158,0.95)";
+        rr(lx - 8.5, ly - 4, 17, 13, 3);
+        ctx.fill();
+
+        // url text: https://<subdomain>.t.etun.uk
+        const fs = 22;
+        ctx.font = "400 " + fs + 'px "JetBrains Mono", monospace';
+        ctx.textBaseline = "middle";
+        const x0 = PX0 + 62;
+        const pre = "https://";
+        const suf = ".t.etun.uk";
+        let x = x0;
+        ctx.fillStyle = "rgba(139,148,158,0.95)";
+        ctx.fillText(pre, x, CY);
+        x += ctx.measureText(pre).width;
+        const nameW = ctx.measureText(NAMES[0]).width;
+
+        // which name is showing (rename k swaps NAMES[k] -> NAMES[(k+1)%3];
+        // the k=2 swap returns to NAMES[0] so the loop point shows NAMES[0])
+        let cur = 0,
+          old = null,
+          un = 0;
+        for (const a of arr) {
+          if (p >= a.a && a.rename > 0) {
+            cur = (a.k + 1) % 3;
+            old = a.k;
+            un = a.rename;
+          }
+        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x - 2, PY0 + 2, nameW + 4, PY1 - PY0 - 4);
+        ctx.clip();
+        if (old !== null && un < 1) {
+          // outgoing
+          ctx.fillStyle = "rgba(230,237,243," + (0.95 * (1 - un)).toFixed(4) + ")";
+          ctx.fillText(NAMES[old], x, CY - 9 * un);
+          // incoming
+          ctx.fillStyle = "rgba(230,237,243," + (0.95 * un).toFixed(4) + ")";
+          ctx.fillText(NAMES[cur], x, CY + 9 * (1 - un));
+        } else {
+          ctx.fillStyle = "rgba(230,237,243,0.95)";
+          ctx.fillText(NAMES[cur], x, CY);
+        }
+        ctx.restore();
+        x += nameW;
+        ctx.fillStyle = "rgba(139,148,158,0.95)";
+        ctx.fillText(suf, x, CY);
+      }
+
+      // ---- frame -------------------------------------------------------------
+      let lastP = 0;
+      function renderAt(p) {
+        lastP = p;
+        drawBackground();
+        drawSweeps(p);
+        drawTunnel(p);
+        drawTerminal(p);
+        drawPackets(p);
+        drawAddressBar(p);
+        drawVignette();
+      }
+
+      window.addEventListener("hf-seek", function (e) {
+        renderAt(phase(e.detail.time));
+      });
+      renderAt(0);
+
+      // gate rendering on the monospace face so frame 0 has real glyphs
+      const sizes = ["400 16px", "400 21px", "400 22px", "700 22px"];
+      const fontReady = document.fonts
+        ? Promise.all(sizes.map(function (s) { return document.fonts.load(s + ' "JetBrains Mono"'); })).then(function () { renderAt(lastP); })
+        : Promise.resolve();
+      if (window.__hf && window.__hf.buildReady) {
+        window.__hf.buildReady["hero-canvas"] = fontReady;
+      }
+
+      // empty paused timeline: the scene is canvas-driven via hf-seek
+      if (window.gsap) {
+        window.__timelines = window.__timelines || {};
+        window.__timelines["hero"] = gsap.timeline({ paused: true });
+      }
+    })();
+  </script>
+</template>
