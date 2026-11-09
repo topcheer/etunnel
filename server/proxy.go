@@ -412,24 +412,154 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func landingHTML(cfg Config) string {
+	server := "wss://" + cfg.Domain + cfg.WSPath
 	return `<!doctype html>
-<html><head><meta charset="utf-8"><link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>etunnel</title>
-<style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:640px;padding:2rem}h1{color:#7ee787}code{background:#161b22;padding:.2em .4em;border-radius:4px}pre{background:#161b22;padding:1rem;border-radius:8px;overflow:auto}.brand{display:flex;align-items:center;gap:.7rem;margin:0 0 1.4rem}.brand svg{flex:none}.brand h1{margin:0;font-size:1.5rem}</style>
-</head><body><main>
-<div class="brand">
-  <svg width="48" height="48" viewBox="0 0 512 512" aria-label="etunnel"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>
-  <h1>etunnel is running</h1>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="etunnel - expose any local service to the internet with one command. Instant public HTTPS URLs, automatic TLS, zero signup. 20 language SDKs.">
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>">
+<title>etunnel - your localhost, on the internet</title>
+<style>
+:root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950;--green2:#7ee787}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);line-height:1.6}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+/* nav */
+nav{display:flex;align-items:center;justify-content:space-between;padding:1rem 2rem;border-bottom:1px solid var(--line);background:rgba(11,14,20,.85);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10}
+nav .logo{display:flex;align-items:center;gap:.6rem;font-weight:700;font-size:1.05rem;color:var(--fg)}
+nav .links{display:flex;gap:1.5rem;font-size:.85rem}
+nav .links a{color:var(--dim)}nav .links a:hover{color:var(--fg)}
+/* hero */
+.hero{position:relative;min-height:78vh;display:flex;align-items:center;justify-content:center;overflow:hidden;border-bottom:1px solid var(--line)}
+.hero video,.hero .fallback{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.5}
+.hero .fallback{background:radial-gradient(ellipse at 50% 60%,rgba(63,185,80,.12),transparent 60%),repeating-linear-gradient(90deg,transparent 0 79px,rgba(230,237,243,.03) 79px 80px)}
+.hero .inner{position:relative;text-align:center;padding:4rem 1.5rem;max-width:860px}
+.hero .badge{display:inline-block;border:1px solid var(--line);background:rgba(13,17,23,.7);border-radius:99px;padding:.3rem .9rem;font-size:.78rem;color:var(--dim);margin-bottom:1.4rem}
+.hero h1{font-size:clamp(1.9rem,5vw,3.4rem);font-weight:800;letter-spacing:-.02em;margin-bottom:1rem}
+.hero h1 .g{color:var(--green2)}
+.hero p{color:var(--dim);font-size:1.02rem;max-width:34rem;margin:0 auto 2rem}
+.cmd{display:flex;align-items:center;gap:.8rem;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.85rem 1.1rem;max-width:30rem;margin:0 auto 2rem;font-size:.95rem}
+.cmd .dollar{color:var(--green2)}
+.cmd .copy{margin-left:auto;color:var(--dim);cursor:pointer;font-size:.78rem;border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;background:none}
+.cmd .copy:hover{color:var(--fg);border-color:var(--dim)}
+.cta{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;border-radius:8px;padding:.75rem 1.5rem;font-weight:700;font-size:.95rem;border:1px solid transparent}
+.btn.primary{background:var(--green);color:#0b0e14}.btn.primary:hover{background:var(--green2);text-decoration:none}
+.btn.ghost{border-color:var(--line);color:var(--fg);background:rgba(13,17,23,.6)}.btn.ghost:hover{border-color:var(--dim);text-decoration:none}
+/* sections */
+section{max-width:1080px;margin:0 auto;padding:4.5rem 1.5rem}
+section h2{font-size:1.5rem;letter-spacing:-.01em;margin-bottom:.5rem}
+section .sub{color:var(--dim);margin-bottom:2.2rem;font-size:.95rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.5rem}
+.card .ic{font-size:1.4rem;margin-bottom:.7rem}
+.card h3{font-size:1rem;margin-bottom:.4rem}
+.card p{color:var(--dim);font-size:.87rem}
+/* code demo */
+.demo{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:760px){.demo{grid-template-columns:1fr}}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.2rem;font-size:.83rem;overflow:auto;line-height:1.75}
+pre .cm{color:var(--dim)}pre .k{color:#ff7b72}pre .s{color:#a5d6ff}pre .f{color:#d2a8ff}pre .g{color:var(--green2)}
+pre .out{color:var(--green2)}
+/* pricing strip */
+.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
+.tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.6rem}
+.tier .name{font-weight:700;font-size:1.05rem}
+.tier .price{font-size:1.9rem;font-weight:800;margin:.5rem 0 .3rem}
+.tier .price small{font-size:.8rem;color:var(--dim);font-weight:400}
+.tier ul{list-style:none;margin:.9rem 0 1.3rem;color:var(--dim);font-size:.85rem}
+.tier ul li::before{content:"¹3 ";color:var(--green)}
+.tier.pro{border-color:rgba(63,185,80,.5)}
+/* footer */
+footer{border-top:1px solid var(--line);padding:2rem;text-align:center;color:var(--dim);font-size:.8rem}
+footer .sep{margin:0 .6rem}
+</style></head><body>
+<nav>
+  <div class="logo">
+    <svg width="26" height="26" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>
+    etunnel
+  </div>
+  <div class="links">
+    <a href="#features">features</a><a href="#quickstart">quickstart</a><a href="#pricing">pricing</a><a href="https://github.com/topcheer/etunnel">github</a>
+  </div>
+</nav>
+
+<div class="hero">
+  <video autoplay muted loop playsinline preload="metadata">
+    <source src="/assets/hero-loop.webm" type="video/webm">
+    <source src="/assets/hero-loop.mp4" type="video/mp4">
+  </video>
+  <div class="fallback"></div>
+  <div class="inner">
+    <div class="badge">zero signup &middot; automatic TLS &middot; 20 language SDKs</div>
+    <h1>your localhost,<br>on the <span class="g">internet</span></h1>
+    <p>One command exposes any local service through NAT and firewalls to a live public HTTPS URL. No account, no config, no waiting.</p>
+    <div class="cmd"><span class="dollar">$</span><span id="c">npx @easytunnel/et-sdk 3000</span><button class="copy" onclick="navigator.clipboard().writeText?navigator.clipboard.writeText(document.getElementById('c').textContent):0;this.textContent='copied'">copy</button></div>
+    <div class="cta">
+      <a class="btn primary" href="/pricing">Get your tunnel</a>
+      <a class="btn ghost" href="https://github.com/topcheer/etunnel">Star on GitHub</a>
+    </div>
+  </div>
 </div>
-<p>Expose your local service to the internet in one line:</p>
-<pre>etunnel -s wss://` + cfg.Domain + cfg.WSPath + ` 8080</pre>
-<p>or from Go:</p>
-<pre>t, _ := etunnel.Connect(ctx, etunnel.Options{Server: "wss://` + cfg.Domain + cfg.WSPath + `", LocalAddr: ":8080"})
-fmt.Println(t.URL())</pre>
-<p>Anonymous tunnels are free: a random subdomain, 4h lifetime, 1 Mbps.
-Register for paid plans (custom subdomains, longer lifetime, 10 Mbps):
-<pre>curl -X POST https://` + cfg.Domain + `/api/register -d '{"email":"you@example.com"}'</pre>
-</p>
-</main></body></html>`
+
+<section id="features">
+  <h2>Built for developers</h2>
+  <p class="sub">Everything localhost.run and friends do, without the signup wall.</p>
+  <div class="grid">
+    <div class="card"><div class="ic">&#128274;</div><h3>Instant HTTPS</h3><p>Wildcard TLS on every subdomain. Your webhook receivers, OAuth callbacks and payment IPNs work on the first try.</p></div>
+    <div class="card"><div class="ic">&#9889;</div><h3>Zero signup</h3><p>Anonymous tunnels are free: random subdomain, 4-hour lifetime, 1 Mbps. No email, no credit card, no waitlist.</p></div>
+    <div class="card"><div class="ic">&#128187;</div><h3>Any language</h3><p>20 dependency-light SDKs - Go, Node, Python, Rust, Swift, Java, C, Elixir... Embed the tunnel straight in your app.</p></div>
+    <div class="card"><div class="ic">&#128200;</div><h3>WebSocket ready</h3><p>Full 101-upgrade pass-through, verified end-to-end. Real-time apps, sockets and streams just work.</p></div>
+    <div class="card"><div class="ic">&#127760;</div><h3>Self-hostable</h3><p>The server is one Go binary. Point it at your domain, get your own tunnel infra in minutes.</p></div>
+    <div class="card"><div class="ic">&#128179;</div><h3>Pay for more</h3><p>Custom subdomains, 30-day tunnels and 10 Mbps from $3/mo - card, PayPal or crypto.</p></div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <h2>Quickstart</h2>
+  <p class="sub">From nothing to a public URL in under 10 seconds.</p>
+  <div class="demo">
+<pre><span class="cm"># Node - no install</span>
+$ npx @easytunnel/et-sdk 3000
+
+<span class="out">TUNNEL_URL: https://quiet-frog-42.` + cfg.Domain + `</span>
+
+<span class="cm"># Go - embed it</span>
+<span class="k">import</span> sdk <span class="s">"github.com/topcheer/etunnel/sdk"</span>
+
+t, _ := sdk.<span class="f">Connect</span>(ctx, sdk.Options{
+    Server:    <span class="s">"` + server + `"</span>,
+    LocalAddr: <span class="s">"127.0.0.1:3000"</span>,
+})
+fmt.<span class="f">Println</span>(t.<span class="f">URL</span>()) <span class="cm">// live</span></pre>
+<pre><span class="cm"># Python</span>
+$ pip install etunnel && etunnel 3000
+
+<span class="cm"># Rust / Swift / Java / C ...</span>
+<span class="cm"># 18 more - see sdks/README.md</span>
+
+<span class="cm"># Self-host the server</span>
+$ etunneld --domain t.example.com \     --tls-mode dns --dns-provider cloudflare
+
+<span class="out">etunneld ready: domain=t.example.com</span></pre>
+  </div>
+</section>
+
+<section id="pricing">
+  <h2>Pricing</h2>
+  <p class="sub">Start free. Upgrade when your demo needs a name of its own.</p>
+  <div class="tiers">
+    <div class="tier"><div class="name">Free</div><div class="price">$0</div><ul><li>random subdomain</li><li>4-hour tunnels</li><li>1 Mbps</li><li>no account needed</li></ul><a class="btn ghost" href="#quickstart">Run it now</a></div>
+    <div class="tier pro"><div class="name">Starter</div><div class="price">$3<small>/mo</small></div><ul><li>custom subdomain</li><li>72-hour tunnels</li><li>10 Mbps</li><li>API key + portal</li></ul><a class="btn primary" href="/pricing">Subscribe</a></div>
+    <div class="tier"><div class="name">Pro</div><div class="price">$9<small>/mo</small></div><ul><li>5 custom subdomains</li><li>30-day tunnels</li><li>10 Mbps</li><li>priority support</li></ul><a class="btn primary" href="/pricing">Subscribe</a></div>
+  </div>
+</section>
+
+<footer>
+  <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a>
+  <br><span style="opacity:.6">etunnel - one binary, twenty SDKs, your localhost worldwide.</span>
+</footer>
+</body></html>`
 }
 
 func notFoundHTML(cfg Config, host string) string {

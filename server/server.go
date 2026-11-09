@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -77,6 +78,14 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/webhooks/paypal", s.handlePayPalWebhook)
 	mux.HandleFunc("/webhooks/nowpayments", s.handleNowPaymentsIPN)
 	mux.HandleFunc("/billing/crypto/success", s.handleCryptoSuccess)
+	// Serve bundled brand assets (hero video etc.): local ./assets first,
+	// then the server install dir.
+	for _, dir := range []string{"assets", "/opt/etunnel/assets"} {
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(dir))))
+			break
+		}
+	}
 	mux.HandleFunc("/", s.handleProxy)
 	s.handler = mux
 	s.buildAdmin()
