@@ -110,9 +110,40 @@ func mapToHeader(m map[string][]string) http.Header {
 	return h
 }
 
+// maxClientStreams bounds concurrently open streams driven by the server. It
+// matches the server's default per-tunnel limit; a hostile or buggy server
+// must not be able to exhaust client memory, file descriptors and goroutines
+// by opening streams without end (#11).
+const maxClientStreams = 256
+
 // registerClientStream creates and registers the stream for an incoming Req.
 // Must run on the reader goroutine before any stream frames are dispatched.
+// It returns nil when the stream is refused (session closing, the server
+// replayed a live id, or the limit is reached) and tells the server so with an
+// RST.
 func (t *Tunnel) registerClientStream(id uint32) *clientStream {
+	t.mu.Lock()
+	select {
+	case <-t.closed:
+		t.mu.Unlock()
+		return nil
+	default:
+	}
+	if _, dup := t.streams[id]; dup {
+		// A well-behaved server never reuses a live id; keep the existing
+		// stream instead of silently orphaning it (and its goroutines).
+		t.mu.Unlock()
+		t.logf("etunnel: server reused live stream id %d; refusing it", id)
+		_ = t.sendRst(id)
+		return nil
+	}
+	if len(t.streams) >= maxClientStreams {
+		t.mu.Unlock()
+		t.logf("etunnel: refusing stream %d: %d concurrent streams is the limit", id, maxClientStreams)
+		_ = t.sendRst(id)
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(t.ctx)
 	pr, pw := io.Pipe()
 	st := &clientStream{
@@ -124,14 +155,6 @@ func (t *Tunnel) registerClientStream(id uint32) *clientStream {
 		reqPr:  pr,
 		reqPw:  pw,
 		done:   make(chan struct{}),
-	}
-	t.mu.Lock()
-	select {
-	case <-t.closed:
-		t.mu.Unlock()
-		cancel()
-		return nil
-	default:
 	}
 	t.streams[id] = st
 	t.mu.Unlock()
