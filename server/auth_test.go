@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -199,7 +200,13 @@ func TestOAuthLoginRedirectsToGithub(t *testing.T) {
 	}
 }
 
-func TestAppleKeyPEMNormalized(t *testing.T) {
+func TestAppleKeyPEMFromFileAndInline(t *testing.T) {
+	dir := t.TempDir()
+	f := dir + "/k.p8"
+	os.WriteFile(f, []byte("-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n"), 0o600)
+	if got := loadPEMValue(f); !strings.Contains(got, "\n") {
+		t.Fatal("file path not loaded")
+	}
 	raw := "-----BEGIN PRIVATE KEY-----\\nMIGabc\\n-----END PRIVATE KEY-----"
 	t.Setenv("APPLE_PRIVATE_KEY", raw)
 	cfg := oauthFromEnv()

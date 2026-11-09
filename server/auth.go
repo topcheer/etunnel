@@ -57,8 +57,7 @@ func oauthFromEnv() oauthConfig {
 		appleID:       os.Getenv("APPLE_CLIENT_ID"),
 		appleTeam:     os.Getenv("APPLE_TEAM_ID"),
 		appleKey:      os.Getenv("APPLE_KEY_ID"),
-		// systemd EnvironmentFile keeps "\n" literal; PEM needs real newlines.
-		appleKeyPEM: strings.ReplaceAll(os.Getenv("APPLE_PRIVATE_KEY"), `\n`, "\n"),
+		appleKeyPEM:   loadPEMValue(os.Getenv("APPLE_PRIVATE_KEY")),
 	}
 }
 
@@ -450,6 +449,9 @@ func (s *Server) appleClientSecret() string {
 	signing := header + "." + claims
 	key := parseAppleKey(s.auth.appleKeyPEM)
 	if key == nil {
+		s.logf("apple: private key unparseable (pemLen=%d, hasNewline=%v, team=%q kid=%q sub=%q)",
+			len(s.auth.appleKeyPEM), strings.Contains(s.auth.appleKeyPEM, "\n"),
+			s.auth.appleTeam, s.auth.appleKey, s.auth.appleID)
 		return ""
 	}
 	h := sha256.Sum256([]byte(signing))
@@ -486,3 +488,18 @@ func b64json(v any) string {
 }
 
 var _ = io.Discard
+
+// loadPEMValue returns PEM text from either a file path (leading "/",
+// recommended: systemd env files do not decode escapes) or an inline value
+// whose literal "\n" sequences are converted to real newlines.
+func loadPEMValue(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "/") {
+		b, err := os.ReadFile(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	return strings.ReplaceAll(v, `\n`, "\n")
+}
