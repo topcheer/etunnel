@@ -187,7 +187,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
   <pre><code>npx @easytunnel/et-sdk 3000</code></pre>
 </section>
 </main>
-<footer class="foot">{{.Domain}} &middot; <a href="/">home</a> &middot; <a href="https://github.com/topcheer/etunnel">github</a> &middot; <a href="/me">account</a></footer>
+<footer class="foot">{{.Domain}} &middot; <a href="/">home</a> &middot; <a href="https://github.com/topcheer/etunnel">github</a> &middot; <a href="/me">account</a> &middot; <a href="/terms">terms</a> &middot; <a href="/privacy">privacy</a></footer>
 <script>
 async function pay(btn, tier, provider){
   const msg = document.getElementById('msg');

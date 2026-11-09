@@ -118,7 +118,7 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;marg
 {{if .Providers}}{{range .Providers}}<a class="prov" href="/auth/{{.ID}}/login">{{.Icon}}<span>Continue with {{.Label}}</span><span class="arrow">&#8594;</span></a>{{end}}{{else}}<p class="none">No sign-in provider is configured on this server.</p>{{end}}
 <p class="fine">The provider returns your email address and display name, and that is what the account is built from. Free tunnels need no account at all.</p>
 </div>
-<div class="foot"><a href="/">&#8592; etunnel home</a><span>&middot;</span><a href="/pricing">pricing</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">docs</a></div>
+<div class="foot"><a href="/">&#8592; etunnel home</a><span>&middot;</span><a href="/pricing">pricing</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">docs</a><span>&middot;</span><a href="/terms">terms</a><span>&middot;</span><a href="/privacy">privacy</a></div>
 </div>
 </body></html>`
 

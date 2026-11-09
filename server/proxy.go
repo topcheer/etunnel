@@ -594,7 +594,7 @@ flowchart LR
 </section>
 
 <footer>
-  <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a>
+  <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a><span class="sep">&middot;</span><a href="/terms">Terms</a><span class="sep">&middot;</span><a href="/privacy">Privacy</a>
   <br><span style="opacity:.6">etunnel - one binary, twenty SDKs, your localhost worldwide.</span>
 <script>
 function showLang(btn){

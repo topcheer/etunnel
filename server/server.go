@@ -66,6 +66,8 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/api/tiers", s.handleTiers)
 	mux.HandleFunc("/pricing", s.handlePricing)
+	mux.HandleFunc("/terms", s.handleTerms)
+	mux.HandleFunc("/privacy", s.handlePrivacy)
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/me", s.handleMe)
