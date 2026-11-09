@@ -196,7 +196,11 @@ func (w *wildcardCert) obtain(ctx context.Context) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("acme obtain %v: %w", domains, err)
 	}
 
-	if err := os.WriteFile(w.certPath, res.Certificate, 0o600); err != nil {
+	// Fullchain: res.Certificate is the bare leaf; IssuerCertificate is the
+	// intermediate. Clients with strict CA stores (node/undici, openssl,
+	// JVM) reject leaf-only servers - macOS curl masks it via AIA fetching.
+	fullchain := append(append([]byte{}, res.Certificate...), res.IssuerCertificate...)
+	if err := os.WriteFile(w.certPath, fullchain, 0o600); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(w.keyPath, res.PrivateKey, 0o600); err != nil {
