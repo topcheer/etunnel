@@ -394,3 +394,45 @@ func TestPricingPageMobileShape(t *testing.T) {
 		t.Error("raw Go duration leaked into the pricing table")
 	}
 }
+
+// Retention contract (agreed with the GC work in #28): a lapsed paid account
+// keeps a marker so it is never pruned like an anonymous free account.
+func TestDowngradeKeepsEverPaidMarker(t *testing.T) {
+	s := newBillingTestServer(t)
+	if _, err := s.activate("lapse2@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.accounts.LookupEmail("lapse2@x.com")
+	if !a.EverPaid() {
+		t.Fatal("active paid account must report EverPaid")
+	}
+	if !a.LapsedAt.IsZero() {
+		t.Fatal("LapsedAt set before any lapse")
+	}
+	s.reapExpiredTiers(time.Now().Add(31 * 24 * time.Hour)) // force expiry
+	a, _ = s.accounts.LookupEmail("lapse2@x.com")
+	if a.Tier != "free" {
+		t.Fatalf("tier after lapse: %s", a.Tier)
+	}
+	if a.LapsedAt.IsZero() {
+		t.Fatal("lapse must leave a durable marker")
+	}
+	if !a.EverPaid() {
+		t.Fatal("lapsed account must still report EverPaid (GC guard)")
+	}
+	// first-lapse timestamp is preserved across later passes
+	first := a.LapsedAt
+	time.Sleep(2 * time.Millisecond)
+	s.reapExpiredTiers(time.Now().Add(60 * 24 * time.Hour))
+	a, _ = s.accounts.LookupEmail("lapse2@x.com")
+	if !a.LapsedAt.Equal(first) {
+		t.Fatal("later passes must not overwrite the first lapse time")
+	}
+	// a never-paid free account is NOT protected
+	if b, err := s.accounts.Create("freeonly@x.com", "free"); err == nil {
+		acct, _ := s.accounts.LookupEmail(b.Email)
+		if acct.EverPaid() {
+			t.Fatal("free-only account must not be protected from GC")
+		}
+	}
+}
