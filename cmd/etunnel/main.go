@@ -21,6 +21,7 @@ func main() {
 		local     = flag.String("local", "", "local address to expose (default: 127.0.0.1:<port arg>)")
 		subdomain = flag.String("subdomain", "", "request a custom subdomain (paid plans)")
 		token     = flag.String("token", os.Getenv("ETUNNEL_TOKEN"), "paid plan API key")
+		reconnect = flag.Bool("reconnect", os.Getenv("ETUNNEL_RECONNECT") != "0", "reconnect automatically when the connection drops")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: etunnel [-server URL] [-token KEY] [-subdomain NAME] <local-port-or-addr>\n\n")
@@ -49,13 +50,35 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	t, err := etunnel.Connect(ctx, etunnel.Options{
+	opts := etunnel.Options{
 		Server:    *server,
 		LocalAddr: *local,
 		Subdomain: *subdomain,
 		Token:     *token,
 		Client:    "etunnel-cli/1.0",
-	})
+		OnLog: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "etunnel: "+format+"\n", args...)
+		},
+	}
+	// Auto-reconnect by default: a dropped connection (network blip, server
+	// deploy) is re-dialled with backoff, and the resume token keeps the same
+	// public URL. -reconnect=false restores the one-shot behaviour.
+	var t *etunnel.Tunnel
+	if *reconnect {
+		rt, rerr := etunnel.ConnectReconnecting(ctx, opts)
+		if rerr != nil {
+			fmt.Fprintln(os.Stderr, "etunnel:", rerr)
+			os.Exit(1)
+		}
+		defer rt.Close("client closed")
+		fmt.Printf("\n  %s  ->  http://%s\n", rt.URL(), *local)
+		fmt.Println()
+		<-rt.Done()
+		fmt.Fprintln(os.Stderr, "\netunnel: closed")
+		return
+	}
+	var err error
+	t, err = etunnel.Connect(ctx, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "etunnel:", err)
 		os.Exit(1)
