@@ -18,8 +18,8 @@ sequenceDiagram
     participant V as visitor
 
     S->>E: WS connect (subprotocol etunnel-v1)
-    S->>E: hello {proto, token?, subdomain?}
-    E-->>S: welcome {url, hostname, plan, expiresAt}
+    S->>E: hello {proto, token?, subdomain?, resume?}
+    E-->>S: welcome {url, hostname, plan, expiresAt, resumeToken?}
 
     V->>E: HTTPS request (Host: sub.domain)
     E->>S: req {streamId, method, path, headers}
@@ -63,23 +63,41 @@ control messages start with `{`, frames with a kind byte.)
 Client → server:
 
 ```json
-{"type":"hello","proto":1,"subdomain":"optional","token":"optional","client":"etunnel-x/1.0"}
+{"type":"hello","proto":1,"subdomain":"optional","token":"optional",
+ "client":"etunnel-x/1.0","resume":"optional"}
 ```
 
 - `proto` must be `1`
 - `subdomain` requires a paid plan; free tunnels get a random
   `adjective-noun-nn` name
 - `token` is the API key from `/api/register`
+- `resume` is the `resumeToken` from a **previous** `welcome`. When valid the
+  server hands back the **same subdomain** the client had before the
+  disconnect, skipping plan gating (the token itself is the grant). Rejected
+  (tampered/expired) tokens fall through to the normal allocation path, so an
+  old client that never sends it is unaffected. This is what makes a
+  reconnect — including after a server restart — keep the hostname that was
+  already shared with other people.
 
 Server → client (success):
 
 ```json
 {"type":"welcome","proto":1,"hostname":"quick-fox-42.t.example.com",
  "subdomain":"quick-fox-42","url":"https://quick-fox-42.t.example.com",
- "expiresAt":1762548000,"plan":"Free"}
+ "expiresAt":1762548000,"plan":"Free","resumeToken":"eyJzdWIiOi..."}
 ```
 
 `expiresAt` is unix seconds (0/absent = no TTL limit).
+
+`resumeToken` is an **opaque, self-validating** token: the server signs
+`subdomain|expiry` with HMAC-SHA256 keyed by `SESSION_SECRET`, so no
+server-side session state is needed and the token survives a server restart
+(client SDKs must treat it as a black box). Default TTL is 30 minutes —
+enough to cover a restart plus several backoff rounds. **Operational
+requirement:** a server that wants resume-across-restarts must run with a
+stable `SESSION_SECRET`; without it the key is generated per process and
+every token dies with the process (the reconnect then falls back to a fresh
+random subdomain).
 
 Server → client (failure):
 
