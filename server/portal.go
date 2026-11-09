@@ -206,7 +206,7 @@ body{padding-bottom:4rem}
 <main class="wrap">
 <header class="pagehead">
   <h1>Account</h1>
-  <p class="sub">Signed in as <b>{{.Email}}</b> via {{.Provider}}{{if .Name}} &middot; {{.Name}}{{end}}</p>
+  <p class="sub">Signed in as <b>{{.Email}}</b>{{if .Provider}} via {{.Provider}}{{end}}{{if .Name}} &middot; {{.Name}}{{end}}</p>
 </header>
 <div class="grid">
   <section class="card">

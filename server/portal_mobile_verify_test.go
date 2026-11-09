@@ -55,3 +55,24 @@ func TestPortalPagesDeclareViewport(t *testing.T) {
 		t.Fatalf("/login is missing the viewport meta (%d bytes rendered)", lw.Body.Len())
 	}
 }
+
+// The account header must read cleanly for accounts without an OAuth provider
+// (register/checkout-created): "Signed in as x@y" with no dangling "via".
+func TestAccountHeaderWithoutProvider(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth.sessionSecret = "t"
+	if _, err := s.activate("noprov@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/me", nil)
+	r.AddCookie(s.sessionCookie("noprov@x.com"))
+	rec := httptest.NewRecorder()
+	s.handleMe(rec, r)
+	body := rec.Body.String()
+	if strings.Contains(body, "via <") || strings.Contains(body, "</b> via ") {
+		t.Fatalf("dangling 'via' in the account header: %s", body[:200])
+	}
+	if !strings.Contains(body, "Signed in as") {
+		t.Fatal("account header missing")
+	}
+}
