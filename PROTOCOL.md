@@ -9,6 +9,32 @@ The connection carries two kinds of messages:
 The server is authoritative for hostnames, plans and lifetimes. Either side
 may close at any time; the other side treats that as end-of-tunnel.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as SDK client
+    participant E as etunneld
+    participant L as local service
+    participant V as visitor
+
+    S->>E: WS connect (subprotocol etunnel-v1)
+    S->>E: hello {proto, token?, subdomain?}
+    E-->>S: welcome {url, hostname, plan, expiresAt}
+
+    V->>E: HTTPS request (Host: sub.domain)
+    E->>S: req {streamId, method, path, headers}
+    E->>S: DATA frames + FIN (request body)
+    S->>L: HTTP request
+    L-->>S: response
+    S->>E: res {streamId, status, headers}
+    S->>E: DATA frames + FIN (response body)
+    E-->>V: HTTP response
+
+    E->>S: ping (every 30s)
+    S->>E: pong
+    E->>S: bye {reason} (on TTL expiry / shutdown)
+```
+
 ## Binary frame layout (big endian)
 
 ```
@@ -84,11 +110,15 @@ Hop-by-hop headers (`Connection`, `Transfer-Encoding`, `Keep-Alive`, `Te`,
 requests** (those carrying `Connection: Upgrade` / an `Upgrade` header),
 where `Connection` and `Upgrade` are forwarded verbatim and `Sec-WebSocket-*`
 headers pass through, so a 101 response turns the stream into a raw
-bidirectional pipe (§5). The server adds `X-Forwarded-For` (appending),
-`X-Forwarded-Proto`, `X-Real-Ip`, and `X-Forwarded-Host` (the original
-public `Host`, prepended to any existing chain) — the canonical Go SDK
-restores that value as the request `Host` the local service sees; other
-SDKs should read the header for absolute URLs and same-origin checks.
+bidirectional pipe (§5).
+
+`etunneld` is the edge, so it **rewrites** rather than extends the forwarding
+headers: any client-supplied `X-Forwarded-For`, `X-Forwarded-Host` or
+`X-Real-Ip` is discarded and replaced with the observed peer address
+(`X-Forwarded-For`), the public `Host` (`X-Forwarded-Host`) and the same peer
+IP (`X-Real-Ip`), alongside `X-Forwarded-Proto`. The canonical Go SDK restores
+`X-Forwarded-Host` as the request `Host` the local service sees; other SDKs
+should read the header for absolute URLs and same-origin checks.
 
 The client executes the request against the local service and answers:
 
@@ -100,7 +130,24 @@ The client executes the request against the local service and answers:
 followed by `DATA` frames with the response body and `FIN` at the end.
 
 Timeouts: the server waits ~30s for `res` (then answers the visitor with 504);
-if the tunnel dies mid-exchange the visitor gets 502.
+if the tunnel dies mid-exchange the visitor gets 502. A stream that stops
+making progress is reset on its own (`RST`) instead of stalling the whole
+tunnel.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: req
+    Open --> Open: DATA (body chunks)
+    Open --> HalfClosed: FIN (request body complete)
+    HalfClosed --> Open: res + DATA
+    Open --> HalfClosedResp: res + DATA
+    HalfClosedResp --> Closed: FIN
+    HalfClosed --> Closed: FIN
+    Open --> Aborted: RST
+    HalfClosed --> Aborted: RST
+    Aborted --> [*]
+    Closed --> [*]
+```
 
 ### 3. Heartbeat
 

@@ -2,7 +2,6 @@
 
 <img src="assets/logo.svg" alt="etunnel" width="360">
 
-
 [![npm](https://img.shields.io/npm/v/@easytunnel/et-sdk?label=npm%20%40easytunnel%2Fet-sdk)](https://www.npmjs.com/package/@easytunnel/et-sdk)
 [![crates.io](https://img.shields.io/crates/v/etunnel?label=crates.io%20etunnel)](https://crates.io/crates/etunnel)
 [![PyPI](https://img.shields.io/pypi/v/etunnel?label=PyPI%20etunnel)](https://pypi.org/project/etunnel/)
@@ -15,22 +14,148 @@
 [![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)
 [![Go](https://img.shields.io/github/go-mod/go-version/topcheer/etunnel?label=Go%20module)](https://pkg.go.dev/github.com/topcheer/etunnel)
 [![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
+[![tests](https://img.shields.io/badge/tests-go%20test%20-race-brightgreen)](integration_test.go)
 
-A reverse-tunnel service like localhost.run / cloudflare tunnel, but **zero
-registration** and **one line of code** to use: an SDK client connects out to
-the server, gets a random subdomain with an automatically issued TLS
-certificate, and anything on the internet can then reach the developer's local
-service through `https://<subdomain>.<domain>`.
+**Your localhost, on the internet.** etunnel gives a service running on your
+machine a public HTTPS URL by opening one outbound WebSocket - no inbound port,
+no router configuration, no firewall rule, no signup.
 
+- **Instant TLS** - the server holds a wildcard certificate, so every tunnel is
+  `https://` from the first request. Webhooks, OAuth callbacks and payment IPNs
+  work on the first try.
+- **Anonymous by default** - a random subdomain, 4-hour lifetime, 1 Mbps, no
+  account. A paid API key adds custom subdomains, longer lifetimes and 10 Mbps.
+- **20 SDKs, one protocol** - embed the tunnel in your own process (Go, Node,
+  Python, Java, Kotlin, Scala, C#, Rust, Swift, Dart, Ruby, PHP, Perl, Lua,
+  Clojure, Elixir, Deno, TypeScript, C, C++).
+- **Self-hostable** - the server is a single Go binary with ACME built in.
+- **WebSocket pass-through** - the Go SDK relays 101 upgrades as a raw byte
+  pipe, so realtime apps work through the tunnel too.
+
+Live deployment: `wss://t.etun.uk/tunnel`, tunnels at
+`https://<name>.t.etun.uk`. Point any client at your own server with
+`-server` / `ETUNNEL_SERVER` / the first `connect()` argument.
+
+## How it works
+
+```mermaid
+flowchart LR
+  V["visitor<br/>https://quiet-frog-42.t.etun.uk"] -->|HTTPS 443| E["etunneld<br/>wildcard TLS<br/>plan limits"]
+  E -->|"wss /tunnel<br/>one multiplexed socket"| C["SDK client<br/>inside your process"]
+  C -->|HTTP/1.1| A["localhost:3000<br/>your service"]
+  E -.->|"101 upgrade<br/>raw byte pipe"| A
 ```
-┌──────────┐  wss (multiplexed HTTP streams)   ┌─────────────┐  https
-│ your app  │ ───────────────────────────────▶ │  etunneld   │ ◀──── internet
-│ :3000     │ ◀─────────────────────────────── │ + auto-TLS  │       visitors
-└──────────┘        one outbound WS            └─────────────┘   *.t.etun.uk
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Your app
+    participant SDK as SDK client
+    participant Edge as etunneld
+    participant Local as localhost:3000
+    participant V as Visitor
+
+    App->>SDK: connect(server, 3000)
+    SDK->>Edge: wss /tunnel (subprotocol etunnel-v1) + hello
+    Edge-->>SDK: welcome {url, hostname, plan, ttl}
+    SDK-->>App: public URL
+
+    V->>Edge: GET /webhook (Host: quiet-frog-42.t.etun.uk)
+    Edge->>SDK: {type: req, streamId: 1} + body frames
+    SDK->>Local: GET /webhook
+    Local-->>SDK: 200 OK + body
+    SDK->>Edge: data frames + fin
+    Edge-->>V: 200 OK
 ```
 
-**Live deployment**: `wss://t.etun.uk/tunnel` — tunnels live at
-`https://<name>.t.etun.uk`.
+Nothing is stored: the server just matches the `Host` header to a live session,
+allocates a stream id and relays frames. When the client disconnects (or the
+plan TTL expires) the subdomain is released immediately.
+
+## Quickstart
+
+### CLI - one command, any SDK
+
+```sh
+npx @easytunnel/et-sdk 3000
+#   TUNNEL_URL: https://quiet-frog-42.t.etun.uk
+#   plan: Free, expires in 4h
+```
+
+Every SDK's file is also a runnable CLI: `etunnel 3000`,
+`python -m etunnel 3000`, `dotnet run Etunnel.cs 3000`, ...
+
+### Embedded - the tunnel lives inside your process
+
+Go:
+
+```go
+tunnel, err := etunnel.Connect(ctx, etunnel.Options{
+    Server:    "wss://t.etun.uk/tunnel",
+    LocalAddr: "127.0.0.1:3000",
+    // Token: "et_...", Subdomain: "myapp",   // paid plan
+})
+if err != nil {
+    return err
+}
+defer tunnel.Close("app exiting")
+log.Printf("public URL: %s", tunnel.URL())
+```
+
+Node:
+
+```js
+const { connect } = require('@easytunnel/et-sdk');
+const tunnel = await connect('wss://t.etun.uk/tunnel', 3000);
+console.log(tunnel.url);
+```
+
+Python:
+
+```python
+from etunnel import connect
+
+tunnel = connect("wss://t.etun.uk/tunnel", 3000)
+print(tunnel["url"])
+```
+
+PHP:
+
+```php
+$tunnel = Etunnel::connect('wss://t.etun.uk/tunnel', 3000);
+echo $tunnel->url;
+```
+
+Every snippet is published on the landing page of the deployment
+(<https://t.etun.uk>), one tab per language, always in sync with the SDKs.
+
+### All 20 SDKs
+
+| Language | Install | Embed | Docs |
+|---|---|---|---|
+| Go | `go get github.com/topcheer/etunnel/sdk` | `Connect(ctx, Options{...})` | [sdk/](sdk/README.md) |
+| Node.js | `npm install @easytunnel/et-sdk` | `connect(server, 3000)` | [sdks/node](sdks/node/README.md) |
+| TypeScript | `npm install @easytunnel/et-sdk` | `connect(server, 3000)` | [sdks/typescript](sdks/typescript/README.md) |
+| Deno | `deno add jsr:@ggcode/etunnel` | `connect(server, 3000)` | [sdks/deno](sdks/deno/README.md) |
+| Python | `pip install etunnel` | `connect(server, 3000)` | [sdks/python](sdks/python/README.md) |
+| Java | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000, null)` | [sdks/java](sdks/java/README.md) |
+| Kotlin | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000)` | [sdks/kotlin](sdks/kotlin/README.md) |
+| Scala | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000)` | [sdks/scala](sdks/scala/README.md) |
+| C# | single file / `etunnel` NuGet | `await Etunnel.Connect(server, "3000")` | [sdks/csharp](sdks/csharp/README.md) |
+| Rust | `cargo install etunnel` | binary - spawn as child | [sdks/rust](sdks/rust/README.md) |
+| Swift | single file (Foundation) | `try await Etunnel(...).connect()` | [sdks/swift](sdks/swift/README.md) |
+| Dart | `dart pub add etunnel` | `Etunnel.connect(server, '3000')` | [sdks/dart](sdks/dart/README.md) |
+| Ruby | `gem install etunnel` | `Etunnel.connect(server, 3000)` | [sdks/ruby](sdks/ruby/README.md) |
+| PHP | `composer require ggcode/etunnel` | `Etunnel::connect(...)` | [sdks/php](sdks/php/README.md) |
+| Perl | single file (core modules) | `etunnel_connect(...)` | [sdks/perl](sdks/perl/README.md) |
+| Lua | `luarocks install ggcode.etunnel` | script | [sdks/lua](sdks/lua/README.md) |
+| Clojure | `dev.ggcode/etunnel-clj` | `(et/connect! server 3000)` | [sdks/clojure](sdks/clojure/README.md) |
+| Elixir | `{:etunnel, "~> 1.2"}` | `Etunnel.start_link(...)` | [sdks/elixir](sdks/elixir/README.md) |
+| C | single file (`make`) | binary - spawn as child | [sdks/c](sdks/c/README.md) |
+| C++ | single file (`cmake`) | binary - spawn as child | [sdks/cpp](sdks/cpp/README.md) |
+
+Capability differences (streaming bodies, WebSocket pass-through) are in the
+[SDK matrix](sdks/README.md#capability-matrix).
 
 ## Plans
 
@@ -41,179 +166,140 @@ service through `https://<subdomain>.<domain>`.
 | Tunnel lifetime | 4 hours | 72 hours | 30 days |
 | Bandwidth | 1 Mbps | 10 Mbps | 10 Mbps |
 
-Custom tiers: pass a JSON file to `etunneld -tiers tiers.json` mapping tier id
-→ `{name, ttlHours, customDomains, bandwidthMbps}`.
+Tiers are configuration, not code: `etunneld -tiers tiers.json` maps a tier id to
+`{name, ttlHours, customDomains, bandwidthMbps}`.
 
-## Quick start
+## Paid plans
 
-### CLI
-
-```sh
-etunnel -server wss://t.etun.uk/tunnel 3000
-#   https://cosmic-auroch-59.t.etun.uk -> 127.0.0.1:3000
-#   plan: Free, expires in 4h
-```
-
-### Go SDK — one call
-
-```go
-import etunnel "etunnel/sdk"
-
-t, err := etunnel.Connect(ctx, etunnel.Options{
-    Server:    "wss://t.etun.uk/tunnel",
-    LocalAddr: "127.0.0.1:3000",
-})
-fmt.Println(t.URL()) // https://cosmic-auroch-59.t.etun.uk
-defer t.Close("done")
-```
-
-### 20 language SDKs
-
-Single-file, dependency-light SDKs live in [`sdks/`](sdks/README.md)
-(Go, Python, JS/Node, TypeScript, Deno, Java, Kotlin, C#, Rust, Swift, Dart,
-Ruby, PHP, Perl, Lua, Scala, Elixir, C++, C, Clojure). All honor the same
-`ETUNNEL_SERVER` / `ETUNNEL_LOCAL` / `ETUNNEL_TOKEN` / `ETUNNEL_SUBDOMAIN`
-environment variables and print `TUNNEL_URL: ...` when run standalone.
-
-### Paid plans (custom subdomains, longer TTL, 10 Mbps)
-
-Sign in and subscribe from the portal — checkout activates the API key instantly:
+Sign in and subscribe from the portal - activation is immediate and mints your
+API key:
 
 ```sh
-open https://t.etun.uk/pricing   # sign in (Google/GitLab/GitHub/Apple), pick a plan
-# you receive: an API key + /me where you manage domains, key and subscription
+open https://t.etun.uk/pricing     # Google / GitLab / GitHub / Apple login
+# then /me manages the key, custom subdomains and the subscription
 
 etunnel -server wss://t.etun.uk/tunnel -token et_... -subdomain mydev 3000
 ```
 
-Signing in claims the account bound to your verified email (an account may be
-created by checkout before you ever log in). If that account was created
-otherwise, its previous API key is rotated on claim: any tunnel still running
-on the old key disconnects and must be restarted with the key from `/me`.
+Signing in claims the account bound to the verified email address. If that
+account was created by checkout, claiming it rotates the previous API key: any
+tunnel still running on the old key disconnects and must be restarted with the
+key shown on `/me`.
 
 ## Server (etunneld)
 
-Single static binary, three TLS modes:
+One static binary, four TLS modes:
+
+| `-tls-mode` | Certificates | When |
+|---|---|---|
+| `http` | none | behind a load balancer that terminates TLS |
+| `static` | `-tls-cert` / `-tls-key`, hot-reloaded | you already have a wildcard cert |
+| `ondemand` | ACME HTTP-01 per hostname | needs `:80` reachable, small deployments |
+| `dns` | ACME DNS-01 wildcard (`-dns-provider cloudflare\|alidns\|dnspod`) | no TLS handshake latency for new subdomains |
 
 ```sh
-# ACME on-demand per-hostname certificates (HTTP-01, needs :80 reachable)
+# wildcard certificate via DNS-01 (recommended)
 etunneld -domain t.example.com -addr :443 -http-addr :80 \
-         -tls-mode ondemand -acme-dir /var/lib/etunnel/acme -acme-email you@x.com
+         -tls-mode dns -dns-provider cloudflare \
+         -acme-dir /var/lib/etunnel/acme -acme-email you@example.com
 
-# Wildcard cert via DNS-01 (Cloudflare/AliDNS/DNSPod credentials via env)
-etunneld -domain t.example.com -tls-mode dns -dns-provider cloudflare ...
+# per-hostname certificates via HTTP-01
+etunneld -domain t.example.com -addr :443 -http-addr :80 \
+         -tls-mode ondemand -acme-dir /var/lib/etunnel/acme -acme-email you@example.com
 
-# Your own cert (hot-reloaded) or plain HTTP behind an LB
+# your own certificate (hot-reloaded) or plain HTTP behind an LB
 etunneld -domain t.example.com -tls-mode static -tls-cert fullchain.pem -tls-key privkey.pem
 ```
 
-Endpoints:
+`-alias-domain t.old.com` serves a legacy domain alongside `-domain` during a
+migration (static wildcard cert from the ACME directory, not renewed).
 
-- `wss://<domain>/tunnel` — SDK WebSocket endpoint (subprotocol `etunnel-v1`)
-- `https://<domain>/api/register` — POST `{"email"}` → free-tier API key (paid tiers require checkout)
-- `https://<domain>/api/tiers` — plan catalog
-- `https://<base>/` — landing page; unknown subdomains get a branded 404
-- `127.0.0.1:9090/stats` (admin) — live tunnels, uptime, byte counters
-- `127.0.0.1:9090/admin/accounts` (admin, `X-Admin-Token`) — account management
+### Endpoints
 
-## Features
+| Path | Purpose |
+|---|---|
+| `wss://<domain>/tunnel` | SDK WebSocket endpoint (subprotocol `etunnel-v1`) |
+| `POST /api/register` | `{"email"}` -> free-tier API key |
+| `GET /api/tiers` | plan catalog |
+| `/` | landing page (quickstart, pricing) |
+| `/pricing`, `/login`, `/me` | subscription flow and account dashboard |
+| `/webhooks/stripe`, `/webhooks/paypal` | payment provider callbacks |
+| `127.0.0.1:9090/stats` | live tunnels, uptime, byte counters, billing status |
+| `127.0.0.1:9090/admin/accounts` | account management (`X-Admin-Token`) |
 
-- HTTP/1.1 reverse proxying by hostname with streaming bodies (Go SDK),
-  `X-Forwarded-For`/`X-Forwarded-Proto` injection, chunked transfer, flushes
-- WebSocket / 101-upgrade **pass-through** (Go SDK): hijack + raw byte pipe,
-  so `wss://<sub>.t.etun.uk` works for your local WS server
-- Plan-based limits: TTL expiry (server closes with `ttl_expired`), bandwidth
-  rate limiting (token bucket, both directions), custom-domain quotas
-- Anonymous abuse guard: per-IP concurrent tunnel cap
-- Heartbeats (app-level ping/pong + liveness timeout), graceful `bye`,
-  clean 502/504 when the local service is down or slow
-- Accounts persisted to JSON (atomic writes); tiers configurable via file
-- Protocol tolerant to client WS libraries that send binary frames with the
-  text opcode (content-sniffed server side)
+### Operational limits
 
-## Layout
+- Per-IP concurrent anonymous tunnels (`-max-tunnels-per-ip`), per-tunnel stream
+  cap (`-max-streams`), plan TTL and bandwidth (token bucket, both directions).
+- Heartbeats both ways (`ping`/`pong` plus WS ping), stalled streams are reset
+  instead of freezing the tunnel.
+- Accounts persist to a JSON file with atomic writes.
+
+## Billing (optional, self-hosted)
+
+Payments are enabled purely by environment variables - empty means off:
+
+```sh
+STRIPE_SECRET_KEY=sk_live_...        # https://dashboard.stripe.com/apikeys
+STRIPE_WEBHOOK_SECRET=whsec_...      # endpoint: https://<domain>/webhooks/stripe
+PAYPAL_CLIENT_ID=...                 # https://developer.paypal.com
+PAYPAL_SECRET=...
+PAYPAL_ENV=sandbox                   # or live
+PAYPAL_WEBHOOK_ID=...                # endpoint: https://<domain>/webhooks/paypal
+TIER_STARTER_PRICE_CENTS=300         # optional overrides (default $3 / $9)
+TIER_PRO_PRICE_CENTS=900
+```
+
+First payment mints the account and API key for the payer's email;
+renewals and upgrades keep the same key and change the tier. Stripe signatures
+are verified with HMAC-SHA256 (5 minute tolerance), PayPal through the
+`verify-webhook-signature` API.
+
+## Telegram admin bot (optional)
+
+```sh
+TELEGRAM_BOT_TOKEN=123456:ABC...   # from @BotFather
+TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id
+```
+
+`/status`, `/tunnels`, `/accounts`, `/kick <subdomain>`,
+`/tier <email> <tier>`, `/whois <subdomain>`. Only the whitelisted chat is
+answered; payments push a notification to it. Long polling - no public webhook.
+
+## Repository layout
 
 ```
-protocol/    wire protocol (frames + JSON control messages) shared by all
-server/      etunneld: sessions, registry, proxy, tiers, TLS, admin API
-sdk/         Go SDK (reference client, full streaming + WS passthrough)
-cmd/etunneld server CLI          cmd/etunnel  client CLI
-sdks/        20-language clients (see sdks/README.md)
-examples/    basic usage example
-integration_test.go  end-to-end tests (HTTP, WS, tiers, limits, TTL, -race)
+protocol/     wire protocol: frames + JSON control messages, shared by server and Go SDK
+server/       etunneld: sessions, registry, proxy, tiers, TLS/ACME, admin API, billing, portal
+sdk/          Go SDK - reference client (streaming + WebSocket pass-through)
+cmd/etunneld  server CLI
+cmd/etunnel   client CLI
+sdks/         20 language clients, one README each (see sdks/README.md)
+examples/     runnable examples (see examples/README.md)
+scripts/      release, packaging and doc generation helpers
 ```
 
 ## Development
 
 ```sh
-go build ./... && go test -race ./...   # full suite incl. integration tests
-gofmt -w . && go vet ./...
+make verify            # gofmt check, go vet, go test -race ./...
+go test ./...          # unit + integration tests
 ```
 
-Protocol details: [PROTOCOL.md](PROTOCOL.md).
+The integration tests start a real `etunneld` in-process and drive it with the
+Go SDK, the CLI and raw HTTP/WebSocket clients - including TLS, tiers, TTL
+expiry, bandwidth limiting and upgrade pass-through.
 
-## User accounts & login
+Docs:
 
-OAuth login (Google / GitLab / Apple) gates subscriptions: see /login and
-/me (reset API key, cancel, custom domains, close account). Custom
-subdomains are ownership-gated - paid users claim names they added in /me.
-Full credential list: [CREDENTIALS.md](CREDENTIALS.md).
+| Document | Contents |
+|---|---|
+| [PROTOCOL.md](PROTOCOL.md) | frames, control messages, stream lifecycle, limits |
+| [sdks/README.md](sdks/README.md) | install matrix, capability comparison, protocol summary |
+| [examples/README.md](examples/README.md) | runnable examples per language |
+| [PACKAGING.md](PACKAGING.md) | how releases are cut and published to 20 registries |
+| [CREDENTIALS.md](CREDENTIALS.md) | every environment variable and OAuth app |
 
-## Running your own server
+## License
 
-```sh
-etunneld --domain t.example.com --addr :443 --http-addr :80 \
-  --tls-mode dns --dns-provider cloudflare --acme-dir /var/lib/etunnel/acme
-```
-
-`--alias-domain t.old.com` serves a legacy domain alongside `--domain`
-during migrations (static wildcard cert from the acme dir, not renewed).
-
-## Billing (PayPal + Stripe)
-
-Self-hosted payments for paid tiers, zero third-party Go dependencies:
-
-- **User site**: `https://<domain>/pricing` — pick a plan, pay by card
-  (Stripe Checkout) or PayPal; the API key is shown on success
-- **Providers are enabled purely by environment variables** (empty = off):
-
-```sh
-STRIPE_SECRET_KEY=sk_live_...        # from https://dashboard.stripe.com/apikeys
-STRIPE_WEBHOOK_SECRET=whsec_...      # webhook endpoint: https://<domain>/webhooks/stripe
-PAYPAL_CLIENT_ID=...                 # from https://developer.paypal.com (app credentials)
-PAYPAL_SECRET=...
-PAYPAL_ENV=sandbox                   # or live
-PAYPAL_WEBHOOK_ID=...                # webhook URL: https://<domain>/webhooks/paypal
-TIER_STARTER_PRICE_CENTS=300         # optional overrides (default starter=$3, pro=$9)
-TIER_PRO_PRICE_CENTS=900
-```
-
-- Activation: first payment mints the account + API key for the email;
-  renewals/upgrades keep the same key and change the tier
-- Admin: `/stats` reports `billing: {stripe, paypal}` enablement
-- Webhook signature verification: Stripe HMAC-SHA256 (tolerance 5m),
-  PayPal via the verify-webhook-signature API
-
-## Telegram admin bot (optional)
-
-Manage the server from a whitelisted Telegram chat:
-
-```sh
-TELEGRAM_BOT_TOKEN=123456:ABC...   # from @BotFather
-TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id (get via @userinfobot)
-```
-
-Commands (only the whitelisted chat is answered; everyone else is ignored):
-
-```
-/status                     uptime, tunnel/account counts, traffic, billing
-/tunnels                    live tunnels: subdomain, plan, owner, ip, streams
-/accounts                   registered accounts and tiers
-/kick <subdomain>           drop a tunnel
-/tier <email> <tier>        change an account's tier
-/whois <subdomain>          tunnel owner
-```
-
-Payments also push a notification ("💰 email purchased tier") on every
-successful activation. Zero new dependencies; long-polling, no public
-webhook needed. Either env empty -> bot fully disabled.
+MIT - see [LICENSE](LICENSE).
