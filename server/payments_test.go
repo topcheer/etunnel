@@ -383,8 +383,8 @@ func TestPricingPageMobileShape(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`name="viewport" content="width=device-width`,
-		`class="plans"`,          // card grid, not a 5-column table
-		`30d tunnel lifetime`,    // humanTTL renders in the feature list
+		`class="plans"`,           // card grid, not a 5-column table
+		`30d tunnel lifetime`,     // humanTTL renders in the feature list
 		`@media(max-width:700px)`, // collapses to one column on phones
 	} {
 		if !strings.Contains(body, want) {
