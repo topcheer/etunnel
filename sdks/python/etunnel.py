@@ -60,6 +60,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
     ws = websocket.create_connection(server, subprotocols=["etunnel-v1"], timeout=15)
     ws.send(json.dumps({
         "type": "hello", "proto": 1,
+        **({"resume": opts["resume"]} if opts.get("resume") else {}),
         "subdomain": opts.get("subdomain"),
         "token": opts.get("token"),
         "client": opts.get("client", "etunnel-python/1.0"),
@@ -161,6 +162,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
         "url": info["url"],
         "hostname": info["hostname"],
         "subdomain": info["subdomain"],
+        "resumeToken": info.get("resumeToken", ""),
         "plan": info.get("plan", ""),
         "close": close,
     }
@@ -192,15 +194,17 @@ def _main() -> None:
     signal.signal(signal.SIGTERM, on_signal)
 
     attempt = 0
+    resume = ""  # server-signed token: reclaim the same subdomain on reconnect
     while not stopped.is_set():
         lost = threading.Event()
         try:
-            t = connect(server, local, dict(opts, on_close=lambda _reason: lost.set()))
+            t = connect(server, local, dict(opts, resume=resume, on_close=lambda _reason: lost.set()))
         except Exception as e:  # noqa: BLE001
             print(f"etunnel: {e}", file=sys.stderr, flush=True)
             if not reconnect:
                 sys.exit(1)
         else:
+            resume = t.get("resumeToken") or resume
             print("TUNNEL_URL:", t["url"], flush=True)
             attempt = 0
             if not reconnect:
