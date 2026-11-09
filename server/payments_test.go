@@ -1,14 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -171,5 +175,53 @@ func TestPayPalOrderMetaCaptureVsGetShapes(t *testing.T) {
 	}
 	if e, tier := paypalOrderMeta(getShape); e != "u@x.com" || tier != "pro" {
 		t.Fatalf("GET shape meta: %q %q", e, tier)
+	}
+}
+
+func TestNowPaymentsIPNVerification(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.NowPaymentsIPNSecret = "ipnsecret"
+	ev := map[string]any{"order_id": "u@x.com:starter", "payment_status": "finished"}
+	// build the exact sorted-string NOWPayments signs
+	keys := make([]string, 0)
+	for k := range ev {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteByte('&')
+		}
+		fmt.Fprintf(&sb, "%s=%v", k, ev[k])
+	}
+	mac := hmac.New(sha512.New, []byte("ipnsecret"))
+	mac.Write([]byte(sb.String()))
+	sig := hex.EncodeToString(mac.Sum(nil))
+
+	// valid signature -> 200 + account activated
+	body, _ := json.Marshal(ev)
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/nowpayments", bytes.NewReader(body))
+	r.Header.Set("x-nowpayments-sig", sig)
+	rec := httptest.NewRecorder()
+	s.handleNowPaymentsIPN(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid IPN: %d", rec.Code)
+	}
+	if _, ok := s.accounts.LookupEmail("u@x.com"); !ok {
+		t.Fatal("IPN did not activate")
+	}
+
+	// tampered body -> 400
+	r2 := httptest.NewRequest(http.MethodPost, "/webhooks/nowpayments",
+		bytes.NewReader([]byte(`{"order_id":"evil@x.com:pro","payment_status":"finished"}`)))
+	r2.Header.Set("x-nowpayments-sig", sig)
+	rec2 := httptest.NewRecorder()
+	s.handleNowPaymentsIPN(rec2, r2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("tampered IPN accepted: %d", rec2.Code)
+	}
+	if _, ok := s.accounts.LookupEmail("evil@x.com"); ok {
+		t.Fatal("tampered IPN activated!")
 	}
 }

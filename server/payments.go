@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -35,13 +36,15 @@ import (
 
 // BillingConfig holds provider credentials; empty fields disable a provider.
 type BillingConfig struct {
-	StripeSecretKey     string // sk_live_... / sk_test_...
-	StripeWebhookSecret string // whsec_...
-	PayPalClientID      string
-	PayPalSecret        string
-	PayPalEnv           string // "live" or "sandbox" (default live)
-	PayPalWebhookID     string // for webhook verification
-	PublicBaseURL       string // e.g. https://t.example.com (defaults to https://<Domain>)
+	StripeSecretKey      string // sk_live_... / sk_test_...
+	StripeWebhookSecret  string // whsec_...
+	PayPalClientID       string
+	PayPalSecret         string
+	PayPalEnv            string // "live" or "sandbox" (default live)
+	PayPalWebhookID      string // for webhook verification
+	NowPaymentsAPIKey    string // crypto checkout (nowpayments.io)
+	NowPaymentsIPNSecret string
+	PublicBaseURL        string // e.g. https://t.example.com (defaults to https://<Domain>)
 }
 
 func billingFromEnv(domain string) BillingConfig {
@@ -50,13 +53,15 @@ func billingFromEnv(domain string) BillingConfig {
 		base = "https://" + domain
 	}
 	return BillingConfig{
-		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
-		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
-		PayPalClientID:      os.Getenv("PAYPAL_CLIENT_ID"),
-		PayPalSecret:        os.Getenv("PAYPAL_SECRET"),
-		PayPalEnv:           os.Getenv("PAYPAL_ENV"),
-		PayPalWebhookID:     os.Getenv("PAYPAL_WEBHOOK_ID"),
-		PublicBaseURL:       base,
+		StripeSecretKey:      os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret:  os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		PayPalClientID:       os.Getenv("PAYPAL_CLIENT_ID"),
+		PayPalSecret:         os.Getenv("PAYPAL_SECRET"),
+		PayPalEnv:            os.Getenv("PAYPAL_ENV"),
+		PayPalWebhookID:      os.Getenv("PAYPAL_WEBHOOK_ID"),
+		NowPaymentsAPIKey:    os.Getenv("NOWPAYMENTS_API_KEY"),
+		NowPaymentsIPNSecret: os.Getenv("NOWPAYMENTS_IPN_SECRET"),
+		PublicBaseURL:        base,
 	}
 }
 
@@ -122,7 +127,7 @@ input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6p
 <table><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
 {{range .Rows}}{{if .Buyable}}<tr><td><b>{{.Name}}</b></td><td>{{.TTL}}</td><td>{{.Custom}}</td>
 <td>{{.BandwidthMbps}} Mbps</td><td>{{.Price}}</td>
-<td><button class="buy" onclick="pay(this,'{{.ID}}','stripe')">Card</button>
+<td><button class="buy" onclick="pay(this,'{{.ID}}','crypto')">💎 Crypto</button>
 <button class="buy paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button></td></tr>{{end}}{{end}}
 </table>
 <div id="msg"></div>
@@ -179,8 +184,8 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"valid email required"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Provider != "stripe" && req.Provider != "paypal" {
-		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
+	if req.Provider != "stripe" && req.Provider != "paypal" && req.Provider != "crypto" {
+		http.Error(w, `{"error":"provider must be stripe, paypal or crypto"}`, http.StatusBadRequest)
 		return
 	}
 	// Subscribing requires a signed-in user; the session email wins so a
@@ -211,6 +216,12 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		payURL, err = s.paypalCreateOrder(base, req.Email, req.Tier, cents)
+	case "crypto":
+		if s.billing.NowPaymentsAPIKey == "" {
+			http.Error(w, `{"error":"crypto payments not configured"}`, http.StatusServiceUnavailable)
+			return
+		}
+		payURL, err = s.nowpaymentsInvoice(base, req.Email, req.Tier, cents)
 	default:
 		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
 		return
@@ -623,4 +634,152 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// --- NOWPayments (crypto) ---------------------------------------------------
+
+var nowpayHTTP = &http.Client{Timeout: 20 * time.Second}
+
+func (s *Server) nowpaymentsAPI(method, path string, payload any) (map[string]any, error) {
+	var body io.Reader
+	if payload != nil {
+		b, _ := json.Marshal(payload)
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, "https://api.nowpayments.io"+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", s.billing.NowPaymentsAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := nowpayHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if resp.StatusCode >= 300 {
+		if m, _ := out["message"].(string); m != "" {
+			return nil, errors.New(m)
+		}
+		return nil, fmt.Errorf("nowpayments %s: %s", resp.Status, string(raw[:min(len(raw), 120)]))
+	}
+	return out, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (s *Server) nowpaymentsInvoice(base, email, tier string, cents int64) (string, error) {
+	out, err := s.nowpaymentsAPI("POST", "/v1/invoice", map[string]any{
+		"price_amount":     float64(cents) / 100,
+		"price_currency":   "usd",
+		"order_id":         email + ":" + tier,
+		"success_url":      base + "/billing/crypto/success?payment=",
+		"cancel_url":       base + "/pricing",
+		"ipn_callback_url": base + "/webhooks/nowpayments",
+	})
+	if err != nil {
+		return "", err
+	}
+	u, _ := out["invoice_url"].(string)
+	if u == "" {
+		return "", errors.New("nowpayments: no invoice_url")
+	}
+	return u, nil
+}
+
+// handleCryptoSuccess: NOWPayments appends the payment id to success_url;
+// query it and activate on finished/confirmed.
+func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
+	pid := strings.TrimPrefix(r.URL.Path, "/billing/crypto/success")
+	pid = strings.Trim(pid, "/")
+	if pid == "" && r.URL.Query().Get("payment") != "" {
+		pid = r.URL.Query().Get("payment")
+	}
+	if pid == "" || s.billing.NowPaymentsAPIKey == "" {
+		http.Redirect(w, r, "/pricing", http.StatusSeeOther)
+		return
+	}
+	for i := 0; i < 3; i++ {
+		st, err := s.nowpaymentsAPI("GET", "/v1/payment/"+url.PathEscape(pid), nil)
+		if err == nil {
+			status, _ := st["payment_status"].(string)
+			if status == "finished" || status == "confirmed" {
+				var email, tier string
+				if oid, ok := st["order_id"].(string); ok {
+					email, tier, _ = strings.Cut(oid, ":")
+				}
+				key, aerr := s.activate(email, tier)
+				if aerr != nil {
+					http.Error(w, "activation failed: "+aerr.Error(), http.StatusInternalServerError)
+					return
+				}
+				fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
+<p>Your API key: <code>%s</code></p></body>`, tier, email, key)
+				return
+			}
+		}
+		time.Sleep(3 * time.Second)
+	}
+	http.Error(w, "payment not confirmed yet - it will activate automatically via IPN when the network confirms", http.StatusAccepted)
+}
+
+// handleNowPaymentsIPN verifies x-nowpayments-sig (HMAC-SHA512 over sorted
+// key=value& pairs) and activates on finished/confirmed.
+func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
+	if s.billing.NowPaymentsIPNSecret == "" {
+		http.Error(w, "not configured", http.StatusServiceUnavailable)
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	var ev map[string]any
+	if json.Unmarshal(body, &ev) != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	keys := make([]string, 0, len(ev))
+	for k := range ev {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteByte('&')
+		}
+		fmt.Fprintf(&sb, "%s=%v", k, ev[k])
+	}
+	mac := hmac.New(sha512.New, []byte(s.billing.NowPaymentsIPNSecret))
+	mac.Write([]byte(sb.String()))
+	want := hex.EncodeToString(mac.Sum(nil))
+	got := r.Header.Get("x-nowpayments-sig")
+	// sig may be "hex1,hex2" (sorted-string and base64 variants); accept any part
+	ok := false
+	for _, part := range strings.Split(got, ",") {
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(part)), []byte(want)) == 1 {
+			ok = true
+		}
+	}
+	if !ok {
+		s.logf("billing: nowpayments IPN bad signature")
+		http.Error(w, "bad signature", http.StatusBadRequest)
+		return
+	}
+	status, _ := ev["payment_status"].(string)
+	if status == "finished" || status == "confirmed" {
+		oid, _ := ev["order_id"].(string)
+		email, tier, _ := strings.Cut(oid, ":")
+		if _, err := s.activate(email, tier); err != nil {
+			s.logf("billing: nowpayments activation failed: %v", err)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
 }

@@ -75,6 +75,8 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/billing/paypal/return", s.handlePayPalReturn)
 	mux.HandleFunc("/webhooks/stripe", s.handleStripeWebhook)
 	mux.HandleFunc("/webhooks/paypal", s.handlePayPalWebhook)
+	mux.HandleFunc("/webhooks/nowpayments", s.handleNowPaymentsIPN)
+	mux.HandleFunc("/billing/crypto/success", s.handleCryptoSuccess)
 	mux.HandleFunc("/", s.handleProxy)
 	s.handler = mux
 	s.buildAdmin()
