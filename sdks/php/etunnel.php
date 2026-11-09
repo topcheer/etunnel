@@ -277,21 +277,14 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
     $local = $argv[1] ?? getenv('ETUNNEL_LOCAL') ?? '3000';
     $reconnect = getenv('ETUNNEL_RECONNECT') !== '0';
 
-    // SIGINT/SIGTERM only flip the flag (and stop reconnecting) when pcntl is
-    // available; without it the default disposition terminates the process.
-    $stopped = false;
-    if (function_exists('pcntl_async_signals')) {
-        pcntl_async_signals(true);
-        $onSignal = function () use (&$stopped): void {
-            $stopped = true;
-        };
-        pcntl_signal(SIGINT, $onSignal);
-        pcntl_signal(SIGTERM, $onSignal);
-    }
-
+    // PHP is single-threaded and blocks inside connect()'s stream read, where a
+    // pcntl handler is never dispatched (the EINTR that a signal causes is
+    // swallowed by the read) - installing one would make SIGINT/SIGTERM
+    // un-killable and the CLI would reconnect forever. Keep the default
+    // disposition instead: the process terminates and does not reconnect.
     $attempt = 0;
     $resume = '';
-    while (!$stopped) {
+    while (true) {
         try {
             // connect() reports the URL through $onUrl, then serves until the
             // connection ends (bye, close or EOF) and returns.
@@ -302,7 +295,7 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
                 }, $resume);
             if (Etunnel::$lastResumeToken !== '') $resume = Etunnel::$lastResumeToken;
             $attempt = 0;
-            if ($stopped || !$reconnect) {
+            if (!$reconnect) {
                 break;
             }
             fwrite(STDERR, "etunnel: connection lost\n");
@@ -318,9 +311,6 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
         $delay = $base * (0.8 + (mt_rand() / mt_getrandmax()) * 0.4);
         $attempt++;
         fwrite(STDERR, sprintf("etunnel: reconnecting in %.1fs\n", $delay));
-        $until = microtime(true) + $delay;
-        while (!$stopped && microtime(true) < $until) {
-            usleep(50000);
-        }
+        usleep((int) round($delay * 1_000_000));
     }
 }
