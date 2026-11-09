@@ -99,7 +99,16 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 	for id := range s.cfg.Tiers {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	// Cheapest first: tier ids sort alphabetically (pro < starter), which would
+	// put the most expensive plan first.
+	sort.Slice(ids, func(i, j int) bool {
+		pi, _ := s.tierPriceCents(ids[i])
+		pj, _ := s.tierPriceCents(ids[j])
+		if pi != pj {
+			return pi < pj
+		}
+		return ids[i] < ids[j]
+	})
 	for _, id := range ids {
 		t := s.cfg.Tiers[id]
 		cents, buyable := s.tierPriceCents(id)
@@ -116,12 +125,13 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 <link rel="icon" href="` + portalFavicon + `">
 <title>Pricing - etunnel</title>
 <style>` + portalCSS + `
+.wrap{max-width:1000px;margin:0 auto;padding:2.5rem 1.5rem}
 .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.2rem 0}
 .plan .name{font-weight:700;font-size:1.05rem}
 .plan .price{font-size:1.9rem;font-weight:800;margin:.4rem 0 .2rem}
 .plan .price small{font-size:.8rem;color:var(--dim);font-weight:400}
 .plan ul{list-style:none;margin:.7rem 0 1.1rem;padding:0;color:var(--dim);font-size:.85rem}
-.plan li:before{content:"\\2713 ";color:var(--green)}
+.plan li:before{content:"\2713 ";color:var(--green)}
 .plan.hl{border-color:rgba(63,185,80,.5)}
 .plan .pay{display:flex;gap:.5rem;flex-wrap:wrap}
 .plan .pay .btn{flex:1 1 auto;text-align:center;padding:.55rem .8rem;font-size:.88rem}
@@ -129,15 +139,15 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 @media(max-width:700px){.plans{grid-template-columns:1fr}}
 </style></head><body>
 <nav>
-  <a class="brand" href="/">` + logoMark + `etunnel</a>
-  <div class="navlinks">
+  <a class="logo" href="/" style="text-decoration:none">` + logoMark + ` <span>etunnel</span></a>
+  <div class="links">
     <a href="/#quickstart">quickstart</a>
     <a href="/pricing">pricing</a>
     <a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">docs</a>
     {{if .User}}<a href="/logout">sign out</a>{{else}}<a href="/login">sign in</a>{{end}}
   </div>
 </nav>
-<main>
+<main class="wrap">
 <header>
   <h1>Plans</h1>
   <p class="sub">{{if .User}}Signed in as <b>{{.User}}</b> &middot; <a href="/me">my account</a>{{else}}Sign in to subscribe. Free tunnels need no account at all.{{end}}</p>
@@ -154,7 +164,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 {{range .Rows}}{{if .Buyable}}
   <section class="card plan{{if eq .ID "pro"}} hl{{end}}">
     <div class="name">{{.Name}}</div>
-    <div class="price">{{.Price}}<small>/mo</small></div>
+    <div class="price">{{.Price}}</div>
     <ul>
       <li>{{.TTL}} tunnel lifetime</li>
       <li>{{.Custom}} custom subdomain{{if gt .Custom 1}}s{{end}}</li>
