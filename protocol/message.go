@@ -46,6 +46,10 @@ type Hello struct {
 	Subdomain string `json:"subdomain,omitempty"` // requested custom subdomain (plan gated)
 	Token     string `json:"token,omitempty"`     // paid plan API key
 	Client    string `json:"client,omitempty"`    // free-form client identification
+	// Resume is a server-signed token from a previous Welcome. Reconnecting
+	// clients replay it to reclaim the same subdomain; it is self-validating
+	// (HMAC + expiry) so it survives a server restart.
+	Resume string `json:"resume,omitempty"`
 }
 
 // Welcome is the server reply to a successful Hello.
@@ -57,6 +61,9 @@ type Welcome struct {
 	URL       string `json:"url"`                 // full public URL including scheme
 	ExpiresAt int64  `json:"expiresAt,omitempty"` // unix seconds, 0 = no expiry
 	Plan      string `json:"plan,omitempty"`      // tier name
+	// ResumeToken lets the client reclaim this subdomain after a disconnect
+	// (including a server restart). Opaque; replay it in Hello.Resume.
+	ResumeToken string `json:"resumeToken,omitempty"`
 }
 
 // Req announces a new server-initiated stream carrying one HTTP request.

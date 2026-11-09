@@ -37,6 +37,18 @@ type Options struct {
 	Client string
 	// OnLog, when set, receives lifecycle log lines.
 	OnLog func(format string, args ...any)
+	// ReconnectMinBackoff / ReconnectMaxBackoff bound the exponential backoff
+	// used by ConnectReconnecting (defaults 500ms / 30s).
+	ReconnectMinBackoff time.Duration
+	ReconnectMaxBackoff time.Duration
+	// OnReconnect, when set, fires after each successful reconnect with the
+	// attempt number and the new public URL.
+	OnReconnect func(attempt int, url string)
+
+	// resume carries the previous Welcome's ResumeToken so a reconnect can
+	// reclaim the same subdomain. Unexported on purpose: only
+	// ConnectReconnecting sets it, callers cannot forge it.
+	resume string
 }
 
 // DefaultServer is the connect target when Options.Server is empty;
@@ -66,11 +78,12 @@ type Tunnel struct {
 	ws        *websocket.Conn
 	localAddr string
 
-	url       string
-	hostname  string
-	subdomain string
-	plan      string
-	expiresAt time.Time
+	url         string
+	hostname    string
+	subdomain   string
+	resumeToken string // from Welcome; lets a reconnect reclaim the subdomain
+	plan        string
+	expiresAt   time.Time
 
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -168,6 +181,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		Subdomain: opts.Subdomain,
 		Token:     opts.Token,
 		Client:    opts.Client,
+		Resume:    opts.resume,
 	})
 	wctx, wcancel := context.WithTimeout(tctx, 10*time.Second)
 	err = ws.Write(wctx, websocket.MessageText, hello)
@@ -201,6 +215,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		t.url = m.URL
 		t.hostname = m.Hostname
 		t.subdomain = m.Subdomain
+		t.resumeToken = m.ResumeToken
 		t.plan = m.Plan
 		if m.ExpiresAt > 0 {
 			t.expiresAt = time.Unix(m.ExpiresAt, 0)
@@ -431,3 +446,11 @@ func (t *Tunnel) readLoop() {
 		}
 	}
 }
+
+// Reconnect policy options. Zero values pick the defaults in reconnect.go.
+// They are honoured by ConnectReconnecting only; Connect stays a one-shot
+// dial so existing callers keep their exact behaviour.
+
+// ResumeToken returns the server-signed token that lets a later connection
+// reclaim this tunnel's subdomain (empty when the server does not issue one).
+func (t *Tunnel) ResumeToken() string { return t.resumeToken }

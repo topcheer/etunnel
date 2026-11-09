@@ -258,8 +258,25 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		sess.limiter = rate.NewLimiter(rate.Limit(tier.Bandwidth/8), protocol.MaxPayload)
 	}
 
-	// Resolve subdomain.
-	if hello.Subdomain != "" {
+	// Resolve subdomain. A valid resume token reclaims the previous subdomain
+	// before any plan gating: it was already granted to this client, and the
+	// token is self-validating (HMAC + expiry), so it works across restarts.
+	resumed := ""
+	if hello.Resume != "" {
+		if sub, err := verifyResumeToken(hello.Resume, time.Now()); err == nil {
+			if err := s.reg.Acquire(sub, sess); err == nil {
+				sess.sub = sub
+				sess.custom = true
+				resumed = sub
+				s.logf("session %s: resumed subdomain %s", sess.id, sub)
+			} else {
+				s.logf("session %s: resume token valid but %s is taken, falling through", sess.id, sub)
+			}
+		} else {
+			s.logf("session %s: resume token rejected: %v", sess.id, err)
+		}
+	}
+	if resumed == "" && hello.Subdomain != "" {
 		if acct == nil || tier.CustomDomains <= 0 {
 			cancel()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainPlan,
@@ -294,7 +311,8 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		}
 		sess.sub = sub
 		sess.custom = true
-	} else {
+	} else if resumed == "" {
+		// No resume token and no requested subdomain: allocate a random one.
 		var sub string
 		for i := 0; i < 12; i++ {
 			cand := protocol.RandomSubdomain()
@@ -328,6 +346,9 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		URL:       sess.url,
 		ExpiresAt: expiresUnix(sess.expires),
 		Plan:      tier.Name,
+		// Signed so the client can reclaim this exact subdomain after a
+		// disconnect, including across a server restart.
+		ResumeToken: issueResumeToken(sess.sub, time.Now()),
 	}); err != nil {
 		sess.Close("welcome failed")
 		return
