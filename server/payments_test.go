@@ -372,3 +372,25 @@ func TestHumanTTL(t *testing.T) {
 		}
 	}
 }
+
+// Mobile audit fixes must stay applied: phones need the viewport meta, the
+// 5-column price table scrolls inside its own container, and the TTL column
+// must not print Go's raw duration ("720h0m0s").
+func TestPricingPageMobileShape(t *testing.T) {
+	s := newBillingTestServer(t)
+	rec := httptest.NewRecorder()
+	s.handlePricing(rec, httptest.NewRequest(http.MethodGet, "/pricing", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`name="viewport" content="width=device-width`,
+		`overflow-x:auto`,
+		`<td>30d</td>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pricing page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "h0m0s") {
+		t.Error("raw Go duration leaked into the pricing table")
+	}
+}
