@@ -15,7 +15,27 @@ import (
 	etunnel "github.com/topcheer/etunnel/sdk"
 )
 
+// cliConfig is the parsed command line.
+type cliConfig struct {
+	server     string
+	local      string
+	subdomain  string
+	token      string
+	reconnect  bool
+	maxBackoff time.Duration
+}
+
 func main() {
+	cfg := parseArgs()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serve(ctx, cfg)
+}
+
+// parseArgs reads flags and the positional port/address, exiting on misuse.
+func parseArgs() cliConfig {
 	var (
 		server    = flag.String("server", os.Getenv("ETUNNEL_SERVER"), "tunnel server, e.g. wss://t.example.com/tunnel")
 		local     = flag.String("local", "", "local address to expose (default: 127.0.0.1:<port arg>)")
@@ -35,75 +55,65 @@ func main() {
 		os.Exit(2)
 	}
 	if *local == "" {
-		arg := flag.Arg(0)
-		*local = arg
-		if len(arg) > 0 && arg[0] == ':' {
-			*local = "127.0.0.1" + arg
-		} else if allDigits(arg) {
-			*local = "127.0.0.1:" + arg
-		}
+		*local = normalizeLocalArg(flag.Arg(0))
 	}
 	if *server == "" {
 		fmt.Fprintln(os.Stderr, "etunnel: -server (or ETUNNEL_SERVER) is required")
 		os.Exit(2)
 	}
+	return cliConfig{
+		server:     *server,
+		local:      *local,
+		subdomain:  *subdomain,
+		token:      *token,
+		reconnect:  *reconnect,
+		maxBackoff: *maxBack,
+	}
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+func normalizeLocalArg(arg string) string {
+	if len(arg) > 0 && arg[0] == ':' {
+		return "127.0.0.1" + arg
+	}
+	if allDigits(arg) {
+		return "127.0.0.1:" + arg
+	}
+	return arg
+}
 
-	// Serve, and after a transient disconnect reconnect with the same label so
-	// the public URL survives a network blip or a server deploy (#15). The
-	// retry policy lives in the CLI rather than the SDK: a library that
-	// silently retries hides outages from its caller, and every SDK has to
-	// agree on that API first.
+// serve keeps a tunnel up until the context is cancelled or the tunnel ends
+// for a reason that retrying cannot fix (#15).
+//
+// The retry policy lives in the CLI rather than the SDK: a library that
+// silently retries hides outages from its caller, and every SDK has to agree
+// on that API first.
+func serve(ctx context.Context, cfg cliConfig) {
 	opts := etunnel.Options{
-		Server:    *server,
-		LocalAddr: *local,
-		Subdomain: *subdomain,
-		Token:     *token,
+		Server:    cfg.server,
+		LocalAddr: cfg.local,
+		Subdomain: cfg.subdomain,
+		Token:     cfg.token,
 		Client:    "etunnel-cli/1.0",
 	}
 	attempt := 0
 	for {
 		t, err := etunnel.Connect(ctx, opts)
 		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if !*reconnect {
-				fmt.Fprintln(os.Stderr, "etunnel:", err)
-				os.Exit(1)
-			}
-			attempt++
-			delay := reconnectDelay(attempt, *maxBack)
-			fmt.Fprintf(os.Stderr, "etunnel: connect failed (%v); retrying in %s\n", err, delay.Round(100*time.Millisecond))
-			select {
-			case <-time.After(delay):
+			if retryDial(ctx, cfg, err, &attempt) {
 				continue
-			case <-ctx.Done():
-				return
 			}
+			return
 		}
 		attempt = 0
 
-		fmt.Printf("\n  %s  ->  http://%s\n", t.URL(), *local)
-		if !t.ExpiresAt().IsZero() {
-			fmt.Printf("  plan: %s, expires: %s\n", t.Plan(), t.ExpiresAt().Format(time.RFC3339))
-		}
-		fmt.Println()
+		printBanner(t, cfg.local)
 
-		select {
-		case <-t.Done():
-		case <-ctx.Done():
-			t.Close("client closed")
-			<-t.Done()
-		}
-		reason := t.CloseReason()
-		if ctx.Err() != nil {
-			fmt.Fprintln(os.Stderr, "\netunnel: closed:", reason)
+		if !awaitTunnel(ctx, t) { // false = context cancelled
+			fmt.Fprintln(os.Stderr, "\netunnel: closed:", t.CloseReason())
 			return
 		}
-		if !*reconnect || !retryableClose(reason) {
+		reason := t.CloseReason()
+		if !cfg.reconnect || !retryableClose(reason) {
 			fmt.Fprintln(os.Stderr, "\netunnel: closed:", reason)
 			return
 		}
@@ -113,14 +123,59 @@ func main() {
 			opts.Subdomain = t.Subdomain()
 		}
 		attempt++
-		delay := reconnectDelay(attempt, *maxBack)
-		fmt.Fprintf(os.Stderr, "etunnel: disconnected (%s); reconnecting in %s\n", reason, delay.Round(100*time.Millisecond))
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
+		delay := reconnectDelay(attempt, cfg.maxBackoff)
+		fmt.Fprintf(os.Stderr, "etunnel: disconnected (%s); reconnecting in %s\n",
+			reason, delay.Round(100*time.Millisecond))
+		if !sleepCtx(ctx, delay) {
 			return
 		}
 	}
+}
+
+// retryDial reports whether the caller should try connecting again.
+func retryDial(ctx context.Context, cfg cliConfig, err error, attempt *int) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if !cfg.reconnect {
+		fmt.Fprintln(os.Stderr, "etunnel:", err)
+		os.Exit(1)
+	}
+	*attempt++
+	delay := reconnectDelay(*attempt, cfg.maxBackoff)
+	fmt.Fprintf(os.Stderr, "etunnel: connect failed (%v); retrying in %s\n",
+		err, delay.Round(100*time.Millisecond))
+	return sleepCtx(ctx, delay)
+}
+
+// awaitTunnel blocks until the tunnel ends or the context is cancelled. It
+// reports whether the tunnel ended on its own.
+func awaitTunnel(ctx context.Context, t *etunnel.Tunnel) bool {
+	select {
+	case <-t.Done():
+		return true
+	case <-ctx.Done():
+		t.Close("client closed")
+		<-t.Done()
+		return false
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func printBanner(t *etunnel.Tunnel, local string) {
+	fmt.Printf("\n  %s  ->  http://%s\n", t.URL(), local)
+	if !t.ExpiresAt().IsZero() {
+		fmt.Printf("  plan: %s, expires: %s\n", t.Plan(), t.ExpiresAt().Format(time.RFC3339))
+	}
+	fmt.Println()
 }
 
 func allDigits(s string) bool {
