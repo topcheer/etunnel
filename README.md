@@ -77,10 +77,11 @@ environment variables and print `TUNNEL_URL: ...` when run standalone.
 
 ### Paid plans (custom subdomains, longer TTL, 10 Mbps)
 
+Sign in and subscribe from the portal — checkout activates the API key instantly:
+
 ```sh
-curl -X POST https://t.etun.uk/api/register \
-     -d '{"email":"you@example.com","tier":"starter"}'
-# {"apiKey":"et_...","tier":"starter", ...}
+open https://t.etun.uk/pricing   # sign in (Google/GitLab/GitHub/Apple), pick a plan
+# you receive: an API key + /me where you manage domains, key and subscription
 
 etunnel -server wss://t.etun.uk/tunnel -token et_... -subdomain mydev 3000
 ```
@@ -104,7 +105,7 @@ etunneld -domain t.example.com -tls-mode static -tls-cert fullchain.pem -tls-key
 Endpoints:
 
 - `wss://<domain>/tunnel` — SDK WebSocket endpoint (subprotocol `etunnel-v1`)
-- `https://<domain>/api/register` — POST `{"email","tier"}` → API key
+- `https://<domain>/api/register` — POST `{"email"}` → free-tier API key (paid tiers require checkout)
 - `https://<domain>/api/tiers` — plan catalog
 - `https://<base>/` — landing page; unknown subdomains get a branded 404
 - `127.0.0.1:9090/stats` (admin) — live tunnels, uptime, byte counters
