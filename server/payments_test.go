@@ -254,3 +254,30 @@ func TestRegisterForcesFreeTier(t *testing.T) {
 		t.Fatalf("register minted tier %q", a.Tier)
 	}
 }
+
+func TestAdminFailsClosedWithoutToken(t *testing.T) {
+	s := newBillingTestServer(t) // AdminToken empty
+	h := s.adminHandler // same-package test
+	r := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unset admin token must disable the API, got %d", rec.Code)
+	}
+	// with a token configured: wrong token 401, right token 200
+	s.cfg.AdminToken = "secret-token"
+	r2 := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	r2.Header.Set("X-Admin-Token", "wrong")
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: %d", rec2.Code)
+	}
+	r3 := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	r3.Header.Set("X-Admin-Token", "secret-token")
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, r3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("right token: %d", rec3.Code)
+	}
+}

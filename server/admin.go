@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -45,7 +46,13 @@ func (s *Server) buildAdmin() {
 
 func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.AdminToken != "" && r.Header.Get("X-Admin-Token") != s.cfg.AdminToken {
+		// Fail closed: an unconfigured AdminToken disables the admin API
+		// entirely (previously any caller passed when the token was unset).
+		if s.cfg.AdminToken == "" {
+			http.Error(w, "admin API disabled: set -admin-token", http.StatusServiceUnavailable)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
