@@ -58,6 +58,23 @@ const t = await connect('wss://t.etun.uk/tunnel', 3000);
 console.log(t.url);
 ```
 
+## Examples
+
+Every SDK ships a runnable minimal example (local HTTP server + public URL):
+
+```sh
+node sdks/node/example/basic.js 3000
+python3 sdks/python/example/basic.py 3000
+ruby -I sdks/ruby/lib sdks/ruby/example/basic.rb 3000
+javac -d out sdks/java/src/main/java/dev/ggcode/Etunnel.java sdks/java/example/Basic.java && java -cp out dev.ggcode.Basic
+cargo run --manifest-path sdks/rust/Cargo.toml --bin basic -- 3000
+dart run sdks/dart/example/basic.dart 3000
+sh sdks/c/example/basic.sh        # C/C++ SDKs are single-file CLIs
+```
+
+Full per-language example files: `sdks/<lang>/example/` (C/C++:
+`example/basic.sh`, TypeScript/Deno: `example/basic.ts`).
+
 ## Pointing SDKs at your own server
 
 Runtime: `ETUNNEL_SERVER=wss://your-host/tunnel ...` (all SDKs).
