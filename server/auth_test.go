@@ -236,7 +236,7 @@ func TestStateCookieAttributes(t *testing.T) {
 		t.Fatal("empty state")
 	}
 	c := rec.Result().Cookies()[0]
-	if c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+	if c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteNoneMode {
 		t.Fatalf("cookie attrs: path=%q secure=%v httpOnly=%v ss=%v", c.Path, c.Secure, c.HttpOnly, c.SameSite)
 	}
 	// round-trip: the cookie satisfies its own check, a wrong value does not

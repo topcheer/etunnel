@@ -137,7 +137,7 @@ func (s *Server) setStateCookie(w http.ResponseWriter) string {
 	_, _ = rand.Read(b)
 	st := base64.RawURLEncoding.EncodeToString(b)
 	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: st, Path: "/",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode, MaxAge: 600}) // None: Apple form_post is a cross-site POST
 	return st
 }
 
@@ -193,6 +193,7 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provid
 			"client_id":     {s.auth.appleID},
 			"redirect_uri":  {base + "/auth/apple/callback"},
 			"response_type": {"code"},
+			"response_mode": {"form_post"}, // required when scope includes name/email
 			"scope":         {"name email"},
 			"state":         {st},
 		}.Encode()
@@ -205,18 +206,23 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 		http.Error(w, "provider not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Apple posts (response_mode=form_post); others redirect with query params.
 	code := r.URL.Query().Get("code")
-	if code == "" {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	if r.Method == http.MethodPost { // Apple form_post
+	state := r.URL.Query().Get("state")
+	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
 		if c := r.PostFormValue("code"); c != "" {
 			code = c
 		}
+		if st := r.PostFormValue("state"); st != "" {
+			state = st
+		}
 	}
-	if !s.checkStateCookie(w, r, r.URL.Query().Get("state")) {
+	if code == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if !s.checkStateCookie(w, r, state) {
 		http.Error(w, "bad oauth state", http.StatusBadRequest)
 		return
 	}
