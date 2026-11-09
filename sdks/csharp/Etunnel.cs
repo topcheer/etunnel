@@ -24,11 +24,14 @@ using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
 });
 
 var attempt = 0;
+// Carried across drops so a reconnect reclaims the same subdomain.
+string? resume = null;
 while (!stop.IsCancellationRequested)
 {
     try
     {
-        var t = await Etunnel.Connect(server, local, token: token, subdomain: subdomain);
+        var t = await Etunnel.Connect(server, local, token: token, subdomain: subdomain, resume: resume);
+        if (t.ResumeToken.Length > 0) resume = t.ResumeToken;
         Console.WriteLine($"TUNNEL_URL: {t.Url}");
         attempt = 0;
         if (!reconnect) await Task.Delay(Timeout.Infinite);
@@ -68,8 +71,13 @@ public sealed class Etunnel
         public string Url { get; }
         /// <summary>Live socket state; the CLI supervisor polls it to detect a drop.</summary>
         public WebSocketState State => _ws.State;
+        /// <summary>Server-signed token; send it back on reconnect to reclaim the same subdomain.</summary>
+        public string ResumeToken { get; }
         private readonly ClientWebSocket _ws;
-        internal Tunnel(ClientWebSocket ws, string url) { _ws = ws; Url = url; }
+        internal Tunnel(ClientWebSocket ws, string url, string resumeToken)
+        {
+            _ws = ws; Url = url; ResumeToken = resumeToken;
+        }
         public async Task Close()
         {
             try { await SendText(_ws, "{\"type\":\"bye\",\"reason\":\"client closed\"}"); } catch { }
@@ -78,7 +86,7 @@ public sealed class Etunnel
     }
 
     public static async Task<Tunnel> Connect(string server, string local,
-        string? token = null, string? subdomain = null)
+        string? token = null, string? subdomain = null, string? resume = null)
     {
         if (int.TryParse(local, out var port)) local = $"127.0.0.1:{port}";
 
@@ -89,10 +97,13 @@ public sealed class Etunnel
         var hello = new StringBuilder("{\"type\":\"hello\",\"proto\":1");
         if (subdomain != null) hello.Append($",\"subdomain\":\"{subdomain}\"");
         if (token != null) hello.Append($",\"token\":\"{token}\"");
+        if (!string.IsNullOrEmpty(resume))
+            hello.Append($",\"resume\":\"{resume.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
         hello.Append(",\"client\":\"etunnel-csharp/1.0\"}");
         await SendText(ws, hello.ToString());
 
         string url;
+        var resumeToken = "";
         using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
         {
             while (true)
@@ -102,7 +113,13 @@ public sealed class Etunnel
                     throw new Exception("etunnel: unexpected handshake message");
                 var doc = JsonDocument.Parse(Encoding.UTF8.GetString(bytes)).RootElement;
                 var type = doc.GetProperty("type").GetString();
-                if (type == "welcome") { url = doc.GetProperty("url").GetString()!; break; }
+                if (type == "welcome")
+                {
+                    url = doc.GetProperty("url").GetString()!;
+                    if (doc.TryGetProperty("resumeToken", out var rt))
+                        resumeToken = rt.GetString() ?? "";
+                    break;
+                }
                 if (type == "error")
                     throw new Exception($"etunnel: {doc.GetProperty("code").GetString()}");
                 throw new Exception("etunnel: unexpected handshake message");
@@ -111,7 +128,7 @@ public sealed class Etunnel
 
         var runner = new Runner(ws, local);
         _ = Task.Run(() => runner.Loop());
-        return new Tunnel(ws, url);
+        return new Tunnel(ws, url, resumeToken);
     }
 
     sealed class Runner

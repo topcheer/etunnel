@@ -44,6 +44,9 @@ final class Etunnel: @unchecked Sendable {
     let store = StreamStore()
   private let stateLock = NSLock()
   private var closedFlag = false
+  /// Server-signed resume token from the welcome message. Feeding it back on
+  /// reconnect keeps the same subdomain instead of a fresh random one.
+  private(set) var resumeToken: String = ""
 
   /// True once the receive loop is over (socket error, close or bye).
   /// The CLI supervisor polls it to decide when to reconnect.
@@ -73,11 +76,12 @@ final class Etunnel: @unchecked Sendable {
         self.task = session.webSocketTask(with: URL(string: server)!, protocols: ["etunnel-v1"])
     }
 
-    func connect(token: String? = nil, subdomain: String? = nil) async throws -> String {
+    func connect(token: String? = nil, subdomain: String? = nil, resume: String? = nil) async throws -> String {
         task.resume()
         var hello: [String: Any] = ["type": "hello", "proto": 1, "client": "etunnel-swift/1.0"]
         if let t = token { hello["token"] = t }
         if let s = subdomain { hello["subdomain"] = s }
+        if let r = resume, !r.isEmpty { hello["resume"] = r }
         let data = try JSONSerialization.data(withJSONObject: hello)
         try await task.send(.string(String(data: data, encoding: .utf8)!))
         for _ in 0..<30 {
@@ -87,6 +91,7 @@ final class Etunnel: @unchecked Sendable {
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                let type = obj["type"] as? String {
                 if type == "welcome" {
+                    if let rt = obj["resumeToken"] as? String { resumeToken = rt }
                     startLoop()
                     return obj["url"] as! String
                 }

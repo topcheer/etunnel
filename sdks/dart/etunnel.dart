@@ -38,7 +38,7 @@ class Etunnel {
   }
 
   static Future<Etunnel> connect(String server, String local,
-      {String? token, String? subdomain}) async {
+      {String? token, String? subdomain, String? resume}) async {
     var (host, port) = _parseLocal(local);
     final ws = await WebSocket.connect(server, protocols: ['etunnel-v1']);
     final et = Etunnel._(ws, host, port);
@@ -46,6 +46,7 @@ class Etunnel {
       'type': 'hello', 'proto': 1,
       if (subdomain != null) 'subdomain': subdomain,
       if (token != null) 'token': token,
+      if (resume != null && resume.isNotEmpty) 'resume': resume,
       'client': 'etunnel-dart/1.0',
     }));
     await et._url.future.timeout(const Duration(seconds: 15));
@@ -59,6 +60,9 @@ class Etunnel {
   }
 
   String? url;
+  /// Server-signed token from the welcome message; feeding it back on the next
+  /// connect keeps the same subdomain instead of a fresh random one.
+  String? resumeToken;
 
   void _onMessage(Object? msg) {
     if (msg is String) {
@@ -66,6 +70,7 @@ class Etunnel {
       switch (m['type']) {
         case 'welcome':
           url = m['url'] as String;
+          resumeToken = (m['resumeToken'] as String?) ?? resumeToken;
           _url.complete(url!);
         case 'error':
           if (!_url.isCompleted) {
@@ -181,10 +186,14 @@ Future<void> main(List<String> args) async {
   }
 
   var attempt = 0;
+  // Carried across drops so a reconnect reclaims the same subdomain.
+  String? resume;
   while (!stopped) {
     try {
-      final t = await Etunnel.connect(server, local, token: token, subdomain: subdomain);
+      final t = await Etunnel.connect(server, local,
+          token: token, subdomain: subdomain, resume: resume);
       current = t;
+      resume = t.resumeToken ?? resume;
       print('TUNNEL_URL: ${t.url}');
       attempt = 0;
       if (!reconnect) {

@@ -82,3 +82,5 @@ sdks/elixir/mix.lock
 sdks/lua/*.rock
 /.build/
 /.swiftpm/
+/sdks/scala/.bsp/
+/sdks/scala/.scala-build/

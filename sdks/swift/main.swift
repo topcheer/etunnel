@@ -47,13 +47,17 @@ func backoffMs(_ attempt: Int) -> UInt64 {
 }
 
 var attempt = 0
+// Carried across drops so a reconnect reclaims the same subdomain.
+var resume: String? = nil
 while !stop.isStopped {
     let et = Etunnel(server: server, local: local)
     do {
         let url = try await et.connect(
             token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
-            subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"])
+            subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"],
+            resume: resume)
         log("TUNNEL_URL: \(url)")
+        if !et.resumeToken.isEmpty { resume = et.resumeToken }
         attempt = 0
         if !reconnect {
             while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
