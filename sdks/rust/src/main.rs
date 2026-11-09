@@ -268,6 +268,64 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
     Ok(Tunnel { url, resume_token, closed })
 }
 
+/// Themed 502 page shown when the local app is down (same HTML as the other SDKs).
+const ERR_PAGE_A: &str = r##"<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>502 - local app down</title>
+<style>
+:root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);
+display:flex;min-height:100vh;align-items:center;justify-content:center;line-height:1.6}
+main{max-width:600px;padding:2.5rem 1.5rem;width:100%}
+.badge{display:inline-block;border:1px solid rgba(248,81,73,.4);color:#f85149;border-radius:99px;
+padding:.2rem .8rem;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:1.1rem}
+h1{font-size:1.6rem;letter-spacing:-.01em;margin-bottom:.4rem}
+h1 .g{color:var(--green)}
+p{color:var(--dim);font-size:.9rem;margin-bottom:1.4rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.3rem;margin-bottom:1.1rem}
+.panel .k{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.3rem}
+.panel .v{font-size:.9rem;word-break:break-all}
+.err{color:#f85149}
+.tip{border-left:3px solid var(--green);padding:.8rem 1rem;margin-top:1.2rem;font-size:.82rem;color:var(--dim)}
+.tip b{color:var(--fg)}
+footer{margin-top:2rem;font-size:.75rem;color:var(--dim)}
+footer a{color:#58a6ff;text-decoration:none}
+.pulse{display:inline-block;width:.55em;height:.55em;border-radius:50%;background:var(--green);
+margin-right:.5em;animation:p 1.2s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none}}
+</style></head><body><main>
+<span class="badge">502 local app down</span>
+<h1>tunnel up, <span class="g">local app</span> is not</h1>
+<p>The tunnel connection is alive, but nothing answered when we knocked.</p>
+<div class="panel">
+<div class="k">error</div><div class="v err">"##;
+
+const ERR_PAGE_B: &str = r##"</div>
+</div>
+<div class="tip"><span class="pulse"></span><b>Fix:</b> start your local service and reload -
+the tunnel stays connected and keeps retrying for you.</div>
+<footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>
+</main></body></html>"##;
+
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn local_error_page(msg: &str) -> String {
+    format!("{}{}{}", ERR_PAGE_A, escape_html(msg), ERR_PAGE_B)
+}
+
 fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, local: String, sid: u32, st: StreamBuf) {
     let hop = |k: &str| {
         matches!(k.to_ascii_lowercase().as_str(), "connection" | "transfer-encoding" | "keep-alive"
@@ -309,8 +367,8 @@ fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, loca
         Err(e) => {
             let mut w = ws.lock().unwrap();
             w.send(Message::Text(format!(
-                "{{\"type\":\"res\",\"streamId\":{},\"status\":502,\"headers\":{{\"Content-Type\":[\"text/plain\"]}}}}", sid).into())).ok();
-            w.send(frame(0x01, sid, format!("etunnel: local service error: {}\n", e).as_bytes())).ok();
+                "{{\"type\":\"res\",\"streamId\":{},\"status\":502,\"headers\":{{\"Content-Type\":[\"text/html; charset=utf-8\"]}}}}", sid).into())).ok();
+            w.send(frame(0x01, sid, local_error_page(&e.to_string()).as_bytes())).ok();
             w.send(frame(0x02, sid, b"")).ok();
             return;
         }

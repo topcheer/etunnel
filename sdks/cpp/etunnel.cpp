@@ -101,6 +101,59 @@ struct StreamBuf {
     std::string body;
 };
 
+// Themed 502 page shown when the local app is down (same HTML as the other SDKs).
+// Error text is truncated to 256 bytes to keep the frame payload bounded.
+static std::string localErrorPage(const char *msg) {
+    std::string m = msg ? msg : "error";
+    if (m.size() > 256) m.resize(256);
+    std::string esc;
+    esc.reserve(m.size());
+    for (char c : m) {
+        if (c == '&') esc += "&amp;";
+        else if (c == '<') esc += "&lt;";
+        else if (c == '>') esc += "&gt;";
+        else esc += c;
+    }
+    return std::string(R"html(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>502 - local app down</title>
+<style>
+:root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);
+display:flex;min-height:100vh;align-items:center;justify-content:center;line-height:1.6}
+main{max-width:600px;padding:2.5rem 1.5rem;width:100%}
+.badge{display:inline-block;border:1px solid rgba(248,81,73,.4);color:#f85149;border-radius:99px;
+padding:.2rem .8rem;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:1.1rem}
+h1{font-size:1.6rem;letter-spacing:-.01em;margin-bottom:.4rem}
+h1 .g{color:var(--green)}
+p{color:var(--dim);font-size:.9rem;margin-bottom:1.4rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.3rem;margin-bottom:1.1rem}
+.panel .k{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.3rem}
+.panel .v{font-size:.9rem;word-break:break-all}
+.err{color:#f85149}
+.tip{border-left:3px solid var(--green);padding:.8rem 1rem;margin-top:1.2rem;font-size:.82rem;color:var(--dim)}
+.tip b{color:var(--fg)}
+footer{margin-top:2rem;font-size:.75rem;color:var(--dim)}
+footer a{color:#58a6ff;text-decoration:none}
+.pulse{display:inline-block;width:.55em;height:.55em;border-radius:50%;background:var(--green);
+margin-right:.5em;animation:p 1.2s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none}}
+</style></head><body><main>
+<span class="badge">502 local app down</span>
+<h1>tunnel up, <span class="g">local app</span> is not</h1>
+<p>The tunnel connection is alive, but nothing answered when we knocked.</p>
+<div class="panel">
+<div class="k">error</div><div class="v err">)html") + esc +
+        R"html(</div>
+</div>
+<div class="tip"><span class="pulse"></span><b>Fix:</b> start your local service and reload -
+the tunnel stays connected and keeps retrying for you.</div>
+<footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>
+</main></body></html>)html";
+}
+
 static void serve(WsClient *client, websocketpp::connection_hdl hdl,
                   const std::string &method, const std::string &path,
                   const std::string &body, uint32_t sid, int local_port) {
@@ -132,8 +185,8 @@ static void serve(WsClient *client, websocketpp::connection_hdl hdl,
         (void) err;
     } else {
         status = 502;
-        respBody = "etunnel: local service error: " + std::string(curl_easy_strerror(rc)) + "\n";
-        respHeaders = "Content-Type: text/plain";
+        respBody = localErrorPage(curl_easy_strerror(rc));
+        respHeaders = "Content-Type: text/html; charset=utf-8";
     }
     curl_easy_cleanup(curl);
 

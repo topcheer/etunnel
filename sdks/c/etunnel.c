@@ -23,6 +23,49 @@
 
 #define MAXP 32768
 
+/* Themed 502 page shown when the local app is down (same HTML as the other SDKs). */
+static const char ERR_PAGE_A[] =
+    "<!doctype html><html><head><meta charset=\"utf-8\">\n"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+    "<title>502 - local app down</title>\n"
+    "<style>\n"
+    ":root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950}\n"
+    "*{box-sizing:border-box;margin:0;padding:0}\n"
+    "body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);\n"
+    "display:flex;min-height:100vh;align-items:center;justify-content:center;line-height:1.6}\n"
+    "main{max-width:600px;padding:2.5rem 1.5rem;width:100%}\n"
+    ".badge{display:inline-block;border:1px solid rgba(248,81,73,.4);color:#f85149;border-radius:99px;\n"
+    "padding:.2rem .8rem;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:1.1rem}\n"
+    "h1{font-size:1.6rem;letter-spacing:-.01em;margin-bottom:.4rem}\n"
+    "h1 .g{color:var(--green)}\n"
+    "p{color:var(--dim);font-size:.9rem;margin-bottom:1.4rem}\n"
+    ".panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.3rem;margin-bottom:1.1rem}\n"
+    ".panel .k{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.3rem}\n"
+    ".panel .v{font-size:.9rem;word-break:break-all}\n"
+    ".err{color:#f85149}\n"
+    ".tip{border-left:3px solid var(--green);padding:.8rem 1rem;margin-top:1.2rem;font-size:.82rem;color:var(--dim)}\n"
+    ".tip b{color:var(--fg)}\n"
+    "footer{margin-top:2rem;font-size:.75rem;color:var(--dim)}\n"
+    "footer a{color:#58a6ff;text-decoration:none}\n"
+    ".pulse{display:inline-block;width:.55em;height:.55em;border-radius:50%;background:var(--green);\n"
+    "margin-right:.5em;animation:p 1.2s ease-in-out infinite}\n"
+    "@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}\n"
+    "@media(prefers-reduced-motion:reduce){.pulse{animation:none}}\n"
+    "</style></head><body><main>\n"
+    "<span class=\"badge\">502 local app down</span>\n"
+    "<h1>tunnel up, <span class=\"g\">local app</span> is not</h1>\n"
+    "<p>The tunnel connection is alive, but nothing answered when we knocked.</p>\n"
+    "<div class=\"panel\">\n"
+    "<div class=\"k\">error</div><div class=\"v err\">";
+
+static const char ERR_PAGE_B[] =
+    "</div>\n"
+    "</div>\n"
+    "<div class=\"tip\"><span class=\"pulse\"></span><b>Fix:</b> start your local service and reload -\n"
+    "the tunnel stays connected and keeps retrying for you.</div>\n"
+    "<footer>powered by <a href=\"https://github.com/topcheer/etunnel\">etunnel</a></footer>\n"
+    "</main></body></html>";
+
 static char g_resume[512]; /* server-signed token: reclaim the subdomain on reconnect */
 static int g_local_port = 3000;
 static volatile sig_atomic_t g_stop = 0;
@@ -118,8 +161,29 @@ static void *serve_thread(void *arg) {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, a->body);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long) a->body_len);
     }
-    if (curl_easy_perform(curl) == CURLE_OK)
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    } else {
+        /* local app down: themed 502 page (error text truncated to 256 bytes) */
+        char emsg[257];
+        snprintf(emsg, sizeof(emsg), "%s", curl_easy_strerror(rc));
+        char esc[256 * 6 + 1];
+        size_t el = 0;
+        for (size_t k = 0; emsg[k]; k++) {
+            if (emsg[k] == '&') { memcpy(esc + el, "&amp;", 5); el += 5; }
+            else if (emsg[k] == '<') { memcpy(esc + el, "&lt;", 4); el += 4; }
+            else if (emsg[k] == '>') { memcpy(esc + el, "&gt;", 4); el += 4; }
+            else esc[el++] = emsg[k];
+        }
+        esc[el] = 0;
+        char *page = malloc(strlen(ERR_PAGE_A) + el + strlen(ERR_PAGE_B) + 1);
+        sprintf(page, "%s%s%s", ERR_PAGE_A, esc, ERR_PAGE_B);
+        body.data = page;
+        body.len = strlen(page);
+        free(hdr.data);
+        hdr.data = strdup("Content-Type: text/html; charset=utf-8\r\n");
+    }
     curl_easy_cleanup(curl);
 
     /* res json with headers from raw header block */
