@@ -14,6 +14,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -64,6 +65,9 @@ func billingFromEnv(domain string) BillingConfig {
 		PublicBaseURL:        base,
 	}
 }
+
+// subscriptionPeriod is how long one payment keeps the paid tier active.
+const subscriptionPeriod = 30 * 24 * time.Hour
 
 // tierPrice is the monthly price in cents for purchasable tiers.
 // Overridable via TIER_<ID>_PRICE_CENTS env (e.g. TIER_PRO_PRICE_CENTS=900).
@@ -303,10 +307,14 @@ func (s *Server) activate(email, tier string) (string, error) {
 	if _, ok := s.cfg.Tiers[tier]; !ok {
 		return "", fmt.Errorf("unknown tier %q", tier)
 	}
+	expires := time.Now().Add(subscriptionPeriod)
 	if acct, ok := s.accounts.LookupEmail(email); ok {
 		// renewal/upgrade, key unchanged — write the tier under the store
 		// mutex (#4: no lock-free writes to the shared *Account).
-		s.accounts.Mutate(email, func(a *Account) { a.Tier = tier })
+		s.accounts.Mutate(email, func(a *Account) {
+			a.Tier = tier
+			a.ExpiresAt = expires // every successful payment renews the period
+		})
 		_ = s.accounts.saveLockedSafe()
 		s.notifyPayment(email, tier)
 		return acct.APIKey, nil
@@ -315,6 +323,7 @@ func (s *Server) activate(email, tier string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.accounts.Mutate(email, func(a *Account) { a.ExpiresAt = expires })
 	s.notifyPayment(email, tier)
 	return acct.APIKey, nil
 }
@@ -759,6 +768,11 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := 0; i < 3; i++ {
+		// A departed client must not keep this handler (and its HTTP client)
+		// busy for ~69s: the IPN activates the account anyway (#12).
+		if r.Context().Err() != nil {
+			return
+		}
 		st, err := s.nowpaymentsAPI("GET", "/v1/payment/"+url.PathEscape(pid), nil)
 		if err == nil {
 			status, _ := st["payment_status"].(string)
@@ -776,7 +790,11 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 	http.Error(w, "payment not confirmed yet - it will activate automatically via IPN when the network confirms", http.StatusAccepted)
 }
@@ -831,4 +849,36 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// startTierReaper downgrades paid accounts whose subscription lapsed.
+// Runs hourly; the check is cheap (in-memory scan) and idempotent, so a
+// restart simply re-evaluates the current state.
+func (s *Server) startTierReaper(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.reapExpiredTiers(time.Now())
+			}
+		}
+	}()
+}
+
+// reapExpiredTiers performs one pass and reports how many accounts lapsed.
+func (s *Server) reapExpiredTiers(now time.Time) int {
+	expired := s.accounts.ExpiredPaid(now)
+	for _, email := range expired {
+		if s.accounts.DowngradeToFree(email) {
+			s.logf("billing: subscription expired, %s downgraded to free", email)
+			if s.tg.enabled() {
+				s.tgSend(fmt.Sprintf("⏳ %s subscription expired - downgraded to free", email))
+			}
+		}
+	}
+	return len(expired)
 }

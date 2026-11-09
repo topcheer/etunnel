@@ -295,3 +295,66 @@ func TestHostLabelBaseDomains(t *testing.T) {
 		}
 	}
 }
+
+// Subscription expiry: paid accounts lapse back to free, free/manual ones stay.
+func TestTierReaperDowngradesExpired(t *testing.T) {
+	s := newBillingTestServer(t)
+	now := time.Now()
+	// active paid (expires in future)
+	if _, err := s.activate("active@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	// lapsed paid (expired an hour ago)
+	if _, err := s.activate("lapsed@x.com", "starter"); err != nil {
+		t.Fatal(err)
+	}
+	s.accounts.Mutate("lapsed@x.com", func(a *Account) { a.ExpiresAt = now.Add(-time.Hour) })
+	// free account must be untouched
+	if _, err := s.activate("free@x.com", "free"); err != nil {
+		t.Fatal(err)
+	}
+	// manual grant: paid tier with no expiry stays (zero = no lapse)
+	if _, err := s.accounts.Create("manual@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := s.reapExpiredTiers(now); n != 1 {
+		t.Fatalf("reaped %d accounts, want 1", n)
+	}
+	if a, _ := s.accounts.LookupEmail("lapsed@x.com"); a.Tier != "free" || !a.ExpiresAt.IsZero() {
+		t.Fatalf("lapsed account state: tier=%s exp=%v", a.Tier, a.ExpiresAt)
+	}
+	if a, _ := s.accounts.LookupEmail("active@x.com"); a.Tier != "pro" {
+		t.Fatalf("active account wrongly downgraded: %s", a.Tier)
+	}
+	if a, _ := s.accounts.LookupEmail("manual@x.com"); a.Tier != "pro" {
+		t.Fatalf("manual grant wrongly downgraded: %s", a.Tier)
+	}
+	// idempotent: second pass reaps nothing
+	if n := s.reapExpiredTiers(now); n != 0 {
+		t.Fatalf("second pass reaped %d", n)
+	}
+}
+
+func TestActivateSetsExpiry(t *testing.T) {
+	s := newBillingTestServer(t)
+	before := time.Now()
+	if _, err := s.activate("p@x.com", "starter"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.accounts.LookupEmail("p@x.com")
+	want := before.Add(subscriptionPeriod)
+	if a.ExpiresAt.Before(want.Add(-time.Minute)) || a.ExpiresAt.After(time.Now().Add(subscriptionPeriod+time.Minute)) {
+		t.Fatalf("expiry %v not ~%v away", a.ExpiresAt, subscriptionPeriod)
+	}
+	// renewal extends the period
+	first := a.ExpiresAt
+	time.Sleep(5 * time.Millisecond)
+	if _, err := s.activate("p@x.com", "starter"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = s.accounts.LookupEmail("p@x.com")
+	if !a.ExpiresAt.After(first) {
+		t.Fatal("renewal did not extend the expiry")
+	}
+}

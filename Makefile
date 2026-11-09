@@ -11,12 +11,18 @@ NODE_V  := $(shell node -p "require('./$(Sdks)/node/package.json').version" 2>/d
 RUST_V  := $(shell grep -m1 '^version' $(Sdks)/rust/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 RUBY_V  := $(shell ruby -e "print Gem::Specification.load('$(Sdks)/ruby/etunnel.gemspec').version" 2>/dev/null || echo 1.0.0)
 
-.PHONY: all verify pack-all clean-pkgs $(PACK) prereq
+.PHONY: all verify pack-all clean-pkgs $(PACK) prereq check-versions docs
 
 all: pack-all
 
 prereq:
 	@mkdir -p $(PACK)
+
+# ---------- documentation ----------
+# Regenerates the 19 per-language READMEs under sdks/ from one template so the
+# install/embed/API sections stay in sync with the code.
+docs:
+	python3 scripts/gen_sdk_readmes.py
 
 # ---------- verification (compile-only, no artifacts) ----------
 check-versions:

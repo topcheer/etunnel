@@ -12,7 +12,7 @@ let package = Package(
         .executableTarget(
             name: "etunnel",
             path: "sdks/swift",
-            exclude: ["Package.swift", "README.md"]
+            exclude: ["Package.swift", "README.md", "example"]
         )
     ]
 )

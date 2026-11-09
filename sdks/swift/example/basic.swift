@@ -1,6 +1,15 @@
-// Minimal etunnel example (Swift 5.9+).
-//   swift run etunnel-example 3000   (add as an executable target; see Package.swift)
-// Or embed: the code below is the whole program.
+// Minimal etunnel example (Swift 5.9+) - a local server plus a tunnel in one file.
+//
+// The client is deliberately a single file, so the simplest way to run this
+// example is to concatenate it with the client and run the result as a script:
+//
+//   cd sdks/swift
+//   cat etunnel.swift example/basic.swift > /tmp/basic.swift
+//   swift /tmp/basic.swift 3000
+//
+// In a real app, add etunnel.swift to your target and call Etunnel directly
+// (see README.md); the CLI target `swift run etunnel 3000` exposes an existing
+// local service without any code changes.
 import Foundation
 
 let port = CommandLine.arguments.count > 1 ? Int(CommandLine.arguments[1]) ?? 3000 : 3000
@@ -30,7 +39,13 @@ DispatchQueue.global().async {
     }
 }
 
-print("local http://127.0.0.1:\(port)")
-let tunnel = try connect(server: "wss://t.etun.uk/tunnel", localPort: port)
-print("public URL: \(tunnel.url)")
+print("local service: http://127.0.0.1:\(port)")
+
+let server = ProcessInfo.processInfo.environment["ETUNNEL_SERVER"] ?? "wss://t.etun.uk/tunnel"
+let tunnel = Etunnel(server: server, local: String(port))
+let url = try await tunnel.connect(
+    token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
+    subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"])
+print("public URL: \(url)")
+
 RunLoop.main.run()
