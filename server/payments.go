@@ -108,10 +108,10 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 			p = fmt.Sprintf("$%d.%02d/mo", cents/100, cents%100)
 		}
 		rows = append(rows, row{ID: id, Name: t.Name, Price: p,
-			TTL: t.TTL.String(), Custom: t.CustomDomains,
+			TTL: humanTTL(t.TTL), Custom: t.CustomDomains,
 			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
 	}
-	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
+	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>"><title>{{.Domain}} - pricing</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:820px;margin:2rem auto;padding:0 1rem}
 table{border-collapse:collapse;width:100%;margin:1.5rem 0}
@@ -128,12 +128,12 @@ input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6p
 <p>Pay once, get an API key instantly. Manage tunnels with it (custom subdomains, longer TTL).</p>
 <label for="email">Email (your account identity)</label>
 <input id="email" type="email" placeholder="you@example.com" autocomplete="email" value="{{.User}}"{{if .User}} readonly style="opacity:.7"{{end}}>
-<table><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
+<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="width:100%;min-width:520px;border-collapse:collapse"><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
 {{range .Rows}}{{if .Buyable}}<tr><td><b>{{.Name}}</b></td><td>{{.TTL}}</td><td>{{.Custom}}</td>
 <td>{{.BandwidthMbps}} Mbps</td><td>{{.Price}}</td>
 <td><button class="buy" onclick="pay(this,'{{.ID}}','crypto')">💎 Crypto</button>
 <button class="buy paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button></td></tr>{{end}}{{end}}
-</table>
+</table></div>
 <div id="msg"></div>
 <script>
 async function pay(btn, tier, provider){
@@ -881,4 +881,18 @@ func (s *Server) reapExpiredTiers(now time.Time) int {
 		}
 	}
 	return len(expired)
+}
+
+// humanTTL renders a tier lifetime compactly: 720h0m0s reads as "30d".
+func humanTTL(d time.Duration) string {
+	if d <= 0 {
+		return "unlimited"
+	}
+	if d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	}
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return d.String()
 }
