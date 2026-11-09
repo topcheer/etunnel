@@ -153,3 +153,23 @@ func TestPayPalOrderMeta(t *testing.T) {
 }
 
 var _ = os.Getenv
+
+// Capture responses sometimes omit purchase_units.custom_id; the parser
+// must yield empty strings then (triggering the GET-order fallback) and
+// parse the GET shape correctly.
+func TestPayPalOrderMetaCaptureVsGetShapes(t *testing.T) {
+	captureShape := map[string]any{ // no custom_id back from capture
+		"id": "X", "status": "COMPLETED",
+		"purchase_units": []any{map[string]any{
+			"payments": map[string]any{"captures": []any{map[string]any{"status": "COMPLETED"}}}}},
+	}
+	if e, tier := paypalOrderMeta(captureShape); e != "" || tier != "" {
+		t.Fatalf("capture shape should yield empty meta, got %q %q", e, tier)
+	}
+	getShape := map[string]any{
+		"purchase_units": []any{map[string]any{"custom_id": "u@x.com:pro"}},
+	}
+	if e, tier := paypalOrderMeta(getShape); e != "u@x.com" || tier != "pro" {
+		t.Fatalf("GET shape meta: %q %q", e, tier)
+	}
+}
