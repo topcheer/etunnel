@@ -367,12 +367,16 @@ func (s *Server) activate(email, tier string) (string, error) {
 	expires := time.Now().Add(subscriptionPeriod)
 	if acct, ok := s.accounts.LookupEmail(email); ok {
 		// renewal/upgrade, key unchanged — write the tier under the store
-		// mutex (#4: no lock-free writes to the shared *Account).
+		// mutex (#4: no lock-free writes to the shared *Account). Both store
+		// implementations persist inside Mutate; the JSON store additionally
+		// needed the explicit save, which lives behind the jsonSaver cut.
 		s.accounts.Mutate(email, func(a *Account) {
 			a.Tier = tier
 			a.ExpiresAt = expires // every successful payment renews the period
 		})
-		_ = s.accounts.saveLockedSafe()
+		if js, ok := s.accounts.(jsonSaver); ok {
+			_ = js.saveLockedSafe()
+		}
 		s.notifyPayment(email, tier)
 		return acct.APIKey, nil
 	}
@@ -739,6 +743,9 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 }
+
+// jsonSaver is the extra surface only the JSON-file store needs.
+type jsonSaver interface{ saveLockedSafe() error }
 
 // saveLockedSafe persists the store from an HTTP handler context.
 func (s *AccountStore) saveLockedSafe() error {

@@ -86,6 +86,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
+	// Cluster: another peer may own this subdomain (L4 LB landed us wrong).
+	if s.router != nil {
+		if target := s.router.Lookup(sub); target != "" {
+			if s.router.Forward(sub, w, r) {
+				return
+			}
+			// Forward failed (peer down) - fall through to notFound; the
+			// SDK's reconnect will re-land the tunnel on a live peer.
+		}
+	}
 	sess := s.reg.Lookup(sub)
 	if sess == nil {
 		s.notFound(w, r)

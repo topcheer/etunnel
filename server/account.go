@@ -19,6 +19,24 @@ var ErrUnknownTier = errors.New("etunnel: unknown tier")
 // ErrEmailTaken indicates an account already exists for the email.
 var ErrEmailTaken = errors.New("etunnel: email already registered")
 
+// accountBackend is the account storage contract shared by the JSON store
+// (single node) and the Postgres store (cluster).
+type accountBackend interface {
+	Create(email, tier string) (*Account, error)
+	Lookup(key string) (*Account, bool)
+	LookupEmail(email string) (*Account, bool)
+	FindByProvider(provider, subject string) (*Account, bool)
+	Delete(key string) bool
+	ResetKey(email string) (string, bool)
+	CancelSubscription(email string) bool
+	DowngradeToFree(email string) bool
+	ExpiredPaid(now time.Time) []string
+	Snapshot(key string) (Account, bool)
+	Mutate(email string, fn func(*Account)) bool
+	List() []*Account
+	PruneInactive(olderThan time.Duration, now time.Time) int
+}
+
 // Account is a registered (paid-plan) identity identified by API key.
 type Account struct {
 	APIKey  string    `json:"apiKey"`
@@ -279,4 +297,32 @@ func (s *AccountStore) DowngradeToFree(email string) bool {
 // account: it carries payment history and an OAuth binding.
 func (a *Account) EverPaid() bool {
 	return a.Tier != "free" || !a.LapsedAt.IsZero()
+}
+
+// PruneInactive removes anonymous free accounts older than the retention
+// window. Accounts that ever paid (EverPaid) or own custom subdomains are
+// always kept - their history and OAuth bindings outlive the retention
+// policy. No-op when retention is zero.
+func (s *AccountStore) PruneInactive(olderThan time.Duration, now time.Time) int {
+	if olderThan <= 0 {
+		return 0
+	}
+	s.mu.Lock()
+	var doomed []string
+	for _, a := range s.byKey {
+		if a.EverPaid() || len(a.Domains) > 0 {
+			continue
+		}
+		if now.Sub(a.Created) > olderThan {
+			doomed = append(doomed, a.APIKey)
+		}
+	}
+	s.mu.Unlock()
+	n := 0
+	for _, k := range doomed {
+		if s.Delete(k) {
+			n++
+		}
+	}
+	return n
 }

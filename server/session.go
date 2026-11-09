@@ -219,18 +219,21 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-IP limit for anonymous tunnels.
+	// Per-IP limit for anonymous tunnels. In a cluster this counter is the
+	// shared one (Redis), so the limit is global; single node keeps the
+	// in-memory counter with identical semantics.
 	if acct == nil && s.cfg.MaxTunnelsPerIP > 0 {
-		n := 0
-		for _, sess := range s.reg.Snapshot() {
-			if sess.ip == ip && sess.account == nil {
-				n++
+		if s.counter != nil {
+			n, err := s.counter.Incr(r.Context(), "ip:"+ip, 1)
+			if err == nil && n > int64(s.cfg.MaxTunnelsPerIP) {
+				_ = s.counter.Decr(r.Context(), "ip:"+ip)
+				s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
+					fmt.Sprintf("too many tunnels from %s", ip))
+				return
 			}
-		}
-		if n >= s.cfg.MaxTunnelsPerIP {
-			s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
-				fmt.Sprintf("too many tunnels from %s", ip))
-			return
+			if err != nil {
+				s.logf("session %s: counter unavailable, per-IP limit not enforced: %v", ip, err)
+			}
 		}
 	}
 
@@ -268,6 +271,9 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 				sess.sub = sub
 				sess.custom = true
 				resumed = sub
+				if s.router != nil {
+					s.router.Claim(sub)
+				}
 				s.logf("session %s: resumed subdomain %s", sess.id, sub)
 			} else {
 				s.logf("session %s: resume token valid but %s is taken, falling through", sess.id, sub)
@@ -620,6 +626,14 @@ func (s *Session) routeFrame(f protocol.Frame, stall time.Duration) bool {
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
 		s.closeMsg.Store(reason)
+		// Cluster: release the subdomain so peers stop forwarding to us.
+		if s.srv != nil && s.srv.router != nil && s.sub != "" {
+			s.srv.router.Release(s.sub)
+		}
+		// Cluster: drop the anonymous per-IP counter we took at handshake.
+		if s.srv != nil && s.srv.counter != nil && s.account == nil && s.ip != "" {
+			_ = s.srv.counter.Decr(context.Background(), "ip:"+s.ip)
+		}
 		s.mu.Lock()
 		ttl := s.ttlTimer
 		s.mu.Unlock()

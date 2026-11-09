@@ -25,7 +25,7 @@ type metrics struct {
 type Server struct {
 	cfg      Config
 	reg      *Registry
-	accounts *AccountStore
+	accounts accountBackend
 	metrics  *metrics
 	// regLimiter throttles /api/register per source IP. Per instance rather
 	// than process-global: two Servers in one process (tests, embedders) must
@@ -37,6 +37,9 @@ type Server struct {
 	billing      BillingConfig
 	tg           telegramConfig
 	auth         oauthConfig
+	counter      Counter // per-IP / per-account tunnel limits (mem or redis)
+	router       Router  // cluster routing (nil = single node)
+	draining     atomic.Bool
 }
 
 // logf emits a server log line (stdout + journald under systemd).
@@ -65,6 +68,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc(cfg.WSPath, s.handleTunnelWS)
 	mux.HandleFunc("/api/register", s.handleRegister)
 	mux.HandleFunc("/api/tiers", s.handleTiers)
+	mux.HandleFunc("/healthz", s.HealthzHandler().ServeHTTP)
 	mux.HandleFunc("/pricing", s.handlePricing)
 	mux.HandleFunc("/terms", s.handleTerms)
 	mux.HandleFunc("/privacy", s.handlePrivacy)
@@ -105,10 +109,19 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) Handler() http.Handler { return s.handler }
 
 // Accounts exposes the account store (for tests/tools).
-func (s *Server) Accounts() *AccountStore { return s.accounts }
+func (s *Server) Accounts() accountBackend { return s.accounts }
 
 // Run starts all listeners and blocks until ctx is done.
 func (s *Server) Run(ctx context.Context) error {
+	if cc, closers, err := setupCluster(ctx); err != nil {
+		return err
+	} else {
+		s.applyCluster(ctx, cc, closers)
+	}
+	go func() {
+		<-ctx.Done()
+		s.Drain() // healthz flips to 503: LB removes us before sessions die
+	}()
 	var servers []*http.Server
 	s.startTelegram(ctx)
 	s.startTierReaper(ctx)
