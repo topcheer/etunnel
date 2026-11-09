@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -148,5 +150,31 @@ func (s *Server) setupDNSTLS(ctx context.Context) (*tlsConfigBundle, error) {
 	if err := os.MkdirAll(s.cfg.TLS.CacheDir, 0o700); err != nil {
 		return nil, err
 	}
-	return setupWildcardCert(ctx, s.cfg.TLS, s.cfg.Domain)
+	bundle, err := setupWildcardCert(ctx, s.cfg.TLS, s.cfg.Domain)
+	if err != nil {
+		return nil, err
+	}
+	// Legacy alias domain: serve its existing (static, non-renewed) wildcard
+	// certificate when the SNI name falls under the alias. Missing files are
+	// a soft warning - the alias simply stops being TLS-served.
+	if s.cfg.AliasDomain != "" {
+		ac, err := tls.LoadX509KeyPair(
+			filepath.Join(s.cfg.TLS.CacheDir, "wildcard-"+s.cfg.AliasDomain+".crt"),
+			filepath.Join(s.cfg.TLS.CacheDir, "wildcard-"+s.cfg.AliasDomain+".key"))
+		if err != nil {
+			s.logf("tls: alias %s has no static cert, alias TLS disabled", s.cfg.AliasDomain)
+		} else {
+			alias := &ac
+			suffix := "." + s.cfg.AliasDomain
+			inner := bundle.tlsConfig.GetCertificate
+			bundle.tlsConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				if hello.ServerName != "" && strings.HasSuffix(hello.ServerName, suffix) {
+					return alias, nil
+				}
+				return inner(hello)
+			}
+			s.logf("tls: alias %s served from static wildcard", s.cfg.AliasDomain)
+		}
+	}
+	return bundle, nil
 }

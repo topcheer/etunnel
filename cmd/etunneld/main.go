@@ -18,6 +18,7 @@ import (
 func main() {
 	var (
 		domain     = flag.String("domain", "", "tunnel base domain, e.g. t.example.com (required)")
+		aliasDom   = flag.String("alias-domain", "", "legacy alias domain served alongside -domain (static wildcard cert, for deprecation windows)")
 		addr       = flag.String("addr", ":443", "main HTTPS listen address")
 		httpAddr   = flag.String("http-addr", ":80", "plain HTTP listen address (redirect + ACME); empty disables")
 		adminAddr  = flag.String("admin-addr", "127.0.0.1:9090", "admin/stats listen address")
@@ -44,6 +45,7 @@ func main() {
 
 	cfg := server.Config{
 		Domain:              *domain,
+		AliasDomain:         *aliasDom,
 		Addr:                *addr,
 		HTTPAddr:            *httpAddr,
 		AdminAddr:           *adminAddr,

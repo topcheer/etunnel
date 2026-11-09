@@ -45,6 +45,11 @@ type Config struct {
 	// Domain is the tunnel base domain, e.g. "t.example.com". Tunnels live at
 	// "<sub>.Domain".
 	Domain string
+	// AliasDomain serves a legacy domain alongside Domain during migrations:
+	// requests for <sub>.AliasDomain route to the same tunnels. TLS for the
+	// alias uses a static wildcard-<alias>.crt/key pair in the acme dir
+	// (not renewed - meant for deprecation windows).
+	AliasDomain string
 
 	// Addr is the main HTTPS listen address (":443"). When TLSMode is "http"
 	// this serves plain HTTP.
