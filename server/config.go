@@ -80,6 +80,9 @@ type Config struct {
 	// AccountsFile persists registered accounts (API keys). Empty disables
 	// persistence (memory only).
 	AccountsFile string
+	// AccountRetention prunes free-tier accounts untouched for this long on
+	// startup. Zero disables pruning (issue #18).
+	AccountRetention time.Duration
 
 	// RequireToken rejects anonymous tunnels when true.
 	RequireToken bool

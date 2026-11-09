@@ -60,6 +60,11 @@ func New(cfg Config) (*Server, error) {
 		metrics:    &metrics{startedAt: time.Now()},
 		regLimiter: &registerLimiter{seen: make(map[string]time.Time)},
 	}
+	if cfg.AccountRetention > 0 {
+		if n := accounts.PruneInactive(time.Now().Add(-cfg.AccountRetention), cfg.DefaultTier); n > 0 {
+			s.logf("accounts: pruned %d inactive free account(s) unused for %s", n, cfg.AccountRetention)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WSPath, s.handleTunnelWS)

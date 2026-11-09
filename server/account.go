@@ -25,6 +25,10 @@ type Account struct {
 	Email   string    `json:"email"`
 	Tier    string    `json:"tier"`
 	Created time.Time `json:"created"`
+	// LastSeen is stamped by Snapshot (the handshake lookup) so stale accounts
+	// can be pruned by activity, not by age - a long-lived paying account is
+	// not stale just because it is old (issue #18).
+	LastSeen time.Time `json:"lastSeen,omitempty"`
 	// OAuth identity (optional; anonymous email-registered accounts have none).
 	Provider string `json:"provider,omitempty"` // google | gitlab | apple
 	Subject  string `json:"subject,omitempty"`  // provider-stable user id
@@ -63,7 +67,14 @@ func NewAccountStore(path string) (*AccountStore, error) {
 	}
 	var accounts []*Account
 	if err := json.Unmarshal(b, &accounts); err != nil {
-		return nil, fmt.Errorf("etunnel: parse accounts file: %w", err)
+		// A torn or hand-edited file must not brick the daemon (issue #18):
+		// keep the bytes for recovery, start empty, and say so loudly.
+		broken := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+		if rerr := os.Rename(path, broken); rerr != nil {
+			return nil, fmt.Errorf("etunnel: parse accounts file: %w (could not move it aside: %v)", err, rerr)
+		}
+		fmt.Fprintf(os.Stderr, "etunneld: accounts file %s was unparseable (%v); moved to %s, starting with an empty account store\n", path, err, broken)
+		return s, nil
 	}
 	for _, a := range accounts {
 		s.byKey[a.APIKey] = a
@@ -142,17 +153,48 @@ func (s *AccountStore) LookupEmail(email string) (*Account, bool) {
 // writers. Snapshot hands back a value the caller owns, so concurrent tier or
 // domain changes cannot tear a read (issue #4).
 func (s *AccountStore) Snapshot(key string) (Account, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	a, ok := s.byKey[key]
 	if !ok {
 		return Account{}, false
 	}
+	a.LastSeen = time.Now() // activity stamp for pruning; persisted on next save
 	cp := *a
 	if len(a.Domains) > 0 { // copy the slice: a shared header can tear
 		cp.Domains = append([]string(nil), a.Domains...)
 	}
 	return cp, true
+}
+
+// PruneInactive removes free-tier accounts with no custom domains whose last
+// activity (LastSeen, falling back to Created) predates cutoff, and reports how
+// many were removed. Paid accounts and accounts holding custom domains are
+// never pruned: they carry entitlements. Live tunnels of a pruned account keep
+// running until they close; only the API key stops working.
+func (s *AccountStore) PruneInactive(cutoff time.Time, freeTier string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for key, a := range s.byKey {
+		if a.Tier != freeTier || len(a.Domains) > 0 {
+			continue
+		}
+		seen := a.LastSeen
+		if seen.IsZero() {
+			seen = a.Created
+		}
+		if seen.After(cutoff) {
+			continue
+		}
+		delete(s.byKey, key)
+		delete(s.byMail, a.Email)
+		removed++
+	}
+	if removed > 0 {
+		_ = s.saveLocked()
+	}
+	return removed
 }
 
 // Delete removes an account by API key.
