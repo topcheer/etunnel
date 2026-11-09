@@ -251,3 +251,48 @@ func TestStateCookieAttributes(t *testing.T) {
 		t.Fatal("mismatched state accepted")
 	}
 }
+
+// Apple requires response_mode=form_post with name/email scopes, and the
+// callback then arrives as a cross-site POST with state/code in the body.
+func TestAppleFormPostFlow(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth.appleID, s.auth.appleTeam, s.auth.appleKey = "dev.ggcode.etunnel.web", "TEAM", "KEY"
+	s.auth.appleKeyPEM = "dummy-pem" // gate only needs non-empty; signing is tested separately
+	s.billing.PublicBaseURL = "https://t.etun.uk"
+
+	// authorize URL must carry response_mode=form_post
+	rec := httptest.NewRecorder()
+	s.handleOAuthLogin(rec, httptest.NewRequest(http.MethodGet, "/auth/apple/login", nil), "apple")
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	if got := loc.Query().Get("response_mode"); got != "form_post" {
+		t.Fatalf("response_mode=%q, want form_post", got)
+	}
+	if got := loc.Query().Get("scope"); !strings.Contains(got, "email") {
+		t.Fatalf("scope=%q", got)
+	}
+	var stateCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "et_oauth_state" {
+			stateCookie = c
+		}
+	}
+	if stateCookie == nil {
+		t.Fatal("no state cookie")
+	}
+	if stateCookie.SameSite != http.SameSiteNoneMode || !stateCookie.Secure {
+		t.Fatalf("cross-site POST needs SameSite=None; Secure (got ss=%v secure=%v)", stateCookie.SameSite, stateCookie.Secure)
+	}
+
+	// callback arrives as POST with form-encoded body: state must be read
+	// from the body, not the query string (code will then fail exchange,
+	// which is fine - we assert we got past the state gate).
+	form := url.Values{"state": {stateCookie.Value}, "code": {"fake-code"}}
+	r := httptest.NewRequest(http.MethodPost, "/auth/apple/callback", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(stateCookie)
+	rec = httptest.NewRecorder()
+	s.handleOAuthCallback(rec, r, "apple")
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "bad oauth state") {
+		t.Fatal("state from POST body was not accepted")
+	}
+}
