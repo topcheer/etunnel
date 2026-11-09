@@ -36,6 +36,7 @@ static const size_t MAXP = 32768;
 
 // Set by SIGINT/SIGTERM only: the tunnel loop must not reconnect after it.
 static volatile sig_atomic_t g_stopped = 0;
+static std::string g_resume; // server-signed token: reclaim the subdomain on reconnect
 static void on_signal(int sig) { (void) sig; g_stopped = 1; }
 
 // ---- tiny JSON helpers (flat messages) ---------------------------------------
@@ -207,6 +208,7 @@ int main(int argc, char **argv) {
             if (msg->get_opcode() == websocketpp::frame::opcode::text) {
                 std::string t = msg->get_payload();
                 if (t.find("\"type\":\"welcome\"") != std::string::npos) {
+                    g_resume = json_str_field(t, "resumeToken");
                     std::cout << "TUNNEL_URL: " << json_str_field(t, "url") << std::endl;
                     gotUrl = true;
                 } else if (t.find("\"type\":\"req\"") != std::string::npos) {
@@ -246,6 +248,7 @@ int main(int argc, char **argv) {
             std::string hello = "{\"type\":\"hello\",\"proto\":1";
             if (!sub.empty()) hello += ",\"subdomain\":\"" + json_escape(sub) + "\"";
             if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
+            if (!g_resume.empty()) hello += ",\"resume\":\"" + json_escape(g_resume) + "\"";
             hello += ",\"client\":\"etunnel-cpp/1.0\"}";
             client.send(hdl, hello, websocketpp::frame::opcode::text, ec);
         });

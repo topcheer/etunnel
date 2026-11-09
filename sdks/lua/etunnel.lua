@@ -175,11 +175,12 @@ end
 
 -- -------- etunnel -------------------------------------------------------------
 
-local function connect(server, local_port, token, subdomain)
+local function connect(server, local_port, token, subdomain, resume)
   local ws = Ws.connect(server)
   local hello = '{"type":"hello","proto":1'
   if subdomain then hello = hello .. ',"subdomain":"' .. json_escape(subdomain) .. '"' end
   if token then hello = hello .. ',"token":"' .. json_escape(token) .. '"' end
+  if resume and resume ~= "" then hello = hello .. ',"resume":"' .. json_escape(resume) .. '"' end
   hello = hello .. ',"client":"etunnel-lua/1.0"}'
   ws:send_text(hello)
 
@@ -190,6 +191,7 @@ local function connect(server, local_port, token, subdomain)
     if op == 0x1 then
       if payload:find('"type":"welcome"', 1, true) then
         url = json_field_str(payload, "url")
+        resume_token = json_field_str(payload, "resumeToken")
         break
       elseif payload:find('"type":"error"', 1, true) then
         error("etunnel: " .. (json_field_str(payload, "code") or "?"))
@@ -227,6 +229,7 @@ local function connect(server, local_port, token, subdomain)
   -- serves requests sequentially (fine for webhooks/dev use).
   return {
     url = url,
+    resumeToken = resume_token or "",
     run = function()
       while true do
         local op, payload = ws:recv()
@@ -284,11 +287,13 @@ local token, subdomain = os.getenv("ETUNNEL_TOKEN"), os.getenv("ETUNNEL_SUBDOMAI
 local reconnect = os.getenv("ETUNNEL_RECONNECT") ~= "0"
 local socket = require("socket")
 local backoff_ms = 500
+local resume = "" -- server-signed token: reclaim the same subdomain on reconnect
 
 while true do
-  local ok, t = pcall(connect, server, local_port, token, subdomain)
+  local ok, t = pcall(connect, server, local_port, token, subdomain, resume)
   if ok then
     backoff_ms = 500 -- a successful connect resets the backoff
+    if t.resumeToken and t.resumeToken ~= "" then resume = t.resumeToken end
     print("TUNNEL_URL: " .. tostring(t.url))
     io.stdout:flush()
     local rok, rerr = pcall(t.run) -- blocks until the tunnel drops

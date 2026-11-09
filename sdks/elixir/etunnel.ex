@@ -29,7 +29,8 @@ defmodule Etunnel do
       streams: %{},
       from: Keyword.get(opts, :from, self()),
       token: opts[:token],
-      subdomain: opts[:subdomain]
+      subdomain: opts[:subdomain],
+      resume: opts[:resume]
     }
 
     headers = [{"Sec-WebSocket-Protocol", "etunnel-v1"}]
@@ -49,6 +50,7 @@ defmodule Etunnel do
       %{type: "hello", proto: 1, client: "etunnel-elixir/1.0"}
       |> maybe_put(:token, state.token)
       |> maybe_put(:subdomain, state.subdomain)
+      |> maybe_put(:resume, state.resume)
       |> Jason.encode!()
 
     {:reply, {:text, hello}, state}
@@ -61,7 +63,8 @@ defmodule Etunnel do
     case Jason.decode(msg) do
       {:ok, %{"type" => "welcome"} = w} ->
         send(state.from, {:etunnel_up, w["url"]})
-        {:ok, %{state | url: w["url"]}}
+        send(state.from, {:etunnel_resume_token, w["resumeToken"] || ""})
+        {:ok, %{state | url: w["url"], resume: w["resumeToken"] || state.resume}}
 
       {:ok, %{"type" => "error"} = e} ->
         send(state.from, {:etunnel_error, e})

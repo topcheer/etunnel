@@ -33,6 +33,7 @@ defmodule EtunnelRunner do
   end
 
   defp loop(conf, backoff) do
+    conf = %{conf | resume: Process.get(:etunnel_resume, conf.resume)}
     case start(conf) do
       {:ok, pid} ->
         case watch(pid) do
@@ -68,7 +69,8 @@ defmodule EtunnelRunner do
       server: conf.server,
       local: conf.local,
       token: conf.token,
-      subdomain: conf.subdomain
+      subdomain: conf.subdomain,
+      resume: conf.resume
     )
   end
 
@@ -80,6 +82,9 @@ defmodule EtunnelRunner do
   defp watch(pid, deadline) do
     receive do
       :etunnel_stop -> :stopped
+      {:etunnel_resume_token, tok} ->
+        Process.put(:etunnel_resume, tok) # kept for the next start()
+        watch(pid, deadline)
       {:EXIT, ^pid, _reason} -> :down
     after
       100 ->
@@ -154,6 +159,8 @@ conf = %{
   local: local,
   token: System.get_env("ETUNNEL_TOKEN"),
   subdomain: System.get_env("ETUNNEL_SUBDOMAIN"),
+  # server-signed token: reclaimed on reconnect so the subdomain stays put
+  resume: nil,
   reconnect: System.get_env("ETUNNEL_RECONNECT") != "0"
 }
 

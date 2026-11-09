@@ -23,6 +23,7 @@
 
 #define MAXP 32768
 
+static char g_resume[512]; /* server-signed token: reclaim the subdomain on reconnect */
 static int g_local_port = 3000;
 static volatile sig_atomic_t g_stop = 0;
 static pthread_mutex_t g_send_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -173,9 +174,10 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
             sub && *sub ? ",\"subdomain\":\"" : "",
             0);
         (void) n;
-        snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s,\"client\":\"etunnel-c/1.0\"}",
+        snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.0\"}",
             sub && *sub ? ",\"subdomain\":\"" : "", sub && *sub ? sub : "", sub && *sub ? "\"" : "",
-            tok && *tok ? ",\"token\":\"" : "", tok && *tok ? tok : "", tok && *tok ? "\"" : "");
+            tok && *tok ? ",\"token\":\"" : "", tok && *tok ? tok : "", tok && *tok ? "\"" : "",
+            g_resume[0] ? ",\"resume\":\"" : "", g_resume);
         send_text(wsi, hello);
         break;
     }
@@ -221,6 +223,8 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
             if (m) {
                 const char *type = json_object_get_string(json_object_object_get(m, "type"));
                 if (type && !strcmp(type, "welcome")) {
+                    const char *rt = json_object_get_string(json_object_object_get(m, "resumeToken"));
+                    if (rt) snprintf(g_resume, sizeof(g_resume), "%s", rt);
                     printf("TUNNEL_URL: %s\n",
                         json_object_get_string(json_object_object_get(m, "url")));
                     fflush(stdout);
