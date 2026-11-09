@@ -59,6 +59,9 @@ func main() {
 		OnLog: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "etunnel: "+format+"\n", args...)
 		},
+		OnReconnect: func(attempt int, url string) {
+			fmt.Fprintf(os.Stderr, "\n\x1b[32m\u2713 reconnected after %d attempt(s)\x1b[0m\n\x1b[1m  same URL: %s\x1b[0m\n\n", attempt, url)
+		},
 	}
 	// Auto-reconnect by default: a dropped connection (network blip, server
 	// deploy) is re-dialled with backoff, and the resume token keeps the same
