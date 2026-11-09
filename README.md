@@ -23,11 +23,11 @@ service through `https://<subdomain>.<domain>`.
 ┌──────────┐  wss (multiplexed HTTP streams)   ┌─────────────┐  https
 │ your app  │ ───────────────────────────────▶ │  etunneld   │ ◀──── internet
 │ :3000     │ ◀─────────────────────────────── │ + auto-TLS  │       visitors
-└──────────┘        one outbound WS            └─────────────┘   *.t.ggcode.uk
+└──────────┘        one outbound WS            └─────────────┘   *.t.etun.uk
 ```
 
-**Live deployment**: `wss://t.ggcode.uk/tunnel` — tunnels live at
-`https://<name>.t.ggcode.uk`.
+**Live deployment**: `wss://t.etun.uk/tunnel` — tunnels live at
+`https://<name>.t.etun.uk`.
 
 ## Plans
 
@@ -46,8 +46,8 @@ Custom tiers: pass a JSON file to `etunneld -tiers tiers.json` mapping tier id
 ### CLI
 
 ```sh
-etunnel -server wss://t.ggcode.uk/tunnel 3000
-#   https://cosmic-auroch-59.t.ggcode.uk -> 127.0.0.1:3000
+etunnel -server wss://t.etun.uk/tunnel 3000
+#   https://cosmic-auroch-59.t.etun.uk -> 127.0.0.1:3000
 #   plan: Free, expires in 4h
 ```
 
@@ -57,10 +57,10 @@ etunnel -server wss://t.ggcode.uk/tunnel 3000
 import etunnel "etunnel/sdk"
 
 t, err := etunnel.Connect(ctx, etunnel.Options{
-    Server:    "wss://t.ggcode.uk/tunnel",
+    Server:    "wss://t.etun.uk/tunnel",
     LocalAddr: "127.0.0.1:3000",
 })
-fmt.Println(t.URL()) // https://cosmic-auroch-59.t.ggcode.uk
+fmt.Println(t.URL()) // https://cosmic-auroch-59.t.etun.uk
 defer t.Close("done")
 ```
 
@@ -75,11 +75,11 @@ environment variables and print `TUNNEL_URL: ...` when run standalone.
 ### Paid plans (custom subdomains, longer TTL, 10 Mbps)
 
 ```sh
-curl -X POST https://t.ggcode.uk/api/register \
+curl -X POST https://t.etun.uk/api/register \
      -d '{"email":"you@example.com","tier":"starter"}'
 # {"apiKey":"et_...","tier":"starter", ...}
 
-etunnel -server wss://t.ggcode.uk/tunnel -token et_... -subdomain mydev 3000
+etunnel -server wss://t.etun.uk/tunnel -token et_... -subdomain mydev 3000
 ```
 
 ## Server (etunneld)
@@ -112,7 +112,7 @@ Endpoints:
 - HTTP/1.1 reverse proxying by hostname with streaming bodies (Go SDK),
   `X-Forwarded-For`/`X-Forwarded-Proto` injection, chunked transfer, flushes
 - WebSocket / 101-upgrade **pass-through** (Go SDK): hijack + raw byte pipe,
-  so `wss://<sub>.t.ggcode.uk` works for your local WS server
+  so `wss://<sub>.t.etun.uk` works for your local WS server
 - Plan-based limits: TTL expiry (server closes with `ttl_expired`), bandwidth
   rate limiting (token bucket, both directions), custom-domain quotas
 - Anonymous abuse guard: per-IP concurrent tunnel cap

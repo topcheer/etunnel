@@ -1,7 +1,7 @@
 # etunnel SDKs — 20 languages, one wire protocol
 
 Expose a local service to the internet through an etunnel server
-(`wss://t.ggcode.uk/tunnel`) — instant public HTTPS, automatic TLS, zero
+(`wss://t.etun.uk/tunnel`) — instant public HTTPS, automatic TLS, zero
 signup. Every SDK speaks the same tiny protocol
 ([PROTOCOL.md](../PROTOCOL.md)); the **Go SDK** is the canonical streaming
 implementation with full WebSocket pass-through, the other 19 are
@@ -47,14 +47,14 @@ Java coordinates:
 ```sh
 # any SDK CLI works the same way:
 etunnel 3000                      # or: npx @easytunnel/et-sdk 3000
-# TUNNEL_URL: https://quiet-frog-42.t.ggcode.uk   <- now live
+# TUNNEL_URL: https://quiet-frog-42.t.etun.uk   <- now live
 ```
 
 Embedding (Node example; every SDK README has its own):
 
 ```js
 const { connect } = require('@easytunnel/et-sdk');
-const t = await connect('wss://t.ggcode.uk/tunnel', 3000);
+const t = await connect('wss://t.etun.uk/tunnel', 3000);
 console.log(t.url);
 ```
 
@@ -84,4 +84,4 @@ Interpreted SDKs use the runtime env only. Precedence: env > compiled default > 
 ## Server
 
 Single Go binary; see the [main README](../README.md) for a 60-second setup
-and the public instance at `wss://t.ggcode.uk/tunnel`.
+and the public instance at `wss://t.etun.uk/tunnel`.

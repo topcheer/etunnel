@@ -6,7 +6,7 @@
 //   apt install libwebsocketpp-dev libasio-dev libcurl4-openssl-dev
 //   g++ -std=c++17 etunnel.cpp -lcurl -o etunnel
 // Run:
-//   ETUNNEL_SERVER=wss://t.ggcode.uk/tunnel ./etunnel 3000
+//   ETUNNEL_SERVER=wss://t.etun.uk/tunnel ./etunnel 3000
 #include <websocketpp/config/asio_client.hpp>
 #include <websocketpp/client.hpp>
 #include <curl/curl.h>
@@ -161,7 +161,7 @@ static void serve(WsClient *client, websocketpp::connection_hdl hdl,
 int main(int argc, char **argv) {
     const char *serverEnv = getenv("ETUNNEL_SERVER");
     #ifndef ETUNNEL_DEFAULT_SERVER
-#define ETUNNEL_DEFAULT_SERVER "wss://t.ggcode.uk/tunnel"
+#define ETUNNEL_DEFAULT_SERVER "wss://t.etun.uk/tunnel"
 #endif
     std::string server = serverEnv ? serverEnv : ETUNNEL_DEFAULT_SERVER;
     const char *localEnv = getenv("ETUNNEL_LOCAL");

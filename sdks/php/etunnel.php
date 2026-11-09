@@ -7,7 +7,7 @@
  * Run:   php etunnel.php 3000
  *
  * Embed:
- *   $t = Etunnel::connect('wss://t.ggcode.uk/tunnel', 3000);
+ *   $t = Etunnel::connect('wss://t.etun.uk/tunnel', 3000);
  *   echo $t->url;
  */
 
@@ -269,7 +269,7 @@ final class Etunnel
 }
 
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
-    $server = getenv('ETUNNEL_SERVER') ?: 'wss://t.ggcode.uk/tunnel';
+    $server = getenv('ETUNNEL_SERVER') ?: 'wss://t.etun.uk/tunnel';
     $local = $argv[1] ?? getenv('ETUNNEL_LOCAL') ?? '3000';
     try {
         $t = Etunnel::connect($server, $local, getenv('ETUNNEL_TOKEN') ?: null, getenv('ETUNNEL_SUBDOMAIN') ?: null,

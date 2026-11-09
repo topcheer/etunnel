@@ -52,7 +52,7 @@ type Hello struct {
 type Welcome struct {
 	Type      string `json:"type"`
 	Proto     int    `json:"proto"`
-	Hostname  string `json:"hostname"`            // e.g. quick-fox-42.t.ggcode.uk
+	Hostname  string `json:"hostname"`            // e.g. quick-fox-42.t.etun.uk
 	Subdomain string `json:"subdomain"`           // e.g. quick-fox-42
 	URL       string `json:"url"`                 // full public URL including scheme
 	ExpiresAt int64  `json:"expiresAt,omitempty"` // unix seconds, 0 = no expiry

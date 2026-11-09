@@ -270,7 +270,7 @@ end
 
 -- -------- main ----------------------------------------------------------------
 
-local server = os.getenv("ETUNNEL_SERVER") or "wss://t.ggcode.uk/tunnel"
+local server = os.getenv("ETUNNEL_SERVER") or "wss://t.etun.uk/tunnel"
 local local_port = tonumber(arg and arg[1] or os.getenv("ETUNNEL_LOCAL") or "3000")
 
 local ok, t = pcall(connect, server, local_port,

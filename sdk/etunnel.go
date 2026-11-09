@@ -41,7 +41,7 @@ type Options struct {
 
 // DefaultServer is the connect target when Options.Server is empty;
 // overridable at link time: -ldflags "-X etunnel/sdk.DefaultServer=wss://t.example.com/tunnel"
-var DefaultServer = "wss://t.ggcode.uk/tunnel"
+var DefaultServer = "wss://t.etun.uk/tunnel"
 
 // APIError is a policy error returned by the server during handshake.
 type APIError struct {

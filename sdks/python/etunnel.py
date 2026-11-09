@@ -4,7 +4,7 @@ Buffer-based protocol client: request/response bodies are buffered per stream
 (WebSocket upgrades are not forwarded — use the Go SDK for those).
 
     from etunnel import connect
-    t = connect("wss://t.ggcode.uk/tunnel", 3000)
+    t = connect("wss://t.etun.uk/tunnel", 3000)
     print(t["url"])
 """
 
@@ -165,7 +165,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
 
 
 def _main() -> None:
-    server = os.environ.get("ETUNNEL_SERVER", "wss://t.ggcode.uk/tunnel")
+    server = os.environ.get("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
     local = os.environ.get("ETUNNEL_LOCAL") or (sys.argv[1] if len(sys.argv) > 1 else "3000")
     try:
         t = connect(server, local, {

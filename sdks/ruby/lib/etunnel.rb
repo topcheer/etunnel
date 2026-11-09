@@ -8,7 +8,7 @@
 #
 # Embed:
 #   require_relative 'etunnel'
-#   t = Etunnel.connect('wss://t.ggcode.uk/tunnel', 3000)
+#   t = Etunnel.connect('wss://t.etun.uk/tunnel', 3000)
 #   puts t.url
 require 'json'
 require 'socket'
@@ -157,7 +157,7 @@ module Etunnel
 end
 
 def Etunnel.main(argv = ARGV)
-  server = ENV['ETUNNEL_SERVER'] || 'wss://t.ggcode.uk/tunnel'
+  server = ENV['ETUNNEL_SERVER'] || 'wss://t.etun.uk/tunnel'
   local = argv[0] || ENV['ETUNNEL_LOCAL'] || '3000'
   begin
     t = Etunnel.connect(server, local,

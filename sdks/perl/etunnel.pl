@@ -288,7 +288,7 @@ sub etunnel_connect {
 # --- main ----------------------------------------------------------------------
 $| = 1; # unbuffered stdout
 
-my $server = $ENV{ETUNNEL_SERVER} || 'wss://t.ggcode.uk/tunnel';
+my $server = $ENV{ETUNNEL_SERVER} || 'wss://t.etun.uk/tunnel';
 my $local = $ARGV[0] || $ENV{ETUNNEL_LOCAL} || '3000';
 $local = "127.0.0.1:$local" unless $local =~ /:/;
 my $t = etunnel_connect($server, $local, {

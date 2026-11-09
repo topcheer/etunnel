@@ -2,7 +2,7 @@
 // Buffer-based protocol client (bodies buffered per stream; no WS upgrades).
 //
 // Run:   kotlinc Etunnel.kt -include-runtime -d etunnel.jar && java -jar etunnel.jar 3000
-// Embed: val t = Etunnel.connect("wss://t.ggcode.uk/tunnel", 3000)
+// Embed: val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
 //        println(t.url)
 import java.io.ByteArrayOutputStream
 import java.net.URI
@@ -264,7 +264,7 @@ class Etunnel private constructor(val url: String) {
 }
 
 fun main(args: Array<String>) {
-    val server = System.getenv("ETUNNEL_SERVER") ?: "wss://t.ggcode.uk/tunnel"
+    val server = System.getenv("ETUNNEL_SERVER") ?: "wss://t.etun.uk/tunnel"
     val port = (args.getOrNull(0) ?: System.getenv("ETUNNEL_LOCAL") ?: "3000").toInt()
     try {
         val t = Etunnel.connect(server, port,

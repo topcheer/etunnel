@@ -6,7 +6,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-var server = Environment.GetEnvironmentVariable("ETUNNEL_SERVER") ?? "wss://t.ggcode.uk/tunnel";
+var server = Environment.GetEnvironmentVariable("ETUNNEL_SERVER") ?? "wss://t.etun.uk/tunnel";
 var local = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("ETUNNEL_LOCAL") ?? "3000";
 var t = await Etunnel.Connect(server, local,
     token: Environment.GetEnvironmentVariable("ETUNNEL_TOKEN"),

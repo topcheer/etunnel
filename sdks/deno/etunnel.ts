@@ -1,7 +1,7 @@
 // etunnel SDK for Deno (built-in WebSocket, zero dependencies).
 // Buffer-based protocol client (see node/etunnel.js for the full notes).
 //
-// const t = await connect('wss://t.ggcode.uk/tunnel', 3000);
+// const t = await connect('wss://t.etun.uk/tunnel', 3000);
 // console.log(t.url);
 
 const MAXP = 32768;
@@ -136,7 +136,7 @@ export async function connect(server: string, local: string | number, opts: Opti
 }
 
 if (import.meta.main) {
-  const server = Deno.env.get('ETUNNEL_SERVER') || 'wss://t.ggcode.uk/tunnel';
+  const server = Deno.env.get('ETUNNEL_SERVER') || 'wss://t.etun.uk/tunnel';
   const local = Deno.env.get('ETUNNEL_LOCAL') || Deno.args[0] || '3000';
   try {
     const t = await connect(server, local, {

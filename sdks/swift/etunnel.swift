@@ -189,7 +189,7 @@ final class Etunnel: @unchecked Sendable {
 
 func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
 
-let server = ProcessInfo.processInfo.environment["ETUNNEL_SERVER"] ?? "wss://t.ggcode.uk/tunnel"
+let server = ProcessInfo.processInfo.environment["ETUNNEL_SERVER"] ?? "wss://t.etun.uk/tunnel"
 let local = CommandLine.arguments.count > 1 ? CommandLine.arguments[1]
     : ProcessInfo.processInfo.environment["ETUNNEL_LOCAL"] ?? "3000"
 let et = Etunnel(server: server, local: local)

@@ -4,7 +4,7 @@ defmodule Etunnel do
   @moduledoc """
   Exposes a local service through an etunnel server.
 
-      {:ok, t} = Etunnel.start_link(server: "wss://t.ggcode.uk/tunnel", local: 3000)
+      {:ok, t} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000)
       Etunnel.url(t)
   """
   use WebSockex

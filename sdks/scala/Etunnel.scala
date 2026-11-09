@@ -2,7 +2,7 @@
 // Buffer-based protocol client (bodies buffered per stream; no WS upgrades).
 //
 // Run:   scala Etunnel.scala 3000
-// Embed: val t = Etunnel.connect("wss://t.ggcode.uk/tunnel", 3000)
+// Embed: val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
 //        println(t.url)
 import java.io.ByteArrayOutputStream
 import java.net.URI
@@ -254,7 +254,7 @@ object Etunnel {
 
 object Main {
   def main(args: Array[String]): Unit = {
-    val server = sys.env.getOrElse("ETUNNEL_SERVER", "wss://t.ggcode.uk/tunnel")
+    val server = sys.env.getOrElse("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
     val port = (args.headOption orElse sys.env.get("ETUNNEL_LOCAL")).getOrElse("3000").toInt
     try {
       val url = Etunnel.connect(server, port, sys.env.get("ETUNNEL_TOKEN").orNull,

@@ -55,3 +55,11 @@ push step above, check each: `npm view etunnel`, `pip index versions etunnel`,
 `gem search etunnel`, `nuget search etunnel`. If taken, the cheap fix is a
 scoped/qualified name (`@<org>/etunnel`, `etunnel-tunnel`, `ggcode-etunnel`)
 — only the `name` field in each manifest changes.
+
+## Tag discipline (Packagist et al)
+
+Tags of released versions are never rewritten. Re-tagging triggers Packagist
+webhook re-syncs (supply-chain alert emails) and re-runs the whole publish
+matrix. Fix-forward: land the fix, cut the NEXT tag. All 8 CI publish jobs
+are idempotent (registry presence check / --skip-duplicate / skip-existing),
+so a re-run of the same tag is safe but noisy; a rewritten tag is not.

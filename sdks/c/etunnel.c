@@ -6,7 +6,7 @@
  *   apt install libwebsockets-dev libcurl4-openssl-dev libjson-c-dev
  *   gcc etunnel.c -o etunnel -lwebsockets -lcurl -ljson-c
  * Run:
- *   ETUNNEL_SERVER=wss://t.ggcode.uk/tunnel ./etunnel 3000
+ *   ETUNNEL_SERVER=wss://t.etun.uk/tunnel ./etunnel 3000
  */
 #include <libwebsockets.h>
 #include <curl/curl.h>
@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
     if (argc > 1) g_local_port = atoi(argv[1]);
     else if (getenv("ETUNNEL_LOCAL")) g_local_port = atoi(getenv("ETUNNEL_LOCAL"));
     #ifndef ETUNNEL_DEFAULT_SERVER
-#define ETUNNEL_DEFAULT_SERVER "wss://t.ggcode.uk/tunnel"
+#define ETUNNEL_DEFAULT_SERVER "wss://t.etun.uk/tunnel"
 #endif
     const char *server = getenv("ETUNNEL_SERVER") ?: ETUNNEL_DEFAULT_SERVER;
 

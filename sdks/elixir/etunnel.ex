@@ -10,7 +10,7 @@
 #   end
 #
 # Run inside iex -S mix:
-#   {:ok, t} = Etunnel.start_link(server: "wss://t.ggcode.uk/tunnel", local_port: 3000)
+#   {:ok, t} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local_port: 3000)
 #   t.url  # or Etunnel.url(t)
 defmodule Etunnel do
   @moduledoc "etunnel reverse tunnel client"

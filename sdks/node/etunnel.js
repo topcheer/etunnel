@@ -6,7 +6,7 @@
 // forwarded — use the Go SDK for full streaming/upgrades).
 //
 // const { connect } = require('./etunnel');
-// const t = await connect('wss://t.ggcode.uk/tunnel', 3000);
+// const t = await connect('wss://t.etun.uk/tunnel', 3000);
 // console.log(t.url);
 
 const MAXP = 32768;
@@ -130,7 +130,7 @@ async function connect(server, local, opts = {}) {
 module.exports = { connect };
 
 if (require.main === module) {
-  const server = process.env.ETUNNEL_SERVER || 'wss://t.ggcode.uk/tunnel';
+  const server = process.env.ETUNNEL_SERVER || 'wss://t.etun.uk/tunnel';
   const local = process.env.ETUNNEL_LOCAL || process.argv[2] || '3000';
   connect(server, local, { token: process.env.ETUNNEL_TOKEN, subdomain: process.env.ETUNNEL_SUBDOMAIN })
     .then((t) => { console.log('TUNNEL_URL: ' + t.url); })

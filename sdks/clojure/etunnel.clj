@@ -3,7 +3,7 @@
 ;; client (bodies buffered per stream; no WS upgrades).
 ;;
 ;; Run:   clojure -M -m etunnel 3000
-;; Embed: (def t (etunnel/connect! "wss://t.ggcode.uk/tunnel" 3000))
+;; Embed: (def t (etunnel/connect! "wss://t.etun.uk/tunnel" 3000))
 ;;        (:url @t)        (etunnel/close! @t)
 (ns etunnel
   (:require [cheshire.core :as json])
@@ -177,7 +177,7 @@
     (or @state (throw (RuntimeException. "etunnel: welcome timeout")))))
 
 (defn -main [& args]
-  (let [server (or (System/getenv "ETUNNEL_SERVER") "wss://t.ggcode.uk/tunnel")
+  (let [server (or (System/getenv "ETUNNEL_SERVER") "wss://t.etun.uk/tunnel")
         local (or (first args) (System/getenv "ETUNNEL_LOCAL") "3000")]
     (try
       (let [t (connect! server local

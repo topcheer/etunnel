@@ -6,9 +6,9 @@ pass-through** — everything the buffer-based ports in `../sdks/` build down to
 ```go
 import "github.com/topcheer/etunnel/sdk"
 
-t, err := sdk.Connect("wss://t.ggcode.uk/tunnel", "127.0.0.1:3000",
+t, err := sdk.Connect("wss://t.etun.uk/tunnel", "127.0.0.1:3000",
     sdk.Options{Token: os.Getenv("ETUNNEL_TOKEN")})
-// t.URL() -> https://<subdomain>.t.ggcode.uk
+// t.URL() -> https://<subdomain>.t.etun.uk
 defer t.Close()
 ```
 
