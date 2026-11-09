@@ -257,7 +257,7 @@ func TestRegisterForcesFreeTier(t *testing.T) {
 
 func TestAdminFailsClosedWithoutToken(t *testing.T) {
 	s := newBillingTestServer(t) // AdminToken empty
-	h := s.adminHandler // same-package test
+	h := s.adminHandler          // same-package test
 	r := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
