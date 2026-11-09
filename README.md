@@ -240,6 +240,25 @@ migration (static wildcard cert from the ACME directory, not renewed).
   instead of freezing the tunnel.
 - Accounts persist to a JSON file with atomic writes.
 
+## Operations: sessions and reconnect
+
+The server signs two things with `SESSION_SECRET`: OAuth session cookies and
+the `resumeToken` that lets a reconnecting client reclaim its subdomain.
+
+```sh
+SESSION_SECRET=$(openssl rand -hex 32)   # set once, keep it stable
+```
+
+- **Set it in production.** Without it both keys are generated per process:
+  a restart logs every user out *and* makes resume tokens unverifiable, so
+  reconnecting clients come back on a fresh random subdomain.
+- **Rotating it** invalidates existing sessions (users log in again) and any
+  outstanding resume tokens (in-flight reconnects get new subdomains).
+
+Clients reconnect automatically and replay their resume token, so the server
+hands back the same subdomain (skipping plan gating — the signed token is the
+grant). Wire format: [PROTOCOL.md](PROTOCOL.md) §1.
+
 ## Billing (optional, self-hosted)
 
 Payments are enabled purely by environment variables - empty means off:
