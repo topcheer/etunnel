@@ -165,10 +165,12 @@ func (s *Server) setupDNSTLS(ctx context.Context) (*tlsConfigBundle, error) {
 			s.logf("tls: alias %s has no static cert, alias TLS disabled", s.cfg.AliasDomain)
 		} else {
 			alias := &ac
-			suffix := "." + s.cfg.AliasDomain
+			aliasName := s.cfg.AliasDomain
+			suffix := "." + aliasName
 			inner := bundle.tlsConfig.GetCertificate
 			bundle.tlsConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				if hello.ServerName != "" && strings.HasSuffix(hello.ServerName, suffix) {
+				sn := hello.ServerName
+				if sn == aliasName || strings.HasSuffix(sn, suffix) {
 					return alias, nil
 				}
 				return inner(hello)
