@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -203,5 +205,49 @@ func TestAppleKeyPEMNormalized(t *testing.T) {
 	cfg := oauthFromEnv()
 	if !strings.Contains(cfg.appleKeyPEM, "\n") || strings.Contains(cfg.appleKeyPEM, `\n`) {
 		t.Fatalf("literal \\n not normalized: %q", cfg.appleKeyPEM)
+	}
+}
+
+// GitHub returns form-encoded by default; the parser must accept both shapes.
+func TestOAuthTokenAcceptsFormAndJSON(t *testing.T) {
+	s := newBillingTestServer(t)
+	cases := []struct{ body, ctype string }{
+		{`access_token=gho_abc&token_type=bearer&scope=read%3Auser`, "application/x-www-form-urlencoded"},
+		{`{"access_token":"gho_abc","token_type":"bearer"}`, "application/json"},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", c.ctype)
+			_, _ = w.Write([]byte(c.body))
+		}))
+		tok, err := s.oauthToken(context.Background(), srv.URL, url.Values{"code": {"x"}})
+		srv.Close()
+		if err != nil || tok["access_token"] != "gho_abc" {
+			t.Fatalf("%s: err=%v tok=%v", c.ctype, err, tok)
+		}
+	}
+}
+
+func TestStateCookieAttributes(t *testing.T) {
+	s := newBillingTestServer(t)
+	rec := httptest.NewRecorder()
+	st := s.setStateCookie(rec)
+	if st == "" {
+		t.Fatal("empty state")
+	}
+	c := rec.Result().Cookies()[0]
+	if c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookie attrs: path=%q secure=%v httpOnly=%v ss=%v", c.Path, c.Secure, c.HttpOnly, c.SameSite)
+	}
+	// round-trip: the cookie satisfies its own check, a wrong value does not
+	r := httptest.NewRequest(http.MethodGet, "/auth/x/callback?state="+st, nil)
+	r.AddCookie(c)
+	if !s.checkStateCookie(httptest.NewRecorder(), r, st) {
+		t.Fatal("valid state rejected")
+	}
+	r2 := httptest.NewRequest(http.MethodGet, "/auth/x/callback?state=other", nil)
+	r2.AddCookie(c)
+	if s.checkStateCookie(httptest.NewRecorder(), r2, "other") {
+		t.Fatal("mismatched state accepted")
 	}
 }
