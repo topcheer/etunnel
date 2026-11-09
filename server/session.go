@@ -162,10 +162,15 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close(websocket.StatusProtocolError, "expected text hello")
 		return
 	}
-	b, err := io.ReadAll(io.LimitReader(rd, 64*1024))
+	b, err := io.ReadAll(io.LimitReader(rd, controlMessageLimit+1))
 	helloCancel()
 	if err != nil {
 		_ = ws.Close(websocket.StatusProtocolError, "bad hello")
+		return
+	}
+	if len(b) > controlMessageLimit {
+		_ = ws.Close(websocket.StatusPolicyViolation,
+			fmt.Sprintf("hello exceeds %d bytes", controlMessageLimit))
 		return
 	}
 	msg, err := protocol.DecodeControl(b)
@@ -482,8 +487,19 @@ func (s *Session) readLoop() {
 		s.lastActivity.Store(time.Now().UnixNano())
 		switch typ {
 		case websocket.MessageText:
-			b, err := io.ReadAll(io.LimitReader(rd, 64*1024))
+			// Read one byte past the limit so an oversize control message is
+			// reported as such instead of surfacing as a truncated-JSON error
+			// from DecodeControl (issue #14).
+			b, err := io.ReadAll(io.LimitReader(rd, controlMessageLimit+1))
 			if err != nil {
+				return
+			}
+			if len(b) > controlMessageLimit {
+				_ = s.sendJSON(&protocol.ErrorMsg{
+					Type:    protocol.MsgError,
+					Code:    protocol.ErrCodeBadMessage,
+					Message: fmt.Sprintf("control message exceeds %d bytes", controlMessageLimit),
+				})
 				return
 			}
 			// Tolerate client WebSocket libraries that send binary frames
@@ -508,9 +524,19 @@ func (s *Session) readLoop() {
 	}
 }
 
+// controlMessageLimit caps one JSON control message (hello, req, res, ping,
+// pong, bye, error) in bytes, in both directions.
+const controlMessageLimit = 64 * 1024
+
 func (s *Session) handleControl(b []byte) error {
 	msg, err := protocol.DecodeControl(b)
 	if err != nil {
+		if protocol.IsUnknownControlType(err) {
+			// Forward compatibility (#14): a newer peer may send control types
+			// this build does not know. Ignore them instead of dropping the
+			// session; malformed *known* messages still disconnect.
+			return nil
+		}
 		return err
 	}
 	switch m := msg.(type) {

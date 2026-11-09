@@ -185,3 +185,27 @@ upgrade forwarding.)
   (both directions); request streams are additionally bounded per tunnel
   (default 256 concurrent).
 - Paid: 10 Mbps. Excess traffic waits (smooth shaping), it is not dropped.
+
+## Wire limits
+
+Third-party SDKs must honour these; they are enforced by the reference server
+and Go SDK and documented here so every implementation agrees.
+
+| Limit | Value | Notes |
+|---|---|---|
+| Control message size | 64 KiB | One JSON text message. Larger is rejected with `bad_message` ("control message exceeds 65536 bytes"), never silently truncated. |
+| Stream frame payload | 64 KiB minus header | See the binary frame layout above. |
+| WebSocket read limit | 128 KiB | Frames larger than this close the connection. |
+| `hello` deadline | 15 s | A connection that sends no valid `hello` in time is closed. |
+| Concurrent streams per tunnel | 256 (default) | A request over the cap gets HTTP 429 and the client receives `error{code:"too_many_streams"}`. |
+| `welcome`/`hello` `proto` | 1 | Receivers must reject a mismatched `proto` instead of parsing the other version's traffic. |
+
+### Unknown control types
+
+A control message whose `type` this implementation does not know must be
+**ignored**, not treated as fatal: that is what lets a newer peer introduce new
+control messages without disconnecting older servers or SDKs. Malformed
+payloads of *known* types remain fatal, because they indicate a broken peer.
+The SDKs and the reference server implement this via
+`protocol.IsUnknownControlType`.
+

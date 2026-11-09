@@ -198,6 +198,13 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	}
 	switch m := msg.(type) {
 	case *protocol.Welcome:
+		// The server rejects a mismatched hello.proto; a client must reject a
+		// mismatched welcome.proto too, or it would parse v2 traffic as v1
+		// (issue #14).
+		if m.Proto != protocol.ProtoVersion {
+			_ = ws.Close(websocket.StatusProtocolError, "unsupported protocol version")
+			return nil, fmt.Errorf("etunnel: server speaks protocol %d, this SDK speaks %d - upgrade the SDK", m.Proto, protocol.ProtoVersion)
+		}
 		t.url = m.URL
 		t.hostname = m.Hostname
 		t.subdomain = m.Subdomain

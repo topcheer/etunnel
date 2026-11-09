@@ -99,6 +99,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess *Session) {
 	st := sess.OpenStream()
 	if st == nil {
+		// Tell the client why it has no stream (#14): ErrCodeTooManyStreams was
+		// defined but never sent, so SDKs saw only a 429 from the browser side.
+		_ = sess.sendJSON(&protocol.ErrorMsg{
+			Type:    protocol.MsgError,
+			Code:    protocol.ErrCodeTooManyStreams,
+			Message: "tunnel is at its stream limit",
+		})
 		http.Error(w, "tunnel is at its concurrency limit", http.StatusTooManyRequests)
 		return
 	}

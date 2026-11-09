@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -100,6 +101,15 @@ type ErrorMsg struct {
 	Message string `json:"message,omitempty"`
 }
 
+// ErrUnknownControlType marks a control message whose type this build does not
+// know. Receivers should ignore it and keep the connection open, so a newer
+// peer can introduce control messages without breaking older ones (issue #14).
+var ErrUnknownControlType = errors.New("etunnel: unknown control message type")
+
+// IsUnknownControlType reports whether err came from DecodeControl seeing a
+// message type this build does not implement.
+func IsUnknownControlType(err error) bool { return errors.Is(err, ErrUnknownControlType) }
+
 // DecodeControl decodes one JSON text message into a typed struct.
 func DecodeControl(b []byte) (any, error) {
 	var envelope struct {
@@ -142,7 +152,7 @@ func DecodeControl(b []byte) (any, error) {
 		err := json.Unmarshal(b, &m)
 		return &m, wrapTypeErr(err)
 	default:
-		return nil, fmt.Errorf("etunnel: unknown control message type %q", envelope.Type)
+		return nil, fmt.Errorf("%w %q", ErrUnknownControlType, envelope.Type)
 	}
 }
 

@@ -41,12 +41,19 @@ var reservedSubdomains = map[string]bool{
 var ErrBadSubdomain = errors.New("etunnel: invalid subdomain")
 
 // RandomSubdomain generates a human-readable random subdomain such as
-// "quick-fox-42".
+// "quick-fox-4821".
+//
+// The four-digit suffix keeps the namespace large enough that random draws
+// rarely collide: 46 adjectives x 47 nouns x 10000 = ~21.6M names, against
+// ~216k with the previous two-digit suffix (issue #14).
 func RandomSubdomain() string {
 	a := adjectives[randInt(len(adjectives))]
 	n := nouns[randInt(len(nouns))]
-	return fmt.Sprintf("%s-%s-%d", a, n, randInt(100))
+	return fmt.Sprintf("%s-%s-%04d", a, n, randInt(subdomainSuffixSpace))
 }
+
+// subdomainSuffixSpace is the numeric suffix space of RandomSubdomain.
+const subdomainSuffixSpace = 10000
 
 func randInt(n int) int {
 	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
