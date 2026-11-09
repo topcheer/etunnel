@@ -123,3 +123,44 @@ func TestCustomDomainOwnershipGateHelper(t *testing.T) {
 	}
 	_ = time.Second
 }
+
+func TestPricingShowsLoggedInState(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth.sessionSecret = "t"
+	if _, err := s.activate("u@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	// anonymous: prompt to sign in, email empty
+	rec := httptest.NewRecorder()
+	s.handlePricing(rec, httptest.NewRequest(http.MethodGet, "/pricing", nil))
+	if !strings.Contains(rec.Body.String(), "Not signed in") {
+		t.Fatal("anonymous pricing must prompt sign-in")
+	}
+	// logged in: identity banner + prefilled readonly email
+	r := httptest.NewRequest(http.MethodGet, "/pricing", nil)
+	r.AddCookie(s.sessionCookie("u@x.com"))
+	rec = httptest.NewRecorder()
+	s.handlePricing(rec, r)
+	body := rec.Body.String()
+	if !strings.Contains(body, "Signed in as") || !strings.Contains(body, "value=\"u@x.com\"") || !strings.Contains(body, "readonly") {
+		t.Fatalf("logged-in pricing missing prefill/banner: %.200s", body)
+	}
+}
+
+func TestLogoutClearsSession(t *testing.T) {
+	s := newBillingTestServer(t)
+	rec := httptest.NewRecorder()
+	s.handleLogout(rec, httptest.NewRequest(http.MethodGet, "/logout", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("logout code: %d", rec.Code)
+	}
+	found := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "et_session" && c.MaxAge < 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("logout must expire the session cookie")
+	}
+}

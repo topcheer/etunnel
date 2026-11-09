@@ -53,6 +53,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	_ = tpl.Execute(w, map[string]any{"Providers": providers})
 }
 
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "et_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.Redirect(w, r, "/pricing", http.StatusSeeOther)
+}
+
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	email := s.sessionEmail(r)
 	if email == "" {
@@ -67,12 +72,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	domains := strings.Join(acct.Domains, ", ")
 
-	const meHTML = `<!doctype html><meta charset="utf-8"><title>etunnel — my account</title>
+	const meHTML = `<!doctype html><meta charset="utf-8"><title>etunnel - my account</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:640px;margin:2rem auto;padding:0 1rem}
 button{background:#238636;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;margin:.3rem;cursor:pointer}
 .danger{background:#da3633}code{background:#161b22;padding:.2rem .4rem;border-radius:4px}
 h2{border-bottom:1px solid #21262d;padding-bottom:.4rem}</style>
-<h2>{{.Email}}</h2>
+<h2>Signed in as {{.Email}}</h2>
+<p style="color:#8b949e">via {{.Provider}}{{if .Name}} &middot; {{.Name}}{{end}} &middot; <a href="/logout" style="color:#58a6ff">sign out</a></p>
 <p>Plan: <b>{{.Tier}}</b>{{if .MaxDomains}} (up to {{.MaxDomains}} custom subdomains){{end}}</p>
 <p>API key: <code>{{.Key}}</code> <button onclick="act('reset')">Reset key</button></p>
 <h3>Subscription</h3>
@@ -102,6 +108,8 @@ function delDom(){ act('domain', {email, domain: document.getElementById('dom').
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{
 		"Email":      acct.Email,
+		"Provider":   acct.Provider,
+		"Name":       acct.Name,
 		"EmailJS":    template.JS(fmt.Sprintf("%q", acct.Email)),
 		"Tier":       acct.Tier,
 		"Key":        acct.APIKey,
@@ -150,7 +158,7 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 			return
 		}
 		s.accounts.CancelSubscription(email)
-		writeJSON(w, http.StatusOK, map[string]string{"message": "subscription cancelled — back on free tier"})
+		writeJSON(w, http.StatusOK, map[string]string{"message": "subscription cancelled - back on free tier"})
 	case "domain":
 		dom := strings.ToLower(strings.TrimSpace(req.Domain))
 		if dom == "" || !validSubdomain(dom) {

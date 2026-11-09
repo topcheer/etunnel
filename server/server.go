@@ -61,6 +61,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/tiers", s.handleTiers)
 	mux.HandleFunc("/pricing", s.handlePricing)
 	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/me", s.handleMe)
 	mux.HandleFunc("/me/", func(w http.ResponseWriter, r *http.Request) {
 		s.handleMeAction(w, r, strings.TrimPrefix(r.URL.Path, "/me/"))

@@ -103,7 +103,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
 	}
 	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
-<title>{{.Domain}} — pricing</title>
+<title>{{.Domain}} - pricing</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e14;color:#e6edf3;max-width:820px;margin:2rem auto;padding:0 1rem}
 table{border-collapse:collapse;width:100%;margin:1.5rem 0}
 th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
@@ -111,10 +111,14 @@ th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
 input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:.5rem;width:16rem}
 .paypal{background:#ffc439;color:#111}label{display:block;margin:.6rem 0 .2rem;color:#8b949e}
 #msg{margin-top:1rem;min-height:1.4rem}</style></head><body>
-<h1>{{.Domain}} — plans</h1>
+<h1>{{.Domain}} - plans</h1>
+{{if .User}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#3fb950">
+  ✓ Signed in as <b>{{.User}}</b> &middot; <a href="/me" style="color:#58a6ff">my account</a> &middot; <a href="/logout" style="color:#8b949e">sign out</a></p>
+{{else}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#d29922">
+  Not signed in - <a href="/login" style="color:#58a6ff">sign in first</a> to subscribe.</p>{{end}}
 <p>Pay once, get an API key instantly. Manage tunnels with it (custom subdomains, longer TTL).</p>
 <label for="email">Email (your account identity)</label>
-<input id="email" type="email" placeholder="you@example.com" autocomplete="email">
+<input id="email" type="email" placeholder="you@example.com" autocomplete="email" value="{{.User}}"{{if .User}} readonly style="opacity:.7"{{end}}>
 <table><tr><th>Plan</th><th>TTL</th><th>Custom subdomains</th><th>Bandwidth</th><th>Price</th><th></th></tr>
 {{range .Rows}}{{if .Buyable}}<tr><td><b>{{.Name}}</b></td><td>{{.TTL}}</td><td>{{.Custom}}</td>
 <td>{{.BandwidthMbps}} Mbps</td><td>{{.Price}}</td>
@@ -144,7 +148,7 @@ function showKey(el, key){
 </script></body></html>`
 	tpl := template.Must(template.New("p").Parse(pricingHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = tpl.Execute(w, map[string]any{"Rows": rows, "Domain": s.cfg.Domain})
+	_ = tpl.Execute(w, map[string]any{"Rows": rows, "Domain": s.cfg.Domain, "User": s.sessionEmail(r)})
 }
 
 func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
