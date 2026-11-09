@@ -82,8 +82,9 @@ npx @easytunnel/et-sdk 3000
 #   plan: Free, expires in 4h
 ```
 
-Every SDK's file is also a runnable CLI: `etunnel 3000`,
-`python -m etunnel 3000`, `dotnet run Etunnel.cs 3000`, ...
+Every SDK's file is also a runnable CLI: `etunnel 3000` (Go), `python -m etunnel 3000`,
+`dotnet run Etunnel.cs 3000`, `swift run etunnel 3000`, `php etunnel.php 3000`.
+Each package README lists its own.
 
 ### Embedded - the tunnel lives inside your process
 
@@ -244,13 +245,13 @@ migration (static wildcard cert from the ACME directory, not renewed).
 Payments are enabled purely by environment variables - empty means off:
 
 ```sh
-STRIPE_SECRET_KEY=sk_live_...        # https://dashboard.stripe.com/apikeys
-STRIPE_WEBHOOK_SECRET=whsec_...      # endpoint: https://<domain>/webhooks/stripe
-PAYPAL_CLIENT_ID=...                 # https://developer.paypal.com
-PAYPAL_SECRET=...
-PAYPAL_ENV=sandbox                   # or live
-PAYPAL_WEBHOOK_ID=...                # endpoint: https://<domain>/webhooks/paypal
-TIER_STARTER_PRICE_CENTS=300         # optional overrides (default $3 / $9)
+STRIPE_SECRET_KEY=sk_live_<key>          # https://dashboard.stripe.com/apikeys
+STRIPE_WEBHOOK_SECRET=whsec_<secret>     # endpoint: https://<domain>/webhooks/stripe
+PAYPAL_CLIENT_ID=<client id>             # https://developer.paypal.com
+PAYPAL_SECRET=<client secret>
+PAYPAL_ENV=sandbox                       # or live
+PAYPAL_WEBHOOK_ID=<webhook id>           # endpoint: https://<domain>/webhooks/paypal
+TIER_STARTER_PRICE_CENTS=300             # optional overrides (default $3 / $9)
 TIER_PRO_PRICE_CENTS=900
 ```
 
