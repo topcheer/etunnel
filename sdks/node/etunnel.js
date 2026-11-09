@@ -37,7 +37,16 @@ async function connect(server, local, opts = {}) {
 
   await new Promise((res, rej) => {
     ws.onopen = res;
-    ws.onerror = (e) => rej(new Error('ws: ' + (e.message || 'connect failed')));
+    const diag = (e) => {
+      const err = e && (e.error || e);
+      const parts = [`ws: cannot connect to ${server}`];
+      if (err && (err.code || err.errno)) parts.push(`(${err.code || err.errno})`);
+      if (err && err.message) parts.push(err.message);
+      try { const u = new URL(server); parts.push(`\n  hints: DNS/proxy/firewall blocking ${u.host}? Try: curl -sI ${u.protocol}//${u.host}/`); } catch {}
+      rej(new Error(parts.join(' ')));
+    };
+    ws.onerror = diag;
+    ws.onclose = (ev) => { if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } }); };
   });
 
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.0' }));
