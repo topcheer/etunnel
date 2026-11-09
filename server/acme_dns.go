@@ -206,7 +206,7 @@ func (w *wildcardCert) obtain(ctx context.Context) (*tls.Certificate, error) {
 	if err := os.WriteFile(w.keyPath, res.PrivateKey, 0o600); err != nil {
 		return nil, err
 	}
-	cert, err := tls.X509KeyPair(res.Certificate, res.PrivateKey)
+	cert, err := tls.X509KeyPair(fullchain, res.PrivateKey)
 	if err != nil {
 		return nil, err
 	}
