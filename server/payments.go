@@ -111,7 +111,7 @@ th,td{padding:.6rem .8rem;border-bottom:1px solid #21262d;text-align:left}
 input{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:.5rem;width:16rem}
 .paypal{background:#ffc439;color:#111}label{display:block;margin:.6rem 0 .2rem;color:#8b949e}
 #msg{margin-top:1rem;min-height:1.4rem}</style></head><body>
-<h1>{{.Domain}} - plans</h1>
+<h1><svg width="40" height="40" viewBox="0 0 512 512" aria-label="etunnel" style="vertical-align:middle;margin-right:.6rem"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>{{.Domain}} - plans</h1>
 {{if .User}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#3fb950">
   ✓ Signed in as <b>{{.User}}</b> &middot; <a href="/me" style="color:#58a6ff">my account</a> &middot; <a href="/logout" style="color:#8b949e">sign out</a></p>
 {{else}}<p style="background:#161b22;border:1px solid #30363d;border-radius:6px;padding:.6rem;color:#d29922">
