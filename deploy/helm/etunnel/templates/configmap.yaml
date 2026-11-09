@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "etunnel.fullname" . }}-config
+  labels:
+    app: {{ include "etunnel.name" . }}
+data:
+  ETUNNEL_CLUSTER: {{ .Values.cluster.mode | quote }}
+  ETUNNEL_GOSSIP_PORT: {{ .Values.cluster.gossipPort | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "etunnel.fullname" . }}-secret
+  labels:
+    app: {{ include "etunnel.name" . }}
+type: Opaque
+stringData:
+  {{- if .Values.cluster.sessionSecret }}
+  SESSION_SECRET: {{ .Values.cluster.sessionSecret | quote }}
+  {{- end }}
+  {{- if .Values.storage.pgDSN }}
+  ETUNNEL_PG_DSN: {{ .Values.storage.pgDSN | quote }}
+  {{- end }}
+  {{- if .Values.storage.redisURL }}
+  ETUNNEL_REDIS_URL: {{ .Values.storage.redisURL | quote }}
+  {{- end }}
+  {{- if .Values.admin.token }}
+  ADMIN_TOKEN: {{ .Values.admin.token | quote }}
+  {{- end }}

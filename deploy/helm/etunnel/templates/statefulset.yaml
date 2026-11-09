@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "etunnel.fullname" . }}
+  labels:
+    {{- include "etunnel.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "etunnel.fullname" . }}-headless
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "etunnel.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "etunnel.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: etunneld
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -domain={{ .Values.domain }}
+            - -addr=:{{ .Values.service.httpPort }}
+            - -http-addr=:8181
+            - -admin-addr=:9090
+            - -tls-mode=http
+            - -ws-path={{ .Values.wsPath }}
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: ETUNNEL_NODE_ID
+              value: $(POD_NAME)
+            - name: ETUNNEL_ADVERTISE
+              value: "$(POD_NAME).{{ include "etunnel.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.httpPort }}"
+            - name: ETUNNEL_JOIN
+              value: "{{ include "etunnel.fullname" . }}-0.{{ include "etunnel.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.cluster.gossipPort }}"
+          envFrom:
+            - configMapRef:
+                name: {{ include "etunnel.fullname" . }}-config
+            - secretRef:
+                name: {{ include "etunnel.fullname" . }}-secret
+          ports:
+            - { name: http, containerPort: {{ .Values.service.httpPort }} }
+            - { name: httpalt, containerPort: 8181 }
+            - { name: gossip, containerPort: {{ .Values.cluster.gossipPort }} }
+            - { name: gossip-udp, containerPort: {{ .Values.cluster.gossipPort }}, protocol: UDP }
+            - { name: admin, containerPort: 9090 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+# Headless service: stable per-pod DNS for mesh advertise/join.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "etunnel.fullname" . }}-headless
+  labels:
+    {{- include "etunnel.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "etunnel.labels" . | nindent 6 }}
+  ports:
+    - { name: http, port: {{ .Values.service.httpPort }} }
+    - { name: gossip, port: {{ .Values.cluster.gossipPort }} }
+---
+# Client-facing service (LB / ingress target).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "etunnel.fullname" . }}
+  labels:
+    {{- include "etunnel.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "etunnel.labels" . | nindent 6 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.httpPort }}
+      targetPort: http

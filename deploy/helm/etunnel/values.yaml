@@ -1,0 +1,38 @@
+# Default values for the etunnel Helm chart.
+
+image:
+  repository: ghcr.io/topcheer/etunneld   # build & push, or override
+  tag: ""            # defaults to appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+cluster:
+  mode: mesh          # single | mesh | sticky
+  sessionSecret: ""   # REQUIRED: openssl rand -hex 32; shared by all replicas
+  gossipPort: 8180
+
+domain: t.k3s.etun.uk     # tunnel base domain
+wsPath: /tunnel
+publicScheme: https
+
+admin:
+  token: ""           # admin API token; empty disables the admin API
+
+storage:
+  # External Postgres (accounts). Leave empty to use a JSON file on a PVC
+  # (single-writer only - set replicaCount 1 in that case).
+  pgDSN: ""
+  redisURL: ""        # exact global limits; empty = per-replica limits
+
+service:
+  type: ClusterIP
+  httpPort: 8080      # tunnels + healthz + landing (HTTP inside the cluster)
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
