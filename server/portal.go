@@ -40,7 +40,7 @@ func parseInt64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 // portalFavicon, portalCSS and logoMark are the design system shared by the
 // account pages. They mirror the landing page (same palette, mono type, 12px
 // cards, green accent) so signing in does not feel like leaving the site.
-const portalFavicon = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='#0d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='#e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='#3fb950' stroke-width='40' stroke-linecap='round'/></svg>`
+const portalFavicon = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512' role='img' aria-label='etunnel'>  <rect width='512' height='512' rx='96' fill='%230d1117'/>  <rect x='120' y='128' width='272' height='256' rx='40' fill='none' stroke='%23e6edf3' stroke-width='40'/>  <line x1='48' y1='256' x2='464' y2='256' stroke='%233fb950' stroke-width='40' stroke-linecap='round'/></svg>`
 
 const logoMark = `<svg width="26" height="26" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="96" fill="#0d1117"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#e6edf3" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#3fb950" stroke-width="40" stroke-linecap="round"/></svg>`
 
