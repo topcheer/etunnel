@@ -43,8 +43,11 @@ type Server struct {
 }
 
 // logf emits a server log line (stdout + journald under systemd).
+// logPrintf is a var so tests can capture the output (#42).
+var logPrintf = fmt.Printf
+
 func (s *Server) logf(format string, args ...any) {
-	fmt.Printf("etunneld: "+format+"\n", args...)
+	logPrintf("etunneld: "+format+"\n", args...)
 }
 
 // New builds a Server from cfg.
@@ -99,6 +102,12 @@ func New(cfg Config) (*Server, error) {
 			brand := http.StripPrefix("/assets/", http.FileServer(http.Dir(dir)))
 			mux.Handle("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if _, isBase, _ := s.hostLabel(r.Host); isBase {
+					// #38: concrete files only - never a directory index. The
+					// listing disclosed the bundle's file names.
+					if strings.HasSuffix(r.URL.Path, "/") {
+						http.NotFound(w, r)
+						return
+					}
 					brand.ServeHTTP(w, r)
 					return
 				}
@@ -108,7 +117,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	mux.HandleFunc("/", s.handleProxy)
-	s.handler = mux
+	s.handler = s.accessLog(mux)
 	s.buildAdmin()
 	s.billing = billingFromEnv(cfg.Domain)
 	s.auth = oauthFromEnv()
@@ -117,6 +126,55 @@ func New(cfg Config) (*Server, error) {
 
 // Handler returns the main HTTP handler (useful for tests and embedding).
 func (s *Server) Handler() http.Handler { return s.handler }
+
+// accessLog writes one line per request served on the base domain (#42):
+// portal, OAuth, billing, webhook and asset traffic. Tunnel-subdomain
+// proxying is deliberately quiet - it is the hot path and carries the
+// tunnelled service's own traffic, not ours. Admin-auth failures are logged
+// unconditionally in adminAuth regardless of host.
+//
+// Connection-upgrade requests (the SDK's wss://<base>/tunnel handshake in
+// production) bypass the wrapper entirely: websocket.Accept needs the
+// underlying ResponseWriter's Hijacker, and interface embedding does not
+// promote it - wrapping returned 501 and dropped every base-domain SDK
+// connection (PR #46 review).
+func (s *Server) accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, isBase, _ := s.hostLabel(r.Host)
+		if !isBase || isUpgradeRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		s.logf("http: %s %s %d %s", r.Method, r.URL.RequestURI(), rec.code, remoteIP(r))
+	})
+}
+
+// isUpgradeRequest reports whether r asks to switch protocols (RFC 7230
+// "Connection" is a comma-separated token list, e.g. "keep-alive, Upgrade").
+func isUpgradeRequest(r *http.Request) bool {
+	if strings.EqualFold(r.Header.Get("Upgrade"), "") {
+		return false
+	}
+	for _, tok := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// statusRecorder captures the status code for access logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.code = code
+	r.ResponseWriter.WriteHeader(code)
+}
 
 // Accounts exposes the account store (for tests/tools).
 func (s *Server) Accounts() accountBackend { return s.accounts }
