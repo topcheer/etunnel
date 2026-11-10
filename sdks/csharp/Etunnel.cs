@@ -360,14 +360,21 @@ public sealed class Etunnel
             catch (Exception e)
             {
                 Console.Error.WriteLine($"[etunnel] serve error: {e}");
-                await _sender.Atomic(async () =>
+                // The tunnel may already be closed and disposed (supervisor
+                // reconnect while this serve was in flight): the fallback
+                // sends must not become an unobserved task exception.
+                try
                 {
-                    await _sender.SendText("{\"type\":\"res\",\"streamId\":" + sid +
-                        ",\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}");
-                    var msg = Encoding.UTF8.GetBytes(LocalErrorPage(e.Message));
-                    await _sender.SendBinary(Frame(0x01, sid, msg));
-                    await _sender.SendBinary(Frame(0x02, sid, Array.Empty<byte>()));
-                });
+                    await _sender.Atomic(async () =>
+                    {
+                        await _sender.SendText("{\"type\":\"res\",\"streamId\":" + sid +
+                            ",\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}");
+                        var msg = Encoding.UTF8.GetBytes(LocalErrorPage(e.Message));
+                        await _sender.SendBinary(Frame(0x01, sid, msg));
+                        await _sender.SendBinary(Frame(0x02, sid, Array.Empty<byte>()));
+                    });
+                }
+                catch { /* ws gone: nothing left to deliver */ }
             }
         }
     }
