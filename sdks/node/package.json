@@ -36,8 +36,5 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "dependencies": {
-    "@easytunnel/et-sdk": "^1.0.0"
   }
 }

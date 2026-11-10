@@ -32,7 +32,10 @@ function pickHostPort(local) {
 
 async function connect(server, local, opts = {}) {
   const { host, port } = pickHostPort(local);
-  const ws = new WebSocket(server, 'etunnel-v1');
+  // The WebSocket constructor comes from opts.wsFactory when injected (the CLI
+  // supervisor captures the session socket that way) instead of patching the
+  // global, which is unsafe when several connects race on shared event loops.
+  const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
   ws.binaryType = 'arraybuffer';
 
   await new Promise((res, rej) => {
@@ -49,7 +52,7 @@ async function connect(server, local, opts = {}) {
     ws.onclose = (ev) => { if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } }); };
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.0', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.4.0', resume: opts.resume || undefined }));
 
   const info = await new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('welcome timeout')), 15000);
@@ -150,18 +153,13 @@ function retryDelay(attempt) {
   return Math.round(base * (0.8 + Math.random() * 0.4));
 }
 
-// connect() does not expose its socket, so capture the WebSocket it constructs
-// (the global is only patched for the duration of the call) and watch that.
+// connect() does not expose its socket, so inject a WebSocket factory
+// (opts.wsFactory) that captures the constructed socket - no global patching,
+// which would be unsafe if several connects ran concurrently.
 async function connectWatched(server, local, opts) {
-  const Real = globalThis.WebSocket;
   let ws = null;
-  const Watch = function (...args) { const s = new Real(...args); ws = s; return s; };
-  globalThis.WebSocket = Watch;
-  try {
-    return { tunnel: await connect(server, local, opts), ws };
-  } finally {
-    globalThis.WebSocket = Real;
-  }
+  const factory = (url) => { ws = new WebSocket(url, 'etunnel-v1'); return ws; };
+  return { tunnel: await connect(server, local, { ...opts, wsFactory: factory }), ws };
 }
 
 // Resolve once the session is over: explicit close(), server bye, or a drop.

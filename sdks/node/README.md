@@ -41,6 +41,13 @@ const t = await connect('wss://t.etun.uk/tunnel', 3000);
 console.log(t.url);
 ```
 
+`connect(server, local, opts)` takes an optional third argument: `token`,
+`subdomain`, `resume` (strings), and `wsFactory` — a `(serverUrl) => WebSocket`
+constructor injection used instead of the global `WebSocket` (the CLI passes a
+factory that captures the socket it creates). Library embedders with their own
+WebSocket implementation or per-connection sockets should inject `wsFactory`;
+the global is never patched.
+
 ## Environment variables
 
 | Variable | Meaning | Default |

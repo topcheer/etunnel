@@ -1,0 +1,7 @@
+# Build metadata that must never enter the index (issue #52: MYMETA.json /
+# MYMETA.yml were briefly tracked). ExtUtils::MakeMaker honors this file.
+MYMETA\.json$
+MYMETA\.yml$
+^blib/
+^Makefile$
+^pm_to_blib\.$
