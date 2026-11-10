@@ -15,15 +15,32 @@ import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 // etunnel SDK for Java (11+, java.net.http only, zero dependencies).
 // Buffer-based protocol client (bodies buffered per stream; no WS upgrades).
 //
 // Run:   java Etunnel.java 3000
-// Embed: Etunnel.connect("wss://t.ggcode.uk/tunnel", 3000, null)
+// Embed: Etunnel.connect("wss://t.etun.uk/tunnel", 3000, null)
 public class Etunnel {
     static final int MAXP = 32768;
+
+    // Process-level shared clients (issue #51: connect() used to build two
+    // fresh HttpClients per call and leaked them on error paths - on JDK < 21
+    // their selector threads are non-daemon and pin the process). The local
+    // client also bypasses any system proxy: 127.0.0.1 is always direct
+    // (NO_PROXY; a global macOS proxy hijacking localhost is a real trap).
+    static final HttpClient LOCAL_HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .proxy(java.net.ProxySelector.of(null))
+        .build();
+    // connectTimeout on the shared WS client too (review note on #59): the
+    // builder's 15s covers the handshake, but any future plain request routed
+    // through this client would otherwise have no dial timeout at all.
+    static final HttpClient WS_HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(15))
+        .build();
 
     public static class Options {
         public String token, subdomain, resume;
@@ -49,10 +66,9 @@ public class Etunnel {
     @SuppressWarnings("unchecked")
     public static Tunnel connect(String server, int localPort, Options opts) throws Exception {
         if (opts == null) opts = new Options();
-        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        Handler h = new Handler(http, localPort);
+        Handler h = new Handler(LOCAL_HTTP, localPort);
 
-        WebSocket ws = HttpClient.newHttpClient()
+        WebSocket ws = WS_HTTP
             .newWebSocketBuilder()
             .subprotocols("etunnel-v1")
             .connectTimeout(Duration.ofSeconds(15))
@@ -68,14 +84,21 @@ public class Etunnel {
         if (opts.resume != null && !opts.resume.isEmpty()) {
             hello.append(",\"resume\":\"").append(jsonEsc(opts.resume)).append("\"");
         }
-        hello.append(",\"client\":\"etunnel-java/1.0\"}");
+        hello.append(",\"client\":\"etunnel-java/1.4\"}");
         ws.sendText(hello.toString(), true).join();
 
-        Map<String, Object> info = h.welcome.await();
+        Map<String, Object> info = h.welcome.await(15, TimeUnit.SECONDS, ws);
         return new Tunnel(ws, info);
     }
 
     static String str(Object o) { return o == null ? "" : o.toString(); }
+
+    /** Header-value JSON escaping. Order matters: backslashes first, then
+     * quotes (issue #51: the old chained replace escaped quotes first, so a
+     * value like a\"b became a\\\"b - invalid JSON). */
+    static String hdrVal(String v) {
+        return v.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
 
     /** Minimal JSON string escaping for control-message fields. */
     static String jsonEsc(String s) {
@@ -99,6 +122,17 @@ public class Etunnel {
             latch.await();
             if (error != null) throw new RuntimeException("etunnel: " + error);
             return value;
+        }
+        /** Timed wait (issue #51: a bare await() could hang connect()
+         * forever if the server never sends welcome). Closes ws on timeout. */
+        Map<String, Object> await(long timeout, TimeUnit unit, WebSocket ws) throws Exception {
+            if (!latch.await(timeout, unit)) {
+                if (ws != null) {
+                    try { ws.sendClose(WebSocket.NORMAL_CLOSURE, "welcome timeout"); } catch (Exception ignored) {}
+                }
+                throw new RuntimeException("etunnel: no welcome within " + timeout + " " + unit);
+            }
+            return await();
         }
     }
 
@@ -220,8 +254,7 @@ public class Etunnel {
                     String lk = k.toLowerCase();
                     if (lk.equals("connection") || lk.equals("transfer-encoding") || lk.equals("content-length")
                         || lk.equals("keep-alive") || lk.equals("upgrade")) return;
-                    for (String v : vs) hb.append(",\"").append(k).append("\":[\"")
-                        .append(v.replace("\"", "\\\"").replace("\\", "\\\\")).append("\"]");
+                    for (String v : vs) hb.append(",\"").append(k).append("\":[\"").append(hdrVal(v)).append("\"]");
                 });
                 ws.sendText("{\"type\":\"res\",\"streamId\":" + sid + ",\"status\":" + resp.statusCode()
                     + ",\"headers\":{" + hb.substring(Math.min(1, hb.length())) + "}}", true).join();
@@ -386,7 +419,7 @@ public class Etunnel {
     }
 
     public static void main(String[] args) throws Exception {
-        String server = System.getenv().getOrDefault("ETUNNEL_SERVER", "wss://t.ggcode.uk/tunnel");
+        String server = System.getenv().getOrDefault("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel");
         int port = Integer.parseInt(args.length > 0 ? args[0]
             : System.getenv().getOrDefault("ETUNNEL_LOCAL", "3000"));
         Options o = new Options();

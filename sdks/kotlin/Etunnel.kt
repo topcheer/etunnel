@@ -87,9 +87,22 @@ object Json {
     fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 }
 
-class Etunnel private constructor(val url: String, val resumeToken: String) {
+class Etunnel private constructor(val url: String, val resumeToken: String, private val ws: WebSocket) {
     companion object {
         const val MAXP = 32768
+
+        // Process-level shared clients (issue #51): connect() used to build two
+        // fresh HttpClients per call; error paths leaked them (JDK < 21 selector
+        // threads are non-daemon). The local client never goes through a system
+        // proxy - 127.0.0.1 is always direct (NO_PROXY, macOS global-proxy trap).
+        private val LOCAL_HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .proxy(java.net.ProxySelector.of(null))
+            .build()
+        private val WS_HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .build()
+
         private val HOP = setOf("connection", "transfer-encoding", "keep-alive", "upgrade",
             "proxy-connection", "te", "trailer", "content-length", "host")
 
@@ -281,9 +294,9 @@ the tunnel stays connected and keeps retrying for you.</div>
 
         fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null,
                     resume: String? = null): Etunnel {
-            val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+            val http = LOCAL_HTTP
             val h = Handler(http, localPort)
-            val ws = HttpClient.newHttpClient()
+            val ws = WS_HTTP
                 .newWebSocketBuilder()
                 .subprotocols("etunnel-v1")
                 .connectTimeout(Duration.ofSeconds(15))
@@ -299,19 +312,27 @@ the tunnel stays connected and keeps retrying for you.</div>
                 // resume: server-signed token from a previous welcome; the server then
                 // hands back the same subdomain instead of allocating a new one.
                 resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
-                append(",\"client\":\"etunnel-kotlin/1.0\"}")
+                append(",\"client\":\"etunnel-kotlin/1.4\"}")
             }
             ws.sendText(hello, true).join()
 
-            h.welcome.await()
+            // Timed wait (issue #51): a bare await() hung forever if the server
+            // completed the handshake but never sent welcome.
+            if (!h.welcome.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                try { ws.sendClose(WebSocket.NORMAL_CLOSURE, "welcome timeout") } catch (_: Exception) {}
+                throw RuntimeException("etunnel: no welcome within 15 SECONDS")
+            }
             h.error?.let { throw RuntimeException("etunnel: $it") }
             val info = h.info ?: error("no welcome")
-            return Etunnel(info["url"] as String, info["resumeToken"] as? String ?: "")
+            return Etunnel(info["url"] as String, info["resumeToken"] as? String ?: "", ws)
         }
     }
 
     fun close() {
-        // best effort; the tunnel also ends when the process exits
+        // Issue #51: this used to be a no-op - library users had no way to send
+        // bye or release the socket. Mirrors the Java Tunnel.close().
+        try { ws.sendText("{\"type\":\"bye\",\"reason\":\"client closed\"}", true).join() } catch (_: Exception) {}
+        try { ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye") } catch (_: Exception) {}
     }
 }
 

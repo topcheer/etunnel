@@ -277,11 +277,19 @@ the tunnel stays connected and keeps retrying for you.</div>
     }
   }
 
+  private val localHttp = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(10))
+    .proxy(java.net.ProxySelector.of(null))
+    .build()
+  private val wsHttp = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(15))
+    .build()
+
   def connect(server: String, localPort: Int, token: String = null, subdomain: String = null,
               resume: String = null): Tunnel = {
-    val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+    val http = localHttp
     val h = new Handler(http, localPort)
-    val ws = HttpClient.newHttpClient()
+    val ws = wsHttp
       .newWebSocketBuilder()
       .subprotocols("etunnel-v1")
       .connectTimeout(Duration.ofSeconds(15))
@@ -297,10 +305,15 @@ the tunnel stays connected and keeps retrying for you.</div>
     // hands back the same subdomain instead of allocating a new one.
     if (resume != null && resume.nonEmpty)
       hello.append(",\"resume\":\"").append(MiniJson.esc(resume)).append('"')
-    hello.append(",\"client\":\"etunnel-scala/1.0\"}")
+    hello.append(",\"client\":\"etunnel-scala/1.4\"}")
     ws.sendText(hello.toString, true).join()
 
-    h.welcome.await()
+    // Timed wait (issue #51): a bare await() hung forever if the server never
+    // sent welcome after completing the handshake.
+    if (!h.welcome.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+      try ws.sendClose(WebSocket.NORMAL_CLOSURE, "welcome timeout") catch { case _: Exception => }
+      throw new RuntimeException("etunnel: no welcome within 15 SECONDS")
+    }
     if (h.err != null) throw new RuntimeException(s"etunnel: ${h.err}")
     Tunnel(h.info("url").toString, h.info.get("resumeToken").map(_.toString).getOrElse(""))
   }
