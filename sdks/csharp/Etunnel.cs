@@ -14,9 +14,22 @@ var subdomain = Environment.GetEnvironmentVariable("ETUNNEL_SUBDOMAIN");
 // ETUNNEL_RECONNECT=0 restores the one-shot behaviour (exit on first error).
 var reconnect = Environment.GetEnvironmentVariable("ETUNNEL_RECONNECT") != "0";
 
-// Ctrl-C / SIGTERM stop the supervisor: the tunnel is closed and nothing is retried.
+// Ctrl-C / SIGTERM stop the supervisor: the tunnel is closed and nothing is
+// retried. Both are registered as POSIX signal handlers: Console.CancelKeyPress
+// is delivered by the terminal driver and never fires when stdin is not a TTY
+// (background service, nohup, CI), and its runtime handler also consumes the
+// signal before a PosixSignalRegistration can see it (#54 MED).
 using var stop = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+// Console.CancelKeyPress is delivered by the terminal driver and never fires
+// when stdin is not a TTY (background service, nohup, CI) - a supervisor run
+// that way swallowed SIGINT and hung. The POSIX registration covers exactly
+// those cases; both paths just cancel the same token (#54 MED).
+using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx =>
+{
+    ctx.Cancel = true;
+    stop.Cancel();
+});
 using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
 {
     ctx.Cancel = true;
@@ -34,7 +47,13 @@ while (!stop.IsCancellationRequested)
         if (t.ResumeToken.Length > 0) resume = t.ResumeToken;
         Console.WriteLine($"TUNNEL_URL: {t.Url}");
         attempt = 0;
-        if (!reconnect) await Task.Delay(Timeout.Infinite);
+        if (!reconnect)
+        {
+            // One-shot mode must still observe Ctrl-C: a token-less infinite
+            // delay hung forever because SIGINT only set e.Cancel (#54 MED).
+            try { await Task.Delay(Timeout.Infinite, stop.Token); }
+            catch (TaskCanceledException) { }
+        }
         while (!stop.IsCancellationRequested && t.State == WebSocketState.Open)
             await Task.Delay(200);
         try { await t.Close(); } catch { }
@@ -73,16 +92,53 @@ public sealed class Etunnel
         public WebSocketState State => _ws.State;
         /// <summary>Server-signed token; send it back on reconnect to reclaim the same subdomain.</summary>
         public string ResumeToken { get; }
-        private readonly ClientWebSocket _ws;
-        internal Tunnel(ClientWebSocket ws, string url, string resumeToken)
-        {
-            _ws = ws; Url = url; ResumeToken = resumeToken;
-        }
+        readonly ClientWebSocket _ws;
+        readonly Sender _sender;
+        internal Tunnel(ClientWebSocket ws, Sender sender, string url, string resumeToken) => (_ws, _sender, Url, ResumeToken) = (ws, sender, url, resumeToken);
         public async Task Close()
         {
-            try { await SendText(_ws, "{\"type\":\"bye\",\"reason\":\"client closed\"}"); } catch { }
-            await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
+            try { await _sender.Atomic(() => _sender.SendText("{\"type\":\"bye\",\"reason\":\"client closed\"}")); }
+            catch { }
+            try
+            {
+                // Bounded close handshake: a wedged peer that never answers the
+                // close frame would otherwise hang Close (and the supervisor)
+                // forever - CancellationToken.None meant no way out.
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+            }
+            catch (Exception) { /* peer gone or wedged: dispose regardless */ }
+            _ws.Dispose();
         }
+    }
+
+    /// <summary>
+    /// ClientWebSocket allows exactly one outstanding SendAsync; concurrent
+    /// streams plus pong replies used to race into InvalidOperationException
+    /// or interleaved frames (#54 HIGH). Every outbound frame - and each
+    /// res+DATA+FIN sequence, which must never interleave with another
+    /// stream's - goes through this gate.
+    /// </summary>
+    internal sealed class Sender
+    {
+        readonly ClientWebSocket _ws;
+        readonly SemaphoreSlim _gate = new(1, 1);
+        internal Sender(ClientWebSocket ws) => _ws = ws;
+
+        internal async Task Atomic(Func<Task> sequence)
+        {
+            await _gate.WaitAsync();
+            try { await sequence(); }
+            finally { _gate.Release(); }
+        }
+
+        internal Task SendText(string text) =>
+            _ws.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(text)),
+                WebSocketMessageType.Text, true, CancellationToken.None);
+
+        internal Task SendBinary(byte[] frame) =>
+            _ws.SendAsync(new ArraySegment<byte>(frame),
+                WebSocketMessageType.Binary, true, CancellationToken.None);
     }
 
     public static async Task<Tunnel> Connect(string server, string local,
@@ -92,15 +148,20 @@ public sealed class Etunnel
 
         var ws = new ClientWebSocket();
         ws.Options.AddSubProtocol("etunnel-v1");
-        await ws.ConnectAsync(new Uri(server), CancellationToken.None);
+        var sender = new Sender(ws);
+        try
+        {
+        // The handshake must not hang forever on a black-holed address (#54 LOW).
+        using (var dialCts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+            await ws.ConnectAsync(new Uri(server), dialCts.Token);
 
         var hello = new StringBuilder("{\"type\":\"hello\",\"proto\":1");
-        if (subdomain != null) hello.Append($",\"subdomain\":\"{subdomain}\"");
-        if (token != null) hello.Append($",\"token\":\"{token}\"");
+        if (subdomain != null) hello.Append($",\"subdomain\":\"{Escape(subdomain)}\"");
+        if (token != null) hello.Append($",\"token\":\"{Escape(token)}\"");
         if (!string.IsNullOrEmpty(resume))
             hello.Append($",\"resume\":\"{resume.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
         hello.Append(",\"client\":\"etunnel-csharp/1.0\"}");
-        await SendText(ws, hello.ToString());
+        await sender.SendText(hello.ToString());
 
         string url;
         var resumeToken = "";
@@ -121,28 +182,48 @@ public sealed class Etunnel
                     break;
                 }
                 if (type == "error")
-                    throw new Exception($"etunnel: {doc.GetProperty("code").GetString()}");
+                {
+                    // keep the message field: a bare code in a log is useless (#54 LOW)
+                    var code = doc.GetProperty("code").GetString();
+                    doc.TryGetProperty("message", out var msg);
+                    throw new Exception($"etunnel: {code}: {msg.GetString() ?? ""}");
+                }
                 throw new Exception("etunnel: unexpected handshake message");
             }
         }
 
-        var runner = new Runner(ws, local);
+        var runner = new Runner(ws, sender, local);
         _ = Task.Run(() => runner.Loop());
-        return new Tunnel(ws, url, resumeToken);
+        return new Tunnel(ws, sender, url, resumeToken);
+        }
+        catch
+        {
+            ws.Dispose(); // a failed handshake must not leak the socket (#54 LOW)
+            throw;
+        }
     }
 
     sealed class Runner
     {
         readonly ClientWebSocket _ws;
+        readonly Sender _sender;
         readonly string _local;
         readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
         readonly Dictionary<uint, (JsonElement req, List<byte[]> body)> _streams = new();
 
-        internal Runner(ClientWebSocket ws, string local) { _ws = ws; _local = local; }
+        internal Runner(ClientWebSocket ws, Sender sender, string local)
+        {
+            _ws = ws; _sender = sender; _local = local;
+        }
 
         internal async Task Loop()
         {
-            while (_ws.State == WebSocketState.Open)
+            // One HttpClient per connection, released with it: the supervisor's
+            // reconnect loop used to accumulate clients (and their pools)
+            // forever (#54 MED).
+            try
+            {
+                while (_ws.State == WebSocketState.Open)
             {
                 WebSocketMessageType kind;
                 byte[] bytes;
@@ -161,6 +242,11 @@ public sealed class Etunnel
                     try { HandleBinary(bytes); }
                     catch (Exception e) { Console.Error.WriteLine($"[etunnel] binary error: {e}"); }
                 }
+                }
+            }
+            finally
+            {
+                _http.Dispose();
             }
         }
 
@@ -175,7 +261,7 @@ public sealed class Etunnel
                     break;
                 case "ping":
                     long ts = m.TryGetProperty("ts", out var tse) ? tse.GetInt64() : 0;
-                    await SendText(_ws, $"{{\"type\":\"pong\",\"ts\":{ts}}}");
+                    await _sender.Atomic(() => _sender.SendText($"{{\"type\":\"pong\",\"ts\":{ts}}}"));
                     break;
                 case "bye":
                     await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "server closed", CancellationToken.None);
@@ -261,24 +347,34 @@ public sealed class Etunnel
                     json.Append(']');
                 }
                 json.Append("}}");
-                await SendText(_ws, json.ToString());
-                for (var i = 0; i < payload.Length; i += MAXP)
-                    await _ws.SendAsync(
-                        new ArraySegment<byte>(Frame(0x01, sid, payload[i..Math.Min(i + MAXP, payload.Length)])),
-                        WebSocketMessageType.Binary, true, CancellationToken.None);
-                await _ws.SendAsync(new ArraySegment<byte>(Frame(0x02, sid, Array.Empty<byte>())),
-                    WebSocketMessageType.Binary, true, CancellationToken.None);
+                // The whole res+DATA+FIN sequence holds the send gate: another
+                // stream's frames must never interleave mid-sequence (#54 HIGH).
+                await _sender.Atomic(async () =>
+                {
+                    await _sender.SendText(json.ToString());
+                    for (var i = 0; i < payload.Length; i += MAXP)
+                        await _sender.SendBinary(Frame(0x01, sid, payload[i..Math.Min(i + MAXP, payload.Length)]));
+                    await _sender.SendBinary(Frame(0x02, sid, Array.Empty<byte>()));
+                });
             }
             catch (Exception e)
             {
                 Console.Error.WriteLine($"[etunnel] serve error: {e}");
-                await SendText(_ws, "{\"type\":\"res\",\"streamId\":" + sid +
-                    ",\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}");
-                var msg = Encoding.UTF8.GetBytes(LocalErrorPage(e.Message));
-                await _ws.SendAsync(new ArraySegment<byte>(Frame(0x01, sid, msg)),
-                    WebSocketMessageType.Binary, true, CancellationToken.None);
-                await _ws.SendAsync(new ArraySegment<byte>(Frame(0x02, sid, Array.Empty<byte>())),
-                    WebSocketMessageType.Binary, true, CancellationToken.None);
+                // The tunnel may already be closed and disposed (supervisor
+                // reconnect while this serve was in flight): the fallback
+                // sends must not become an unobserved task exception.
+                try
+                {
+                    await _sender.Atomic(async () =>
+                    {
+                        await _sender.SendText("{\"type\":\"res\",\"streamId\":" + sid +
+                            ",\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}");
+                        var msg = Encoding.UTF8.GetBytes(LocalErrorPage(e.Message));
+                        await _sender.SendBinary(Frame(0x01, sid, msg));
+                        await _sender.SendBinary(Frame(0x02, sid, Array.Empty<byte>()));
+                    });
+                }
+                catch { /* ws gone: nothing left to deliver */ }
             }
         }
     }
@@ -343,10 +439,6 @@ the tunnel stays connected and keeps retrying for you.</div>
         payload.CopyTo(f, 9);
         return f;
     }
-
-    static Task SendText(ClientWebSocket ws, string text) =>
-        ws.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(text)),
-            WebSocketMessageType.Text, true, CancellationToken.None);
 
     static async Task<(WebSocketMessageType, byte[])> ReadMessage(ClientWebSocket ws, CancellationToken ct)
     {
