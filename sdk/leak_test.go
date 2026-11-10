@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,26 +82,75 @@ func TestWriteErrorCancelsContext(t *testing.T) {
 	}
 }
 
-// TestSuperviseExitCancelsContext: a permanent error (bad token) must stop
-// the supervisor AND release its context.
+// stubOnceServer answers the first connection with a welcome (then kills it)
+// and every later connection with an unauthorized error - a permanent error
+// for the supervisor.
+func stubOnceServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var connects int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		ctx := r.Context()
+		_, raw, err := ws.Read(ctx)
+		if err != nil {
+			return
+		}
+		if _, ok := protocol.DecodeControl(raw); ok != nil {
+			return
+		}
+		if atomic.AddInt32(&connects, 1) == 1 {
+			wel, _ := protocol.EncodeControl(&protocol.Welcome{
+				Type: protocol.MsgWelcome, URL: "https://x.t.test", Subdomain: "x",
+			})
+			_ = ws.Write(ctx, websocket.MessageText, wel)
+			// Kill the first connection so the supervisor dials again.
+			time.Sleep(50 * time.Millisecond)
+			_ = ws.CloseNow()
+			return
+		}
+		errMsg, _ := protocol.EncodeControl(&protocol.ErrorMsg{
+			Type: protocol.MsgError, Code: protocol.ErrCodeUnauthorized, Message: "no",
+		})
+		_ = ws.Write(ctx, websocket.MessageText, errMsg)
+		// Graceful close handshake: the client's handshake-error path calls
+		// ws.Close, which waits for the peer's close frame - an abrupt
+		// handler return would stall it for the full 5s close timeout.
+		_ = ws.Close(websocket.StatusNormalClosure, "denied")
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// TestSuperviseExitCancelsContext: a permanent error on reconnect must stop
+// the supervisor AND release its context (issue #55: supervise's exit paths
+// previously never called r.cancel()).
 func TestSuperviseExitCancelsContext(t *testing.T) {
-	ts := startWelcomeThenKill(t)
-	// Bad local addr keeps Connect failing fast with a dial error... use a
-	// hostile server URL instead so every attempt errors (transient), then
-	// cancel the parent: supervise must release r.ctx.
+	ts := stubOnceServer(t)
 	parent, pcancel := context.WithCancel(context.Background())
+	defer pcancel()
 	r, err := ConnectReconnecting(parent, Options{
-		Server:    "ws://127.0.0.1:1/tunnel", // nothing listens: instant refusal
+		Server:    "ws" + strings.TrimPrefix(ts.URL, "http") + "/tunnel",
 		LocalAddr: "127.0.0.1:1",
 		OnLog:     func(string, ...any) {}, // silence reconnect spam
 	})
-	if err == nil {
-		// Unexpected: dial to port 1 should fail immediately. If the
-		// environment somehow has a listener, close and skip.
-		r.Close("skip")
-		pcancel()
-		t.Skip("connect unexpectedly succeeded")
+	if err != nil {
+		t.Fatal(err)
 	}
-	pcancel()
-	_ = ts.Close
+	defer r.Close("test done")
+
+	// The stub kills the first tunnel; the second dial gets
+	// "unauthorized" (permanent) -> supervise must stop.
+	select {
+	case <-r.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor did not stop after permanent error")
+	}
+	select {
+	case <-r.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("supervisor exit leaked: r.ctx never cancelled (issue #55)")
+	}
 }
