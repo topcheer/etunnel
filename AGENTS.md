@@ -79,6 +79,18 @@ Commands as actually used by Makefile and CI
   end-to-end tests (package `etunnel_test`) spinning up a real server +
   tunnel via `httptest`.
 
+## Cluster layer (server/cluster*.go, account_pg.go, counter_*.go, router_*.go)
+
+- `ETUNNEL_CLUSTER=single|mesh|sticky` picks the mode; everything else is
+  env-driven and optional (no env = exact single-node behaviour).
+- Postgres store keeps the JSON store's in-memory hot path (RLock reads,
+  write-through mutations, 5s poll). Tests against the real PG on host 13
+  skip when unreachable (`ET_PG_TEST_DSN`).
+- Cross-peer Forward MUST preserve the visitor Host header (`out.Host =
+  req.Host`) - dropping it makes the receiving peer serve its landing page.
+- Gossip port = advertise+100 (HTTP lives on the advertise port); joins
+  retry; a 10s rebroadcast covers lost reliable messages.
+
 ## Secrets and operational invariants
 
 - `SESSION_SECRET` keys **two** things: OAuth session cookies and the

@@ -240,6 +240,19 @@ migration (static wildcard cert from the ACME directory, not renewed).
   instead of freezing the tunnel.
 - Accounts persist to a JSON file with atomic writes.
 
+## Multi-instance (cluster)
+
+One binary, three modes - `ETUNNEL_CLUSTER=single` (default, today's node),
+`mesh` (gossip + cross-peer forwarding, behind any L4 LB) and `sticky`
+(Redis routing table for L7 LBs). Shared services are env-driven:
+`ETUNNEL_PG_DSN` (accounts), `ETUNNEL_REDIS_URL` (exact global limits),
+`SESSION_SECRET` (signs cookies + resume tokens - required multi-instance).
+`/healthz` on the main port reports 200/drain; SIGTERM drains before
+sessions close, and SDKs re-land on any peer with the same URL.
+
+Full guide: [deploy/CLUSTER.md](deploy/CLUSTER.md) - modes, verified
+deployments (Docker Compose / k3s Helm / bare-metal systemd), scaling.
+
 ## Operations: sessions and reconnect
 
 The server signs two things with `SESSION_SECRET`: OAuth session cookies and
