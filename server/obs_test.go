@@ -5,7 +5,9 @@ package server
 // auth failures are logged in full.
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type logCapture struct {
@@ -152,5 +155,46 @@ func TestAdminAuthFailureLogged(t *testing.T) {
 	}
 	if found != 2 {
 		t.Fatalf("admin auth failures logged %d times, want 2 (logs: %v)", found, logs)
+	}
+}
+
+// TestBaseDomainWebSocketUpgradeSurvivesAccessLog is the PR #46 review
+// regression: production wss://<base>/tunnel IS a base-host request, and the
+// access-log statusRecorder used to eat the http.Hijacker the websocket
+// upgrade needs (interface embedding does not promote it) - every SDK
+// connection would have gotten 501. Raw TCP with Host: <base> is the only
+// way to hit the base branch: websocket.Dial cannot override the Host header
+// (net/http ignores a set Host via DialOptions).
+func TestBaseDomainWebSocketUpgradeSurvivesAccessLog(t *testing.T) {
+	s := obsTestServer(t, nil)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	req := "GET /tunnel HTTP/1.1\r\n" +
+		"Host: t.test\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: etunnel\r\n" +
+		"\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(buf[:bytes.IndexByte(buf[:n], '\r')])
+	if !strings.Contains(status, "101") {
+		t.Fatalf("base-host upgrade: want 101 Switching Protocols, got %q (body: %q)", status, buf[:n])
 	}
 }

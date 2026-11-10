@@ -132,9 +132,16 @@ func (s *Server) Handler() http.Handler { return s.handler }
 // proxying is deliberately quiet - it is the hot path and carries the
 // tunnelled service's own traffic, not ours. Admin-auth failures are logged
 // unconditionally in adminAuth regardless of host.
+//
+// Connection-upgrade requests (the SDK's wss://<base>/tunnel handshake in
+// production) bypass the wrapper entirely: websocket.Accept needs the
+// underlying ResponseWriter's Hijacker, and interface embedding does not
+// promote it - wrapping returned 501 and dropped every base-domain SDK
+// connection (PR #46 review).
 func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, isBase, _ := s.hostLabel(r.Host); !isBase {
+		_, isBase, _ := s.hostLabel(r.Host)
+		if !isBase || isUpgradeRequest(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -142,6 +149,20 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		s.logf("http: %s %s %d %s", r.Method, r.URL.RequestURI(), rec.code, remoteIP(r))
 	})
+}
+
+// isUpgradeRequest reports whether r asks to switch protocols (RFC 7230
+// "Connection" is a comma-separated token list, e.g. "keep-alive, Upgrade").
+func isUpgradeRequest(r *http.Request) bool {
+	if strings.EqualFold(r.Header.Get("Upgrade"), "") {
+		return false
+	}
+	for _, tok := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
+			return true
+		}
+	}
+	return false
 }
 
 // statusRecorder captures the status code for access logging.
