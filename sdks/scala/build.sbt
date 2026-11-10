@@ -1,5 +1,5 @@
 ThisBuild / organization := "com.ggcode"
-ThisBuild / version := "1.0.0"
+ThisBuild / version := "1.4.0"
 ThisBuild / scalaVersion := "2.13.14"
 
 lazy val root = (project in file("."))

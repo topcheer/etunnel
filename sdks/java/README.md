@@ -15,7 +15,7 @@ Maven:
 <dependency>
   <groupId>dev.ggcode</groupId>
   <artifactId>etunnel</artifactId>
-  <version>1.0.0</version>
+  <version>1.4.0</version>
 </dependency>
 
 Gradle: implementation "dev.ggcode:etunnel:1.0.0"
