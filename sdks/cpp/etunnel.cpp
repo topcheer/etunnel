@@ -20,6 +20,7 @@
 #include <ctime>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -57,6 +58,11 @@ static std::string json_escape(const std::string &s) {
 static std::string json_str_field(const std::string &j, const std::string &key) {
     auto pat = "\"" + key + "\":";
     auto i = j.find(pat);
+    // Only accept a field boundary: the byte before the opening quote must be
+    // '{', ',' or string start, so a value that embeds the literal text
+    // `"key":` cannot hijack the lookup (#49 LOW).
+    while (i != std::string::npos && i > 0 && j[i - 1] != '{' && j[i - 1] != ',')
+        i = j.find(pat, i + 1);
     if (i == std::string::npos) return "";
     i = j.find('"', i + pat.size());
     if (i == std::string::npos) return "";
@@ -154,7 +160,7 @@ the tunnel stays connected and keeps retrying for you.</div>
 </main></body></html>)html";
 }
 
-static void serve(WsClient *client, websocketpp::connection_hdl hdl,
+static void serve(std::shared_ptr<WsClient> client, websocketpp::connection_hdl hdl,
                   const std::string &method, const std::string &path,
                   const std::string &body, uint32_t sid, int local_port) {
     CURL *curl = curl_easy_init();
@@ -181,8 +187,6 @@ static void serve(WsClient *client, websocketpp::connection_hdl hdl,
     CURLcode rc = curl_easy_perform(curl);
     if (rc == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-        std::string err;
-        (void) err;
     } else {
         status = 502;
         respBody = localErrorPage(curl_easy_strerror(rc));
@@ -211,17 +215,25 @@ static void serve(WsClient *client, websocketpp::connection_hdl hdl,
         hdrJson += "\"" + json_escape(k) + "\":[\"" + json_escape(v) + "\"]";
     }
 
-    websocketpp::lib::error_code ec;
+    // Send the response back. The connection may have died while curl was
+    // running (up to 120s): every send takes an error_code and the first
+    // failure stops the sequence - a stale hdl yields an error instead of a
+    // use-after-free (#49).
+    auto send_ok = [&](const void *p, size_t n, websocketpp::frame::opcode::value op) -> bool {
+        websocketpp::lib::error_code ec;
+        client->send(hdl, p, n, op, ec);
+        return !ec;
+    };
     std::string res = "{\"type\":\"res\",\"streamId\":" + std::to_string(sid)
         + ",\"status\":" + std::to_string(status) + ",\"headers\":{" + hdrJson + "}}";
-    client->send(hdl, res, websocketpp::frame::opcode::text, ec);
+    if (!send_ok(res.data(), res.size(), websocketpp::frame::opcode::text)) return;
     for (size_t i = 0; i < respBody.size(); i += MAXP) {
         size_t n = std::min(MAXP, respBody.size() - i);
         auto f = frame(0x01, sid, respBody.substr(i, n));
-        client->send(hdl, f.data(), f.size(), websocketpp::frame::opcode::binary, ec);
+        if (!send_ok(f.data(), f.size(), websocketpp::frame::opcode::binary)) return;
     }
     auto fin = frame(0x02, sid, "");
-    client->send(hdl, fin.data(), fin.size(), websocketpp::frame::opcode::binary, ec);
+    send_ok(fin.data(), fin.size(), websocketpp::frame::opcode::binary);
 }
 
 int main(int argc, char **argv) {
@@ -244,11 +256,29 @@ int main(int argc, char **argv) {
     std::srand((unsigned) std::time(nullptr));
 
     while (!g_stopped) {
-        WsClient client;
-        client.init_asio();
-        client.set_tls_init_handler([](websocketpp::connection_hdl) {
-            return websocketpp::lib::make_shared<websocketpp::lib::asio::ssl::context>(
+        // The serve threads share ownership: curl can still be running when
+        // the connection drops, so the client must outlive the loop body -
+        // a stack object here was a use-after-free (#49).
+        auto client = std::make_shared<WsClient>();
+        client->init_asio();
+        client->set_tls_init_handler([](websocketpp::connection_hdl) {
+            auto ctx = websocketpp::lib::make_shared<websocketpp::lib::asio::ssl::context>(
                 websocketpp::lib::asio::ssl::context::tlsv12);
+            // Asio/OpenSSL default to verify_none: without verify_peer a wss://
+            // connection accepts ANY certificate and the token plus all tunnel
+            // traffic are exposed to an active MITM (#49 HIGH). Verify against
+            // the system trust store by default; the only escape hatch is an
+            // explicit, loud env switch for self-signed/internal CA setups.
+            const char *insecure = getenv("ETUNNEL_INSECURE_TLS");
+            if (insecure && std::string(insecure) == "1") {
+                std::cerr << "etunnel: WARNING ETUNNEL_INSECURE_TLS=1 - certificate "
+                             "verification disabled (MITM exposure)" << std::endl;
+                ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_none);
+            } else {
+                ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_peer);
+                ctx->set_default_verify_paths();
+            }
+            return ctx;
         });
 
         std::mutex mtx;
@@ -256,7 +286,17 @@ int main(int argc, char **argv) {
         std::atomic<bool> gotUrl{false};
         std::atomic<bool> closed{false};
 
-        client.set_message_handler([&](websocketpp::connection_hdl hdl, WsMessagePtr msg) {
+        // Outstanding serve threads. Finished ones are pruned on the next
+        // spawn; the rest are joined at the end of the iteration, before the
+        // supervisor moves on (#49).
+        struct Worker {
+            std::thread th;
+            std::atomic<bool> done{false};
+        };
+        std::mutex wmtx;
+        std::vector<std::unique_ptr<Worker>> workers;
+
+        client->set_message_handler([&](websocketpp::connection_hdl hdl, WsMessagePtr msg) {
             std::lock_guard<std::mutex> lk(mtx);
             if (msg->get_opcode() == websocketpp::frame::opcode::text) {
                 std::string t = msg->get_payload();
@@ -270,8 +310,8 @@ int main(int argc, char **argv) {
                 } else if (t.find("\"type\":\"ping\"") != std::string::npos) {
                     long ts = json_num_field(t, "ts");
                     websocketpp::lib::error_code ec;
-                    client.send(hdl, "{\"type\":\"pong\",\"ts\":" + std::to_string(ts) + "}",
-                                websocketpp::frame::opcode::text, ec);
+                    client->send(hdl, "{\"type\":\"pong\",\"ts\":" + std::to_string(ts) + "}",
+                                 websocketpp::frame::opcode::text, ec);
                 }
             } else if (msg->get_opcode() == websocketpp::frame::opcode::binary) {
                 const std::string &b = msg->get_payload();
@@ -288,13 +328,30 @@ int main(int argc, char **argv) {
                 } else if (kind == 0x02) {
                     StreamBuf st = it->second;
                     streams.erase(it);
-                    std::thread(serve, &client, hdl, st.method, st.path, st.body, sid, local_port).detach();
+                    auto w = std::make_unique<Worker>();
+                    Worker *wr = w.get();
+                    // Value-capture the shared_ptr: the thread keeps the client
+                    // alive even if the connection drops mid-curl (#49).
+                    w->th = std::thread([client, hdl, st = std::move(st), sid, local_port, wr]() {
+                        serve(client, hdl, st.method, st.path, st.body, sid, local_port);
+                        wr->done = true;
+                    });
+                    std::lock_guard<std::mutex> wl(wmtx);
+                    workers.erase(std::remove_if(workers.begin(), workers.end(),
+                        [](std::unique_ptr<Worker> &p) {
+                            if (p->done.load()) {
+                                if (p->th.joinable()) p->th.join();
+                                return true;
+                            }
+                            return false;
+                        }), workers.end());
+                    workers.push_back(std::move(w));
                 } else if (kind == 0x03) {
                     streams.erase(it);
                 }
             }
         });
-        client.set_open_handler([&](websocketpp::connection_hdl hdl) {
+        client->set_open_handler([&](websocketpp::connection_hdl hdl) {
             websocketpp::lib::error_code ec;
             std::string token = getenv("ETUNNEL_TOKEN") ? getenv("ETUNNEL_TOKEN") : "";
             std::string sub = getenv("ETUNNEL_SUBDOMAIN") ? getenv("ETUNNEL_SUBDOMAIN") : "";
@@ -303,29 +360,38 @@ int main(int argc, char **argv) {
             if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
             if (!g_resume.empty()) hello += ",\"resume\":\"" + json_escape(g_resume) + "\"";
             hello += ",\"client\":\"etunnel-cpp/1.0\"}";
-            client.send(hdl, hello, websocketpp::frame::opcode::text, ec);
+            client->send(hdl, hello, websocketpp::frame::opcode::text, ec);
         });
         // the supervisor's only view of the connection lifecycle
-        client.set_fail_handler([&](websocketpp::connection_hdl) { closed = true; });
-        client.set_close_handler([&](websocketpp::connection_hdl) { closed = true; });
+        client->set_fail_handler([&](websocketpp::connection_hdl) { closed = true; });
+        client->set_close_handler([&](websocketpp::connection_hdl) { closed = true; });
 
         websocketpp::lib::error_code ec;
-        auto con = client.get_connection(server, ec);
+        auto con = client->get_connection(server, ec);
         if (ec) {
             std::cerr << "etunnel: " << ec.message() << std::endl;
             closed = true;
         } else {
             con->add_subprotocol("etunnel-v1");
-            client.connect(con);
+            client->connect(con);
             // Drive the asio loop by hand instead of client.run(), so that a
             // signal can break out of a live connection.
             while (!g_stopped && !closed) {
-                if (client.poll() == 0) {
+                if (client->poll() == 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 }
             }
         }
-        client.stop();
+        client->stop();
+
+        // Wait for every serve thread before the next iteration touches the
+        // connection state they still reference (#49).
+        {
+            std::lock_guard<std::mutex> wl(wmtx);
+            for (auto &p : workers)
+                if (p->th.joinable()) p->th.join();
+            workers.clear();
+        }
 
         if (g_stopped) break;      // SIGINT/SIGTERM: no reconnect
         if (!reconnect) break;     // ETUNNEL_RECONNECT=0: no reconnect
