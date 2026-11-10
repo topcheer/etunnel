@@ -64,6 +64,7 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
+			s.logf("admin: auth FAILED %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -82,6 +83,7 @@ func (s *Server) adminAuthOptional(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
+			s.logf("admin: auth FAILED %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
