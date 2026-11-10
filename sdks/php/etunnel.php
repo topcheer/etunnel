@@ -6,9 +6,10 @@
  *
  * Run:   php etunnel.php 3000
  *
- * Embed:
- *   $t = Etunnel::connect('wss://t.etun.uk/tunnel', 3000);
- *   echo $t->url;
+ * Embed (connect() blocks, serving until the tunnel ends - the URL arrives
+ * via the $onUrl callback, like the CLI below does):
+ *   Etunnel::connect('wss://t.etun.uk/tunnel', 3000, null, null,
+ *       function (string $url): void { echo "TUNNEL_URL: $url\n"; });
  */
 
 const MAXP = 32768;
@@ -61,7 +62,7 @@ final class Etunnel
             throw new RuntimeException('etunnel: websocket rejected');
         }
 
-        $hello = ['type' => 'hello', 'proto' => 1, 'client' => 'etunnel-php/1.0'];
+        $hello = ['type' => 'hello', 'proto' => 1, 'client' => 'etunnel-php/1.4.0'];
         if ($token) $hello['token'] = $token;
         if ($subdomain) $hello['subdomain'] = $subdomain;
         if ($resume !== null && $resume !== '') $hello['resume'] = $resume;

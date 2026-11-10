@@ -22,6 +22,8 @@ export interface Options {
   token?: string;
   subdomain?: string;
   client?: string;
+  /** Server-signed token from a previous session: reclaim the same subdomain. */
+  resume?: string;
   onClose?: (reason: string) => void;
 }
 
@@ -29,6 +31,8 @@ export interface Tunnel {
   url: string;
   hostname: string;
   subdomain: string;
+  /** Server-signed token: pass back as opts.resume to reclaim the subdomain. */
+  resumeToken?: string;
   plan: string;
   close(reason?: string): void;
 }

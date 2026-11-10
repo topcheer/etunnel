@@ -25,8 +25,9 @@ sub dbg { print STDERR @_ if $DEBUG }
 
 sub ws_connect {
     my ($url) = @_;
-    my ($scheme, $host, $port, $path) = $url =~ m{^(wss?)://([^/:]+)(?::(\d+))?(/.*)$}
+    my ($scheme, $host, $port, $path) = $url =~ m{^(wss?)://([^/:]+)(?::(\d+))?(/.*)?$}
         or die "bad url $url\n";
+    $path //= '/';
     $port //= ($scheme eq 'wss' ? 443 : 80);
     my $sock;
     if ($scheme eq 'wss') {

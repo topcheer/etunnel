@@ -133,6 +133,43 @@ end
 
 -- -------- minimal JSON -------------------------------------------------------
 
+-- Decode JSON string escapes in a single left-to-right pass: \" \\ \/ \b \f
+-- \n \r \t and \uXXXX (encoded as UTF-8; lone surrogates fold to U+FFFD).
+-- Chained gsub passes would mis-read sequences like "\\u0041" (an escaped
+-- backslash followed by a literal u0041), so walk the string once instead.
+local function json_unescape(s)
+  local map = { ['"'] = '"', ['\\'] = '\\', ['/'] = '/', b = "\b", f = "\f", n = "\n", r = "\r", t = "\t" }
+  local out, j = {}, 1
+  while true do
+    local k = s:find("\\", j, true)
+    if not k then break end
+    out[#out + 1] = s:sub(j, k - 1)
+    local c = s:sub(k + 1, k + 1)
+    if c == "u" then
+      local cp = tonumber(s:sub(k + 2, k + 5), 16)
+      if cp then
+        if cp >= 0xD800 and cp <= 0xDFFF then cp = 0xFFFD end
+        if cp < 0x80 then
+          out[#out + 1] = string.char(cp)
+        elseif cp < 0x800 then
+          out[#out + 1] = string.char(192 + math.floor(cp / 64), 128 + cp % 64)
+        else
+          out[#out + 1] = string.char(224 + math.floor(cp / 4096), 128 + math.floor(cp / 64) % 64, 128 + cp % 64)
+        end
+        j = k + 6
+      else
+        out[#out + 1] = c
+        j = k + 2
+      end
+    else
+      out[#out + 1] = map[c] or c
+      j = k + 2
+    end
+  end
+  out[#out + 1] = s:sub(j)
+  return table.concat(out)
+end
+
 local function json_escape(s)
   return (s:gsub('[%c"\\]', function(c)
     local map = { ['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\t'] = '\\t', ['\r'] = '\\r' }
@@ -140,9 +177,20 @@ local function json_escape(s)
   end))
 end
 
+-- Extract a string field, tolerating escaped quotes inside the value: a plain
+-- "([^"]*)" match would stop at the quote of a\"b and truncate it.
 local function json_field_str(s, key)
-  local v = s:match('"' .. key .. '"%s*:%s*"([^"]*)"')
-  return v and v:gsub('\\(.)', { n = "\n", t = "\t" }) or nil
+  local open = s:match('"' .. key .. '"%s*:%s*"()')
+  if not open then return nil end
+  local i = open
+  while true do
+    local c = s:find('["\\]', i)
+    if not c then return nil end -- malformed: unterminated string
+    if s:sub(c, c) == '"' then
+      return json_unescape(s:sub(open, c - 1))
+    end
+    i = c + 2 -- skip the escaped character
+  end
 end
 
 local function json_field_num(s, key)
@@ -240,7 +288,7 @@ local function connect(server, local_port, token, subdomain, resume)
     if op == 0x1 then
       if payload:find('"type":"welcome"', 1, true) then
         url = json_field_str(payload, "url")
-        resume_token = json_field_str(payload, "resumeToken")
+        local resume_token = json_field_str(payload, "resumeToken")
         break
       elseif payload:find('"type":"error"', 1, true) then
         error("etunnel: " .. (json_field_str(payload, "code") or "?"))

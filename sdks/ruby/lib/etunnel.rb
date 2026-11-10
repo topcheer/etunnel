@@ -16,9 +16,9 @@ require 'net/http'
 begin
   require 'eventmachine'
   require 'faye/websocket'
-rescue LoadError
-  warn 'etunnel: gem install faye-websocket'
-  exit 1
+rescue LoadError => e
+  # Library code must not kill the host process; surface the failure instead.
+  raise LoadError, "etunnel: gem install faye-websocket (#{e.message})"
 end
 
 # faye-websocket needs a running EventMachine reactor.
@@ -109,7 +109,14 @@ module Etunnel
           when 0x01 then st[:body] << data
           when 0x02
             streams.delete(sid)
-            serve(ws, st[:req], st[:body], sid, local)
+            # One worker thread per request (same shape as the perl SDK): a slow
+            # local app must not block this reader loop, or server pings go
+            # unanswered while a request is in flight and the tunnel gets kicked.
+            Thread.new do
+              serve(ws, st[:req], st[:body], sid, local)
+            rescue StandardError => e
+              warn "etunnel: request worker failed: #{e}"
+            end
           when 0x03 then streams.delete(sid)
           end
         end
@@ -176,21 +183,20 @@ module Etunnel
     path = req['path'] || '/'
     headers = (req['headers'] || {}).reject { |k, _| HOP.include?(k.downcase) }
 
-    out = Thread.new do
-      begin
-        http = Net::HTTP.new(host, port.to_i)
-        http.open_timeout = 10
-        klass = Net::HTTP.const_get(method.capitalize)
-        r = klass.new(path, headers.to_h { |k, v| [k, Array(v).first] })
-        r.body = body unless method == 'GET' || method == 'HEAD'
-        resp = http.request(r)
-        [resp.code.to_i, resp.each_header.reject { |k, _| HOP.include?(k) }.to_h, resp.body || '']
-      rescue StandardError => e
-        [502, { 'Content-Type' => 'text/html; charset=utf-8' }, local_error_page(e)]
-      end
-    end.value
+    # Runs on its own worker thread (see the reader loop); no inner
+    # Thread.new{}.value needed - that would just re-block the caller.
+    status, headers, payload = begin
+      http = Net::HTTP.new(host, port.to_i)
+      http.open_timeout = 10
+      klass = Net::HTTP.const_get(method.capitalize)
+      r = klass.new(path, headers.to_h { |k, v| [k, Array(v).first] })
+      r.body = body unless method == 'GET' || method == 'HEAD'
+      resp = http.request(r)
+      [resp.code.to_i, resp.each_header.reject { |k, _| HOP.include?(k) }.to_h, resp.body || '']
+    rescue StandardError => e
+      [502, { 'Content-Type' => 'text/html; charset=utf-8' }, local_error_page(e)]
+    end
 
-    status, headers, payload = out
     ws.send(JSON.generate({ type: 'res', streamId: sid, status: status,
                             headers: headers.to_h { |k, v| [k, [v]] } }))
     payload = payload.b
