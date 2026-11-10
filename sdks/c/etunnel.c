@@ -171,6 +171,7 @@ static int lws_write_msg(struct lws *wsi, const unsigned char *p, size_t len, in
         else wp = last ? LWS_WRITE_CONTINUATION : LWS_WRITE_CONTINUATION | LWS_WRITE_NO_FIN;
         int n = lws_write(wsi, (unsigned char *) p + off, chunk, (enum lws_write_protocol) wp);
         if (n < 0) return -1;
+        if (n == 0) return -1; /* lws_write made no progress: retrying would spin (#60 nit) */
         off += (size_t) n;
     }
     return 0;
@@ -366,7 +367,7 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
         char *res_e = g_resume[0] ? json_escape_dup(g_resume) : NULL;
         char hello[2048];
         snprintf(hello, sizeof(hello),
-            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.0\"}",
+            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.4.0\"}",
             sub_e ? ",\"subdomain\":\"" : "", sub_e ? sub_e : "", sub_e ? "\"" : "",
             tok_e ? ",\"token\":\"" : "", tok_e ? tok_e : "", tok_e ? "\"" : "",
             res_e ? ",\"resume\":\"" : "", res_e ? res_e : "");
