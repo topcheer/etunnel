@@ -278,17 +278,17 @@ local function connect(server, local_port, token, subdomain, resume)
   if subdomain then hello = hello .. ',"subdomain":"' .. json_escape(subdomain) .. '"' end
   if token then hello = hello .. ',"token":"' .. json_escape(token) .. '"' end
   if resume and resume ~= "" then hello = hello .. ',"resume":"' .. json_escape(resume) .. '"' end
-  hello = hello .. ',"client":"etunnel-lua/1.0"}'
+  hello = hello .. ',"client":"etunnel-lua/1.4.0"}'
   ws:send_text(hello)
 
-  local url
+  local url, resume_token
   while true do
     local op, payload = ws:recv()
     if not op then error("closed before welcome") end
     if op == 0x1 then
       if payload:find('"type":"welcome"', 1, true) then
         url = json_field_str(payload, "url")
-        local resume_token = json_field_str(payload, "resumeToken")
+        resume_token = json_field_str(payload, "resumeToken")
         break
       elseif payload:find('"type":"error"', 1, true) then
         error("etunnel: " .. (json_field_str(payload, "code") or "?"))
