@@ -1,0 +1,35 @@
+[Unit]
+Description=etunnel tunnel server (cluster node %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Shared credentials (SESSION_SECRET, ETUNNEL_PG_DSN, ETUNNEL_REDIS_URL,
+# billing vars) come from this file; instance-specific env comes from the
+# Environment lines below so a template unit can drive N nodes.
+EnvironmentFile=/etc/etunnel/cluster.env
+# Instance %i is the node number (1, 2, 3...). Each node binds its own
+# public HTTPS port (2044x), its own gossip ports (794x tcp+udp) and a
+# local admin port. Node 1 is the mesh seed.
+Environment=ETUNNEL_CLUSTER=mesh
+Environment=ETUNNEL_NODE_ID=etunneld-%i
+Environment=ETUNNEL_ADVERTISE=127.0.0.1:2044%i
+Environment=ETUNNEL_JOIN=127.0.0.1:20541
+ExecStart=/opt/etunnel/etunneld \
+  --domain t2.etun.uk \
+  --alias-domain t.etun.uk \
+  --addr 127.0.0.1:2044%i \
+  --http-addr 127.0.0.1:2045%i \
+  --admin-addr 127.0.0.1:2046%i \
+  --tls-mode dns \
+  --dns-provider cloudflare \
+  --acme-dir /var/lib/etunnel/acme \
+  --acme-email gg@liop.dev \
+  --acme-ca prod \
+  --accounts /var/lib/etunnel/accounts-%i.json \
+  --max-tunnels-per-ip 5
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
