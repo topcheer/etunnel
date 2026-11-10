@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/topcheer/etunnel/protocol"
 )
 
 // Reconnect defaults.
@@ -50,9 +52,6 @@ type ReconnectingTunnel struct {
 // ConnectReconnecting dials once (returning the first error, so bad
 // credentials fail fast rather than looping forever) and then supervises the
 // connection in the background.
-//
-// opts.Reconnect is ignored here - this constructor always reconnects; use
-// Connect for the one-shot behaviour.
 func ConnectReconnecting(ctx context.Context, opts Options) (*ReconnectingTunnel, error) {
 	if opts.LocalAddr == "" {
 		return nil, errors.New("etunnel: LocalAddr is required")
@@ -79,6 +78,10 @@ func ConnectReconnecting(ctx context.Context, opts Options) (*ReconnectingTunnel
 // user asking for it.
 func (r *ReconnectingTunnel) supervise() {
 	defer close(r.closed)
+	// Release the supervisor context on every exit path (permanent error,
+	// parent cancel, user close) - without this the WithCancel registration
+	// leaks until the parent context ends (issue #55).
+	defer r.cancel()
 	backoff := r.opts.ReconnectMinBackoff
 	if backoff <= 0 {
 		backoff = DefaultReconnectMinBackoff
@@ -151,11 +154,17 @@ func (r *ReconnectingTunnel) supervise() {
 }
 
 // isPermanent marks errors that retrying cannot fix (bad token, bad plan).
+// Codes come from protocol.ErrCode* so the compiler catches drift; note the
+// server's invalid-name code is "subdomain_invalid" (the previous literal
+// "subdomain_bad" never matched what the server sends).
 func isPermanent(err error) bool {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.Code {
-		case "unauthorized", "subdomain_plan", "subdomain_bad", "bad_message":
+		case protocol.ErrCodeUnauthorized,
+			protocol.ErrCodeSubdomainPlan,
+			protocol.ErrCodeSubdomainBad,
+			protocol.ErrCodeBadMessage:
 			return true
 		}
 	}
@@ -173,7 +182,8 @@ func grow(backoff, max time.Duration) time.Duration {
 	return next
 }
 
-// jitter spreads reconnect storms: +-20%.
+// jitter spreads reconnect storms: +-10% (issue #55: comment previously
+// claimed 20%; the implementation below has always delivered 10%).
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return d
@@ -209,7 +219,8 @@ func (r *ReconnectingTunnel) Attempts() int {
 	return r.attempt
 }
 
-// Tunnel returns the current underlying tunnel (useful for HttpTransport).
+// Tunnel returns the current underlying tunnel, or nil while a reconnect
+// is in flight. Accessors like ResumeToken/CloseReason live on it.
 func (r *ReconnectingTunnel) Tunnel() *Tunnel {
 	r.mu.Lock()
 	defer r.mu.Unlock()

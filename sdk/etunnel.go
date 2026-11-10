@@ -187,6 +187,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	err = ws.Write(wctx, websocket.MessageText, hello)
 	wcancel()
 	if err != nil {
+		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "hello failed")
 		return nil, fmt.Errorf("etunnel: send hello: %w", err)
 	}
@@ -202,11 +203,13 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	}
 	rcancel()
 	if err != nil {
+		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "no welcome")
 		return nil, fmt.Errorf("etunnel: read welcome: %w", err)
 	}
 	msg, err := protocol.DecodeControl(b)
 	if err != nil {
+		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "bad welcome")
 		return nil, err
 	}
@@ -221,9 +224,11 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 			t.expiresAt = time.Unix(m.ExpiresAt, 0)
 		}
 	case *protocol.ErrorMsg:
+		tcancel()
 		_ = ws.Close(websocket.StatusPolicyViolation, m.Code)
 		return nil, &APIError{Code: m.Code, Message: m.Message}
 	default:
+		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "unexpected message")
 		return nil, fmt.Errorf("etunnel: unexpected handshake message %T", msg)
 	}
@@ -336,6 +341,10 @@ func (t *Tunnel) sendRst(id uint32) error {
 }
 
 func (t *Tunnel) writeLoop() {
+	// Always release the tunnel context, including the write-error branch
+	// below, which otherwise returns without cancelling and leaks the ctx
+	// registration for the life of the parent (issue #55).
+	defer t.cancel()
 	for {
 		select {
 		case m := <-t.out:
