@@ -69,9 +69,36 @@ static const char ERR_PAGE_B[] =
 static char g_resume[512]; /* server-signed token: reclaim the subdomain on reconnect */
 static int g_local_port = 3000;
 static volatile sig_atomic_t g_stop = 0;
-static pthread_mutex_t g_send_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* JSON string escaper mirroring the C++ SDK: quotes, backslash and C0
+ * controls. Raw interpolation of token/subdomain/resume into hello was an
+ * injection: a token containing '"' broke the frame (#48 MED). */
+static char *json_escape_dup(const char *s) {
+    if (!s) return NULL;
+    char *out = malloc(strlen(s) * 6 + 1);
+    if (!out) return NULL;
+    char *o = out;
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char) *p;
+        switch (c) {
+        case '"': *o++ = '\\'; *o++ = '"'; break;
+        case '\\': *o++ = '\\'; *o++ = '\\'; break;
+        case '\b': *o++ = '\\'; *o++ = 'b'; break;
+        case '\f': *o++ = '\\'; *o++ = 'f'; break;
+        case '\n': *o++ = '\\'; *o++ = 'n'; break;
+        case '\r': *o++ = '\\'; *o++ = 'r'; break;
+        case '\t': *o++ = '\\'; *o++ = 't'; break;
+        default:
+            if (c < 0x20) o += sprintf(o, "\\u%04x", c);
+            else *o++ = (char) c;
+        }
+    }
+    *o = 0;
+    return out;
+}
 
 typedef struct {
+    uint32_t sid;          /* owning stream id: detects slot collisions (#48) */
     char method[16];
     char path[2048];
     unsigned char *body;
@@ -82,35 +109,130 @@ typedef struct {
 static stream_buf_t g_streams[MAX_STREAMS]; /* indexed by sid % MAX_STREAMS (sids are small+odd) */
 static pthread_mutex_t g_streams_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-typedef struct {
-    struct lws *wsi;
-} session_t;
-static session_t g_sess;
+/* ---- outbound queue (#48) ---------------------------------------------------
+ * lws_write may only be called from the service-loop thread, and a detached
+ * serve thread must never touch the wsi: the connection can be closed and the
+ * wsi freed by LWS_CALLBACK_CLIENT_CLOSED while curl is still running (up to
+ * 120s). Every outbound message is therefore queued here and drained by
+ * LWS_CALLBACK_CLIENT_WRITEABLE in the service loop. */
 
-/* ---- wire frames ------------------------------------------------------------ */
+typedef struct out_msg {
+    struct out_msg *next;
+    unsigned char *buf; /* LWS_PRE-prefixed, heap: no 64KB stack frame */
+    size_t len;
+    int is_text;
+} out_msg_t;
 
-static int send_ws(struct lws *wsi, unsigned char *data, size_t len, int is_text) {
-    unsigned char buf[LWS_PRE + 65536];
-    memcpy(buf + LWS_PRE, data, len);
-    pthread_mutex_lock(&g_send_mtx);
-    int n = lws_write(wsi, buf + LWS_PRE, len,
-                      is_text ? LWS_WRITE_TEXT : LWS_WRITE_BINARY);
-    pthread_mutex_unlock(&g_send_mtx);
-    return n;
+static out_msg_t *g_out_head;
+static out_msg_t **g_out_tail = &g_out_head;
+static size_t g_out_bytes;
+static pthread_mutex_t g_out_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* If the connection stalls while local apps keep answering, the queue could
+ * grow without bound; past this cap new messages are dropped (and the stream
+ * they belong to dies on the next FIN-less reset) instead of eating memory. */
+#define OUTQ_MAX_BYTES (64u * 1024 * 1024)
+
+static int outq_push(const void *data, size_t len, int is_text) {
+    if (len > OUTQ_MAX_BYTES) return -1;
+    out_msg_t *m = calloc(1, sizeof(*m));
+    if (!m) return -1;
+    m->buf = malloc(LWS_PRE + len);
+    if (!m->buf) { free(m); return -1; }
+    memcpy(m->buf + LWS_PRE, data, len);
+    m->len = len;
+    m->is_text = is_text;
+    pthread_mutex_lock(&g_out_mtx);
+    if (g_out_bytes > OUTQ_MAX_BYTES) {
+        pthread_mutex_unlock(&g_out_mtx);
+        free(m->buf); free(m);
+        return -1;
+    }
+    g_out_bytes += len;
+    *g_out_tail = m;
+    g_out_tail = &m->next;
+    pthread_mutex_unlock(&g_out_mtx);
+    return 0;
 }
 
-static int send_text(struct lws *wsi, const char *json) {
-    return send_ws(wsi, (unsigned char *) json, strlen(json), 1);
+/* lws_write can only buffer a limited chunk (bounded by the protocol's
+ * rx_buffer_size); one call per message truncates large frames - the peer
+ * then waits forever for bytes we never sent. Fragment instead: first chunk
+ * carries the opcode + NO_FIN, middles are CONTINUATION + NO_FIN, the last
+ * chunk completes the message. */
+static int lws_write_msg(struct lws *wsi, const unsigned char *p, size_t len, int is_text) {
+    enum lws_write_protocol first = is_text ? LWS_WRITE_TEXT : LWS_WRITE_BINARY;
+    size_t off = 0;
+    while (off < len) {
+        size_t chunk = len - off > MAXP ? MAXP : len - off;
+        int last = (off + chunk == len);
+        int wp;
+        if (off == 0) wp = last ? (int) first : (int) first | LWS_WRITE_NO_FIN;
+        else wp = last ? LWS_WRITE_CONTINUATION : LWS_WRITE_CONTINUATION | LWS_WRITE_NO_FIN;
+        int n = lws_write(wsi, (unsigned char *) p + off, chunk, (enum lws_write_protocol) wp);
+        if (n < 0) return -1;
+        if (n == 0) return -1; /* lws_write made no progress: retrying would spin (#60 nit) */
+        off += (size_t) n;
+    }
+    return 0;
 }
 
-static int send_frame(struct lws *wsi, unsigned char kind, uint32_t sid,
+static void outq_drop(void);
+
+static void outq_drain(struct lws *wsi) {
+    for (;;) {
+        pthread_mutex_lock(&g_out_mtx);
+        out_msg_t *m = g_out_head;
+        if (m) {
+            g_out_head = m->next;
+            if (!g_out_head) g_out_tail = &g_out_head;
+            g_out_bytes -= m->len;
+        }
+        pthread_mutex_unlock(&g_out_mtx);
+        if (!m) return;
+        int rc = lws_write_msg(wsi, m->buf + LWS_PRE, m->len, m->is_text);
+        free(m->buf);
+        free(m);
+        if (rc < 0) {
+            outq_drop();  /* connection is going down: drop the rest */
+            return;
+        }
+    }
+}
+
+static void outq_drop(void) {
+    pthread_mutex_lock(&g_out_mtx);
+    out_msg_t *m = g_out_head;
+    while (m) {
+        out_msg_t *nx = m->next;
+        g_out_bytes -= m->len;
+        free(m->buf);
+        free(m);
+        m = nx;
+    }
+    g_out_head = NULL;
+    g_out_tail = &g_out_head;
+    pthread_mutex_unlock(&g_out_mtx);
+}
+
+/* ---- wire frames ------------------------------------------------------------
+ * All sends enqueue for the service loop; none touch the wsi directly. */
+
+static int send_text(const char *json) {
+    return outq_push(json, strlen(json), 1);
+}
+
+static int send_frame(unsigned char kind, uint32_t sid,
                       const unsigned char *payload, size_t n) {
-    unsigned char f[9 + MAXP];
+    unsigned char *f = malloc(9 + n);
+    if (!f) return -1;
     f[0] = kind;
     f[1] = sid >> 24; f[2] = sid >> 16; f[3] = sid >> 8; f[4] = sid & 0xFF;
     f[5] = (n >> 24) & 0xFF; f[6] = (n >> 16) & 0xFF; f[7] = (n >> 8) & 0xFF; f[8] = n & 0xFF;
     if (n) memcpy(f + 9, payload, n);
-    return send_ws(wsi, f, 9 + n, 0);
+    int rc = outq_push(f, 9 + n, 0);
+    free(f);
+    return rc;
 }
 
 /* ---- local HTTP via curl ------------------------------------------------------ */
@@ -122,9 +244,12 @@ typedef struct {
 
 static size_t grow_cb(char *p, size_t s, size_t n, void *u) {
     grow_t *g = u;
-    g->data = realloc(g->data, g->len + s * n + 1);
+    char *nd = realloc(g->data, g->len + s * n + 1);
+    if (!nd) return 0; /* curl treats 0 as an error and aborts the transfer */
+    g->data = nd;
     memcpy(g->data + g->len, p, s * n);
     g->len += s * n;
+    g->data[g->len] = 0; /* NUL-terminate: the header parse below reads C strings */
     return s * n;
 }
 
@@ -133,7 +258,6 @@ static size_t header_cb(char *p, size_t s, size_t n, void *u) {
 }
 
 typedef struct {
-    struct lws *wsi;
     uint32_t sid;
     char method[16];
     char path[2048];
@@ -165,7 +289,9 @@ static void *serve_thread(void *arg) {
     if (rc == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     } else {
-        /* local app down: themed 502 page (error text truncated to 256 bytes) */
+        /* local app down: themed 502 page (error text truncated to 256 bytes).
+         * The partial body received before the failure is discarded, not
+         * leaked (#48 LOW). */
         char emsg[257];
         snprintf(emsg, sizeof(emsg), "%s", curl_easy_strerror(rc));
         char esc[256 * 6 + 1];
@@ -179,6 +305,7 @@ static void *serve_thread(void *arg) {
         esc[el] = 0;
         char *page = malloc(strlen(ERR_PAGE_A) + el + strlen(ERR_PAGE_B) + 1);
         sprintf(page, "%s%s%s", ERR_PAGE_A, esc, ERR_PAGE_B);
+        free(body.data);
         body.data = page;
         body.len = strlen(page);
         free(hdr.data);
@@ -209,16 +336,19 @@ static void *serve_thread(void *arg) {
     json_object_object_add(res, "status", json_object_new_int((int) status));
     json_object_object_add(res, "headers", hdrs);
     const char *j = json_object_to_json_string(res);
-    send_text(a->wsi, j);
+    /* Enqueue only: this thread must never touch the (possibly freed) wsi.
+     * The service loop drains the queue; a huge header block used to be
+     * memcpy'd into a 64KB stack buffer here (#48 HIGH). */
+    send_text(j);
     json_object_put(res);
 
     size_t i = 0;
     while (i < body.len) {
         size_t n = body.len - i > MAXP ? MAXP : body.len - i;
-        send_frame(a->wsi, 0x01, a->sid, body.data + i, n);
+        send_frame(0x01, a->sid, (const unsigned char *) body.data + i, n);
         i += n;
     }
-    send_frame(a->wsi, 0x02, a->sid, NULL, 0);
+    send_frame(0x02, a->sid, NULL, 0);
 
     free(hdr.data); free(body.data); free(a->body); free(a);
     return NULL;
@@ -230,19 +360,19 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                  void *user, void *in, size_t len) {
     switch (reason) {
     case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-        char hello[512];
         const char *tok = getenv("ETUNNEL_TOKEN");
         const char *sub = getenv("ETUNNEL_SUBDOMAIN");
-        int n = snprintf(hello, sizeof(hello),
-            "{\"type\":\"hello\",\"proto\":1%s%s,\"client\":\"etunnel-c/1.0\"}",
-            sub && *sub ? ",\"subdomain\":\"" : "",
-            0);
-        (void) n;
-        snprintf(hello, sizeof(hello), "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.0\"}",
-            sub && *sub ? ",\"subdomain\":\"" : "", sub && *sub ? sub : "", sub && *sub ? "\"" : "",
-            tok && *tok ? ",\"token\":\"" : "", tok && *tok ? tok : "", tok && *tok ? "\"" : "",
-            g_resume[0] ? ",\"resume\":\"" : "", g_resume);
-        send_text(wsi, hello);
+        char *tok_e = tok && *tok ? json_escape_dup(tok) : NULL;
+        char *sub_e = sub && *sub ? json_escape_dup(sub) : NULL;
+        char *res_e = g_resume[0] ? json_escape_dup(g_resume) : NULL;
+        char hello[2048];
+        snprintf(hello, sizeof(hello),
+            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.4.0\"}",
+            sub_e ? ",\"subdomain\":\"" : "", sub_e ? sub_e : "", sub_e ? "\"" : "",
+            tok_e ? ",\"token\":\"" : "", tok_e ? tok_e : "", tok_e ? "\"" : "",
+            res_e ? ",\"resume\":\"" : "", res_e ? res_e : "");
+        free(tok_e); free(sub_e); free(res_e);
+        send_text(hello);
         break;
     }
     case LWS_CALLBACK_CLIENT_RECEIVE: {
@@ -256,15 +386,23 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                        | ((uint32_t) b[7] << 8) | b[8];
             pthread_mutex_lock(&g_streams_mtx);
             stream_buf_t *st = &g_streams[sid % MAX_STREAMS];
-            if (st->method[0]) {
+            if (st->method[0] && st->sid == sid) {  /* stale slot: not ours */
                 if (kind == 0x01) {
                     size_t take = n < len - 9 ? n : len - 9;
-                    st->body = realloc(st->body, st->body_len + take);
+                    unsigned char *nd = realloc(st->body, st->body_len + take);
+                    if (!nd) {
+                        pthread_mutex_unlock(&g_streams_mtx);
+                        break;  /* stream is dead until the next FIN resets it */
+                    }
+                    st->body = nd;
                     memcpy(st->body + st->body_len, b + 9, take);
                     st->body_len += take;
                 } else if (kind == 0x02) {
                     serve_arg_t *a = calloc(1, sizeof(*a));
-                    a->wsi = wsi;
+                    if (!a) {
+                        pthread_mutex_unlock(&g_streams_mtx);
+                        break;
+                    }
                     a->sid = sid;
                     memcpy(a->method, st->method, sizeof(a->method));
                     memcpy(a->path, st->path, sizeof(a->path));
@@ -272,14 +410,22 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                     a->body_len = st->body_len;
                     a->local_port = g_local_port;
                     st->body = NULL; st->body_len = 0;
+                    st->method[0] = 0;  /* slot free: the stream moved to serve */
                     pthread_t th;
-                    pthread_create(&th, NULL, serve_thread, a);
-                    pthread_detach(th);
+                    if (pthread_create(&th, NULL, serve_thread, a) != 0) {
+                        free(a->body);
+                        free(a);
+                    } else {
+                        pthread_detach(th);
+                    }
                 } else if (kind == 0x03) {
                     free(st->body); st->body = NULL; st->body_len = 0;
                     st->method[0] = 0;
                 }
             }
+            /* frames for a sid that lost its slot are dropped: with 128
+             * slots and sids colliding, silent cross-stream overwrites were
+             * the bug (#48 MED) */
             pthread_mutex_unlock(&g_streams_mtx);
         } else {
             char *t = strndup(in, len);
@@ -296,6 +442,15 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                     uint32_t sid = (uint32_t) json_object_get_int(json_object_object_get(m, "streamId"));
                     pthread_mutex_lock(&g_streams_mtx);
                     stream_buf_t *st = &g_streams[sid % MAX_STREAMS];
+                    if (st->method[0] && st->sid != sid) {
+                        /* slot still held by a colliding stream: the old one is
+                         * stale by definition (the server moved on) - replace
+                         * it instead of silently mixing two streams' data */
+                        fprintf(stderr, "etunnel: stream slot collision: sid %u replaces %u\n",
+                                sid, st->sid);
+                        free(st->body); st->body = NULL; st->body_len = 0;
+                    }
+                    st->sid = sid;
                     snprintf(st->method, sizeof(st->method), "%s",
                         json_object_get_string(json_object_object_get(m, "method")) ?: "GET");
                     snprintf(st->path, sizeof(st->path), "%s",
@@ -306,7 +461,7 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                     char pong[64];
                     snprintf(pong, sizeof(pong), "{\"type\":\"pong\",\"ts\":%lld}",
                         (long long) (json_object_get_int64(json_object_object_get(m, "ts"))));
-                    send_text(wsi, pong);
+                    send_text(pong);
                 } else if (type && !strcmp(type, "bye")) {
                     g_stop = 1;
                 }
@@ -316,11 +471,20 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
         }
         break;
     }
+    case LWS_CALLBACK_CLIENT_WRITEABLE:
+        /* The only place lws_write is legal: drain the outbound queue that
+         * hello/pong/serve threads fill (#48 HIGH). */
+        outq_drain(wsi);
+        break;
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
         fprintf(stderr, "etunnel: connection error: %s\n", (char *) in);
+        outq_drop();
         g_stop = 1;
         break;
     case LWS_CALLBACK_CLIENT_CLOSED:
+        /* the wsi dies here: everything still queued belongs to a dead
+         * connection */
+        outq_drop();
         g_stop = 1;
         break;
     default:

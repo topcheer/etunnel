@@ -21,4 +21,9 @@ uninstall:
 clean:
 	rm -f etunnel
 
-.PHONY: all install uninstall clean
+# Regression tests (#48): each is self-contained (fixtures + ASan builds).
+# Requires Go for the test fixture server (testtools/wssserver).
+test:
+	@for t in tests/test_*.sh; do echo "== $$t =="; sh $$t || exit 1; done
+
+.PHONY: all install uninstall clean test
