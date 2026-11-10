@@ -6,24 +6,11 @@ package server
 import (
 	"context"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 )
 
-func pgReachable(t *testing.T) bool {
-	t.Helper()
-	if err := exec.Command("nc", "-z", "-w", "2", "192.168.31.13", "5432").Run(); err != nil {
-		t.Skip("pg at 13 not reachable")
-		return false
-	}
-	return true
-}
-
 func TestPgAccountStoreLive(t *testing.T) {
-	if !pgReachable(t) {
-		return
-	}
 	dsn := os.Getenv("ET_PG_TEST_DSN")
 	if dsn == "" {
 		t.Skip("ET_PG_TEST_DSN not set")
