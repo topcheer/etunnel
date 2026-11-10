@@ -71,6 +71,8 @@ func wsFrame(kind byte, sid uint32, payload []byte) []byte {
 func main() {
 	mode := flag.String("mode", "welcome", "welcome|drama")
 	addr := flag.String("listen", "127.0.0.1:0", "listen address")
+	certFile := flag.String("cert", "", "serve this PEM cert instead of a throwaway self-signed one")
+	keyFile := flag.String("key", "", "PEM key for -cert (required with -cert)")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *addr)
@@ -108,7 +110,21 @@ func main() {
 			}
 			select {} // keep the socket open until the test kills us
 		}),
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{selfSignedCert()}, NextProtos: []string{"http/1.1"}},
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{certToServe(*certFile, *keyFile)}, NextProtos: []string{"http/1.1"}},
 	}
 	log.Fatal(srv.ServeTLS(ln, "", ""))
+}
+
+func certToServe(certFile, keyFile string) tls.Certificate {
+	if certFile == "" {
+		return selfSignedCert()
+	}
+	if keyFile == "" {
+		log.Fatal("-cert requires -key")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return cert
 }

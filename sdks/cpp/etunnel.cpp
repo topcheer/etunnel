@@ -11,6 +11,8 @@
 //      ETUNNEL_RECONNECT=0 disables the reconnect supervisor.
 #include <websocketpp/config/asio_client.hpp>
 #include <websocketpp/client.hpp>
+#include <openssl/x509v3.h>
+#include <openssl/x509_vfy.h>
 #include <curl/curl.h>
 #include <algorithm>
 #include <atomic>
@@ -261,22 +263,75 @@ int main(int argc, char **argv) {
         // a stack object here was a use-after-free (#49).
         auto client = std::make_shared<WsClient>();
         client->init_asio();
-        client->set_tls_init_handler([](websocketpp::connection_hdl) {
+        // Host pinning for TLS identity (#49/#65): verify_peer alone proves the
+        // chain is valid, not that it belongs to the host we dialed - a MITM
+        // with any CA-signed certificate for ANY domain passes. The expected
+        // hostname goes into the verify param, so the handshake fails on
+        // SAN/CN mismatch the same way curl does. An unparsable URL must not
+        // silently downgrade to chain-only verification.
+        std::string tls_host;
+        {
+            std::string u = server;
+            auto scheme = u.find("://");
+            if (scheme != std::string::npos) {
+                auto host_start = scheme + 3;
+                auto host_end = u.find_first_of("/", host_start);
+                if (host_end == std::string::npos) host_end = u.size();
+                tls_host = u.substr(host_start, host_end - host_start);
+                auto colon = tls_host.rfind(':');
+                if (colon != std::string::npos) tls_host.resize(colon);
+            }
+        }
+        if (tls_host.empty()) {
+            std::cerr << "etunnel: cannot determine TLS hostname from " << server << std::endl;
+            return 1;
+        }
+
+        client->set_tls_init_handler([tls_host](websocketpp::connection_hdl) {
             auto ctx = websocketpp::lib::make_shared<websocketpp::lib::asio::ssl::context>(
                 websocketpp::lib::asio::ssl::context::tlsv12);
             // Asio/OpenSSL default to verify_none: without verify_peer a wss://
             // connection accepts ANY certificate and the token plus all tunnel
             // traffic are exposed to an active MITM (#49 HIGH). Verify against
-            // the system trust store by default; the only escape hatch is an
-            // explicit, loud env switch for self-signed/internal CA setups.
+            // the system trust store by default - chain AND hostname; the only
+            // escape hatch is an explicit, loud env switch that disables BOTH.
             const char *insecure = getenv("ETUNNEL_INSECURE_TLS");
             if (insecure && std::string(insecure) == "1") {
-                std::cerr << "etunnel: WARNING ETUNNEL_INSECURE_TLS=1 - certificate "
-                             "verification disabled (MITM exposure)" << std::endl;
+                std::cerr << "etunnel: WARNING ETUNNEL_INSECURE_TLS=1 - certificate chain "
+                             "AND hostname verification disabled (MITM exposure)" << std::endl;
                 ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_none);
             } else {
                 ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_peer);
                 ctx->set_default_verify_paths();
+                // Optional extra trust root for internal CAs (#49); also what
+                // the hostname regression test uses to control the chain.
+                if (const char *ca = getenv("ETUNNEL_CA_FILE"); ca && *ca) {
+                    websocketpp::lib::error_code ec;
+                    ctx->load_verify_file(ca, ec);
+                    if (ec) {
+                        std::cerr << "etunnel: ETUNNEL_CA_FILE (" << ca << "): " << ec.message()
+                                  << std::endl;
+                    }
+                }
+                SSL_CTX *ssl = ctx->native_handle();
+                X509_VERIFY_PARAM *param = SSL_CTX_get0_param(ssl);
+                // set1_host compares a DNS name - an IP literal would never
+                // match an IP SAN and every dial to 127.0.0.1 would fail.
+                // Pick the matcher the way curl does (curl uses the right
+                // one depending on the URL host).
+                bool pinned;
+                if (tls_host.find_first_not_of("0123456789.:abcdefABCDEF") == std::string::npos &&
+                    tls_host.find_first_of(".:") != std::string::npos) {
+                    pinned = X509_VERIFY_PARAM_set1_ip_asc(param, tls_host.c_str()) == 1;
+                } else {
+                    pinned = X509_VERIFY_PARAM_set1_host(param, tls_host.c_str(), tls_host.size()) == 1;
+                }
+                if (!pinned) {
+                    // Fail closed: never continue with chain-only verification.
+                    std::cerr << "etunnel: TLS hostname pin failed; refusing to connect" << std::endl;
+                    ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_none);
+                    std::cerr << "etunnel: TLS verification refused" << std::endl;
+                }
             }
             return ctx;
         });
