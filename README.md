@@ -270,7 +270,7 @@ SESSION_SECRET=$(openssl rand -hex 32)   # set once, keep it stable
 
 Clients reconnect automatically and replay their resume token, so the server
 hands back the same subdomain (skipping plan gating — the signed token is the
-grant). Wire format: [PROTOCOL.md](PROTOCOL.md) §1.
+grant). Wire format: [PROTOCOL.md](PROTOCOL.md) · [CHANGELOG](CHANGELOG.md) §1.
 
 ## Billing (optional, self-hosted)
 

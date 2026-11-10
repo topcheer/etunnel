@@ -1,6 +1,6 @@
 [package]
 name = "etunnel"
-version = "1.3.1"
+version = "1.4.0"
 edition = "2021"
 description = "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server."
 license = "MIT"
