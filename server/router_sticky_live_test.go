@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestStickyRouterLive(t *testing.T) {
-	if err := exec.Command("nc", "-z", "-w", "2", "192.168.31.13", "6379").Run(); err != nil {
-		t.Skip("redis at 13 not reachable")
+	url := os.Getenv("ET_REDIS_TEST_URL")
+	if url == "" {
+		t.Skip("ET_REDIS_TEST_URL not set (live sticky-router test)")
 	}
-	const url = "redis://192.168.31.13:6379/15"
 	a, err := newStickyRouter(url, "10.0.0.1:8080")
 	if err != nil {
 		t.Fatal(err)

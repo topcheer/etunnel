@@ -9,6 +9,24 @@ jobs:
   build:
     name: pack (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Live PG/Redis for the cluster store tests (skip when unreachable).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: etunnel
+          POSTGRES_PASSWORD: etunnel-ci
+          POSTGRES_DB: etunnel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U etunnel"
+          --health-interval 3s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 5s --health-retries 20
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +77,9 @@ jobs:
         run: brew install kotlin scala clojure libwebsockets json-c
       - name: Verify core
         run: go build ./... && go test -count=1 ./...
+        env:
+          ET_PG_TEST_DSN: postgres://etunnel:etunnel-ci@localhost:5432/etunnel?sslmode=disable
+          ET_REDIS_TEST_URL: redis://localhost:6379/15
 
       - name: Version gate (tag must match every manifest)
         if: startsWith(github.ref, 'refs/tags/v')

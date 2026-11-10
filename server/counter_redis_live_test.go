@@ -6,25 +6,17 @@ package server
 
 import (
 	"context"
-	"os/exec"
+	"os"
 	"testing"
 	"time"
 )
 
-func redisReachable(t *testing.T) bool {
-	t.Helper()
-	if err := exec.Command("nc", "-z", "-w", "2", "192.168.31.13", "6379").Run(); err != nil {
-		t.Skip("redis at 13 not reachable")
-		return false
-	}
-	return true
-}
-
 func TestRedisCounterLive(t *testing.T) {
-	if !redisReachable(t) {
-		return
+	redisURL := os.Getenv("ET_REDIS_TEST_URL")
+	if redisURL == "" {
+		t.Skip("ET_REDIS_TEST_URL not set (live Redis test)")
 	}
-	c, err := newRedisCounter("redis://192.168.31.13:6379/15")
+	c, err := newRedisCounter(redisURL)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
