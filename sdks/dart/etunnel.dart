@@ -34,7 +34,15 @@ class Etunnel {
   final _url = Completer<String>();
 
   Etunnel._(this.ws, this.host, this.port) {
-    ws.listen(_onMessage, onDone: () {});
+    // onError: a decode/desync failure used to surface as an unhandled async
+    // error and kill the isolate; log it and drop the connection instead
+    // (#53 LOW).
+    ws.listen(_onMessage, onDone: () {}, onError: (Object e) {
+      stderr.writeln('etunnel: connection error: $e');
+      try {
+        ws.close();
+      } catch (_) {/* already closed */}
+    });
   }
 
   static Future<Etunnel> connect(String server, String local,
@@ -79,7 +87,7 @@ class Etunnel {
         case 'req':
           _streams[m['streamId'] as int] = _StreamBuf(m);
         case 'ping':
-          ws.add(jsonEncode({'type': 'pong', 'ts': m['ts'] ?? 0}));
+          _send(jsonEncode({'type': 'pong', 'ts': m['ts'] ?? 0}));
         case 'bye':
           ws.close();
       }
@@ -90,7 +98,10 @@ class Etunnel {
     final kind = b[0];
     final sid = (b[1] << 24) | (b[2] << 16) | (b[3] << 8) | b[4];
     final n = (b[5] << 24) | (b[6] << 16) | (b[7] << 8) | b[8];
-    final payload = b.sublist(9, 9 + n);
+    // A truncated frame (n beyond the actual payload) used to raise an
+    // unhandled RangeError here (#53 MED); clamp like the C#/Elixir SDKs.
+    final payloadEnd = 9 + n > b.length ? b.length : 9 + n;
+    final payload = b.sublist(9, payloadEnd);
     final st = _streams[sid];
     if (st == null) return;
     switch (kind) {
@@ -102,6 +113,16 @@ class Etunnel {
     }
   }
 
+  /// ws.add on a closed sink throws StateError; every outbound send goes
+  /// through here so a drop mid-serve cannot kill the isolate (#53 LOW).
+  void _send(Object data) {
+    try {
+      ws.add(data);
+    } on StateError {
+      // connection already gone; nothing to deliver
+    }
+  }
+
   Future<void> _serve(_StreamBuf st, int sid) async {
     final req = st.req;
     final method = req['method'] as String? ?? 'GET';
@@ -109,8 +130,8 @@ class Etunnel {
     try {
       final rq = await http.openUrl(method, Uri.http('$host:$port', path));
       (req['headers'] as Map<String, dynamic>? ?? {}).forEach((k, vs) {
-        if (HOP.contains((k as String).toLowerCase())) return;
-        for (final v in (vs as List)) rq.headers.add(k, v.toString());
+        if (HOP.contains(k.toLowerCase())) return;
+        for (final v in vs) rq.headers.add(k, v.toString());
       });
       if (method != 'GET' && method != 'HEAD' && st.body.isNotEmpty) {
         rq.add(st.body.takeBytes());
@@ -121,17 +142,17 @@ class Etunnel {
       rs.headers.forEach((k, vs) {
         if (!HOP.contains(k.toLowerCase())) hdrs[k] = vs;
       });
-      ws.add(jsonEncode({'type': 'res', 'streamId': sid, 'status': rs.statusCode, 'headers': hdrs}));
+      _send(jsonEncode({'type': 'res', 'streamId': sid, 'status': rs.statusCode, 'headers': hdrs}));
       final body = await rs.fold<BytesBuilder>(BytesBuilder(), (b, d) { b.add(d); return b; }).then((b) => b.toBytes());
       for (var i = 0; i < body.length; i += MAXP) {
-        ws.add(frame(0x01, sid, body.sublist(i, i + MAXP > body.length ? body.length : i + MAXP)));
+        _send(frame(0x01, sid, body.sublist(i, i + MAXP > body.length ? body.length : i + MAXP)));
       }
-      ws.add(frame(0x02, sid, []));
+      _send(frame(0x02, sid, []));
     } catch (e) {
-      ws.add(jsonEncode({'type': 'res', 'streamId': sid, 'status': 502,
+      _send(jsonEncode({'type': 'res', 'streamId': sid, 'status': 502,
         'headers': {'Content-Type': ['text/html; charset=utf-8']}}));
-      ws.add(frame(0x01, sid, utf8.encode(_localErrorPage(e))));
-      ws.add(frame(0x02, sid, []));
+      _send(frame(0x01, sid, utf8.encode(_localErrorPage(e))));
+      _send(frame(0x02, sid, []));
     }
   }
 
@@ -182,8 +203,9 @@ the tunnel stays connected and keeps retrying for you.</div>
   }
 
   void close() {
-    ws.add(jsonEncode({'type': 'bye', 'reason': 'client closed'}));
+    _send(jsonEncode({'type': 'bye', 'reason': 'client closed'}));
     ws.close();
+    http.close(); // the client and its sockets must not outlive the tunnel (#53 MED)
   }
 }
 
@@ -214,12 +236,14 @@ Future<void> main(List<String> args) async {
   // Ctrl-C / SIGTERM stop the supervisor: the tunnel is closed and no
   // reconnection is attempted.
   var stopped = false;
+  final done = Completer<void>(); // unblocks the one-shot wait on a signal
   Etunnel? current;
   final signals = <StreamSubscription<ProcessSignal>>[];
   for (final sig in [ProcessSignal.sigint, ProcessSignal.sigterm]) {
     try {
       signals.add(sig.watch().listen((_) {
         stopped = true;
+        if (!done.isCompleted) done.complete(); // else the one-shot await hangs forever
         try {
           current?.close(); // unblocks ws.done so the loop can exit
         } catch (_) {
@@ -243,7 +267,10 @@ Future<void> main(List<String> args) async {
       print('TUNNEL_URL: ${t.url}');
       attempt = 0;
       if (!reconnect) {
-        await Completer<void>().future; // run forever
+        // Run until a signal: the completer is finished by the signal handler
+        // above, so the wait is cancellable (same class of fix as the C# and
+        // Swift one-shot hangs).
+        await done.future;
       }
       await t.ws.done; // completes when the connection ends
       current = null;
