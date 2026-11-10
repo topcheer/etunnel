@@ -99,7 +99,9 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
             .connectTimeout(Duration.ofSeconds(10))
             .proxy(java.net.ProxySelector.of(null))
             .build()
-        private val WS_HTTP = HttpClient.newHttpClient()
+        private val WS_HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .build()
 
         private val HOP = setOf("connection", "transfer-encoding", "keep-alive", "upgrade",
             "proxy-connection", "te", "trailer", "content-length", "host")

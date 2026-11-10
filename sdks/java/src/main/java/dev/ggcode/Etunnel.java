@@ -35,7 +35,12 @@ public class Etunnel {
         .connectTimeout(Duration.ofSeconds(10))
         .proxy(java.net.ProxySelector.of(null))
         .build();
-    static final HttpClient WS_HTTP = HttpClient.newHttpClient();
+    // connectTimeout on the shared WS client too (review note on #59): the
+    // builder's 15s covers the handshake, but any future plain request routed
+    // through this client would otherwise have no dial timeout at all.
+    static final HttpClient WS_HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(15))
+        .build();
 
     public static class Options {
         public String token, subdomain, resume;
