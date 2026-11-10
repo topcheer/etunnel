@@ -1,11 +1,15 @@
 // etunnel SDK for Rust (tungstenite + ureq).
 // Buffer-based protocol client (bodies buffered per stream; no WS upgrades).
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use tungstenite::client::IntoClientRequest;
 use tungstenite::handshake::client::Response;
@@ -13,6 +17,9 @@ use tungstenite::protocol::{Message, WebSocketConfig};
 use tungstenite::stream::MaybeTlsStream;
 
 const MAXP: usize = 32768;
+/// Read tick for the socket: how long a blocking read may hold the lock
+/// before the loop drains outbound messages (#53).
+const READ_TICK_MS: u64 = 200;
 
 pub struct Options {
     pub token: Option<String>,
@@ -89,8 +96,10 @@ fn extract_headers(json: &str) -> HashMap<String, Vec<String>> {
     let mut out = HashMap::new();
     let Some(hstart) = json.find("\"headers\":{") else { return out };
     let body = &json[hstart + 11..];
-    // walk pairs until the matching close brace (naive but messages are flat)
-    let bytes = body.as_bytes();
+    // walk pairs until the matching close brace (naive but messages are flat).
+    // Iterate chars, not bytes: `byte as char` re-encoded multi-byte UTF-8
+    // header values as Latin-1 mojibake (#53 LOW).
+    let chars: Vec<char> = body.chars().collect();
     let mut i = 0usize;
     let mut depth = 1usize;
     let mut cur_key = String::new();
@@ -98,8 +107,8 @@ fn extract_headers(json: &str) -> HashMap<String, Vec<String>> {
     let mut in_key = false;
     let mut in_val = false;
     let mut buf = String::new();
-    while i < bytes.len() {
-        let c = bytes[i] as char;
+    while i < chars.len() {
+        let c = chars[i];
         match c {
             '"' => {
                 if in_key || in_val {
@@ -169,7 +178,31 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
     let (ws, _resp) = tungstenite::connect(request)
         .map_err(|e| format!("connect: {}", e))?;
 
+    // Bound every blocking read so the reader periodically releases the
+    // socket lock and drains the outbound queue: holding the lock across an
+    // unbounded read() blocked every sender (serve threads, pong) until the
+    // next inbound frame arrived (#53 MED). MaybeTlsStream has no blanket
+    // timeout setter, so drill into the concrete stream it wraps.
+    {
+        let tick = Some(Duration::from_millis(READ_TICK_MS));
+        let res = match ws.get_ref() {
+            MaybeTlsStream::Plain(s) => s.set_read_timeout(tick),
+            MaybeTlsStream::Rustls(s) => s.get_ref().set_read_timeout(tick),
+            // other TLS backends: best-effort, the queue still drains between
+            // frames whenever the peer is active
+            #[allow(unreachable_patterns)]
+            _ => Ok(()),
+        };
+        if let Err(e) = res {
+            eprintln!("etunnel: read timeout not applied: {}", e);
+        }
+    }
+
     let ws = Arc::new(Mutex::new(ws));
+    // Outbound relay: senders hand messages to the reader loop, which flushes
+    // them between reads - nobody but the reader ever locks the socket for
+    // writing, so frames also cannot interleave (#53).
+    let (out_tx, out_rx) = mpsc::channel::<Message>();
 
     let mut hello = String::from("{\"type\":\"hello\",\"proto\":1");
     if let Some(s) = subdomain {
@@ -212,14 +245,23 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
     let closed2 = Arc::clone(&closed);
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
+        let mut out_rx = out_rx;
         loop {
             let msg = {
-                let mut w = ws2.lock().unwrap();
+                let mut w = ws2.lock().unwrap_or_else(|p| p.into_inner());
                 match w.read() {
-                    Ok(m) => m,
+                    Ok(m) => Some(m),
+                    Err(tungstenite::Error::Io(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut => {
+                        // read tick elapsed: drop the lock and flush senders
+                        None
+                    }
                     Err(_) => break,
                 }
             };
+            drain_outbox(&ws2, &mut out_rx);
+            let Some(msg) = msg else { continue };
             match msg {
                 Message::Text(t) => {
                     let t = t.as_str().to_string();
@@ -233,14 +275,13 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
                         });
                     } else if t.contains("\"type\":\"ping\"") {
                         let ts = extract_num(&t, "ts").unwrap_or(0.0) as i64;
-                        let mut w = ws2.lock().unwrap();
-                        w.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
+                        out_tx.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
                     } else if t.contains("\"type\":\"bye\"") {
                         break;
                     }
                 }
                 Message::Binary(b) => {
-                    if b.len() < 9 { continue; }
+                    if b.len() < 9 { drain_outbox(&ws2, &mut out_rx); continue; }
                     let kind = b[0];
                     let sid = u32::from_be_bytes([b[1], b[2], b[3], b[4]]);
                     let n = u32::from_be_bytes([b[5], b[6], b[7], b[8]]) as usize;
@@ -250,9 +291,9 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
                         0x01 => st.body.extend_from_slice(payload),
                         0x02 => {
                             let st = streams.remove(&sid).unwrap();
-                            let ws3 = Arc::clone(&ws2);
+                            let tx3 = out_tx.clone();
                             let local3 = local.clone();
-                            thread::spawn(move || serve(ws3, local3, sid, st));
+                            thread::spawn(move || serve(tx3, local3, sid, st));
                         }
                         0x03 => { streams.remove(&sid); }
                         _ => {}
@@ -266,6 +307,18 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
     });
 
     Ok(Tunnel { url, resume_token, closed })
+}
+
+/// Reader-side flush of the outbound relay: sends every queued message on the
+/// socket the reader owns (#53).
+fn drain_outbox(ws: &Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>,
+                rx: &mut mpsc::Receiver<Message>) {
+    while let Ok(m) = rx.try_recv() {
+        let mut w = ws.lock().unwrap_or_else(|p| p.into_inner());
+        if w.send(m).is_err() {
+            return;
+        }
+    }
 }
 
 /// Themed 502 page shown when the local app is down (same HTML as the other SDKs).
@@ -326,7 +379,7 @@ fn local_error_page(msg: &str) -> String {
     format!("{}{}{}", ERR_PAGE_A, escape_html(msg), ERR_PAGE_B)
 }
 
-fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, local: String, sid: u32, st: StreamBuf) {
+fn serve(tx: mpsc::Sender<Message>, local: String, sid: u32, st: StreamBuf) {
     let hop = |k: &str| {
         matches!(k.to_ascii_lowercase().as_str(), "connection" | "transfer-encoding" | "keep-alive"
             | "upgrade" | "content-length" | "host" | "proxy-connection" | "te" | "trailer")
@@ -365,11 +418,10 @@ fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, loca
             (code, Vec::new(), buf)
         }
         Err(e) => {
-            let mut w = ws.lock().unwrap();
-            w.send(Message::Text(format!(
+            tx.send(Message::Text(format!(
                 "{{\"type\":\"res\",\"streamId\":{},\"status\":502,\"headers\":{{\"Content-Type\":[\"text/html; charset=utf-8\"]}}}}", sid).into())).ok();
-            w.send(frame(0x01, sid, local_error_page(&e.to_string()).as_bytes())).ok();
-            w.send(frame(0x02, sid, b"")).ok();
+            tx.send(frame(0x01, sid, local_error_page(&e.to_string()).as_bytes())).ok();
+            tx.send(frame(0x02, sid, b"")).ok();
             return;
         }
     };
@@ -379,23 +431,22 @@ fn serve(ws: Arc<Mutex<tungstenite::WebSocket<MaybeTlsStream<TcpStream>>>>, loca
         .map(|(k, v)| format!("\"{}\":[\"{}\"]", json_escape(k), json_escape(v)))
         .collect::<Vec<_>>()
         .join(",");
-    let mut w = ws.lock().unwrap();
-    w.send(Message::Text(format!(
+    tx.send(Message::Text(format!(
         "{{\"type\":\"res\",\"streamId\":{},\"status\":{},\"headers\":{{{}}}}}", sid, status, hdr_json).into())).ok();
     for chunk in out.chunks(MAXP) {
-        w.send(frame(0x01, sid, chunk)).ok();
+        tx.send(frame(0x01, sid, chunk)).ok();
     }
-    w.send(frame(0x02, sid, b"")).ok();
+    tx.send(frame(0x02, sid, b"")).ok();
 }
 
 fn backoff_ms(attempt: u32) -> u64 {
-    // 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter.
+    // 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter. The jitter mixes in
+    // the RandomState seed instead of subsec_nanos alone: nanos-derived
+    // jitter is predictable across processes started in the same millisecond
+    // (#53 LOW).
     let base = (500u64 << attempt.min(6)).min(30_000);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u64)
-        .unwrap_or(0);
-    base * (800 + nanos % 401) / 1000
+    let r = RandomState::new().build_hasher().finish();
+    base * (800 + r % 401) / 1000
 }
 
 fn main() {

@@ -62,7 +62,7 @@ final class Etunnel: @unchecked Sendable {
     stateLock.unlock()
   }
 
-    init(server: String, local: String) {
+    init?(server: String, local: String) {
         if let i = local.lastIndex(of: ":"), let p = Int(local[local.index(after: i)...]) {
             self.localHost = String(local[..<i])
             self.localPort = p
@@ -70,10 +70,13 @@ final class Etunnel: @unchecked Sendable {
             self.localHost = "127.0.0.1"
             self.localPort = Int(local) ?? 3000
         }
+        // A malformed ETUNNEL_SERVER used to crash here on URL(string:)! ;
+        // the caller now gets nil and reports it instead of a process abort (#53).
+        guard let u = URL(string: server), u.scheme != nil, u.host != nil else { return nil }
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 15
         self.session = URLSession(configuration: cfg)
-        self.task = session.webSocketTask(with: URL(string: server)!, protocols: ["etunnel-v1"])
+        self.task = session.webSocketTask(with: u, protocols: ["etunnel-v1"])
     }
 
     func connect(token: String? = nil, subdomain: String? = nil, resume: String? = nil) async throws -> String {
@@ -92,8 +95,14 @@ final class Etunnel: @unchecked Sendable {
                let type = obj["type"] as? String {
                 if type == "welcome" {
                     if let rt = obj["resumeToken"] as? String { resumeToken = rt }
+                    // server-controlled field: as! here was a protocol-deviation
+                    // crash (#53)
+                    guard let u = obj["url"] as? String else {
+                        throw NSError(domain: "etunnel", code: 3,
+                            userInfo: [NSLocalizedDescriptionKey: "welcome missing url"])
+                    }
                     startLoop()
-                    return obj["url"] as! String
+                    return u
                 }
                 if type == "error" {
                     throw NSError(domain: "etunnel", code: 1,
@@ -119,7 +128,10 @@ final class Etunnel: @unchecked Sendable {
                       let type = obj["type"] as? String else { continue }
                 switch type {
                 case "req":
-                    let sid = UInt32(obj["streamId"] as! Int)
+                    // a non-numeric streamId in the frame used to crash the
+                    // process (#53)
+                    guard let sidVal = obj["streamId"] as? Int else { continue }
+                    let sid = UInt32(sidVal)
                     await store.put(sid, obj)
                 case "ping":
                     let ts = obj["ts"] ?? 0
@@ -169,7 +181,9 @@ final class Etunnel: @unchecked Sendable {
         }
         do {
             let (data, resp) = try await session.data(for: urlReq)
-            let http = resp as! HTTPURLResponse
+            // non-HTTP answers (captive portal, proxy error page) used to
+            // crash the cast (#53)
+            guard let http = resp as? HTTPURLResponse else { return }
             var hdrs: [String: [String]] = [:]
             for (k, v) in http.allHeaderFields {
                 if let ks = k as? String, let vs = v as? String {
@@ -252,5 +266,8 @@ final class Etunnel: @unchecked Sendable {
     func close() {
         Task { try? await task.send(.string("{\"type\":\"bye\",\"reason\":\"client closed\"}")) }
         task.cancel(with: .normalClosure, reason: nil)
+        // a fresh URLSession per connection was never invalidated: a long
+        // reconnect loop accumulated them (#53)
+        session.invalidateAndCancel()
     }
 }

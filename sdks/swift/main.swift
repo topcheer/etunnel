@@ -50,7 +50,10 @@ var attempt = 0
 // Carried across drops so a reconnect reclaims the same subdomain.
 var resume: String? = nil
 while !stop.isStopped {
-    let et = Etunnel(server: server, local: local)
+    guard let et = Etunnel(server: server, local: local) else {
+        log("etunnel: invalid server URL: \(server)")
+        exit(2)
+    }
     do {
         let url = try await et.connect(
             token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
@@ -60,7 +63,9 @@ while !stop.isStopped {
         if !et.resumeToken.isEmpty { resume = et.resumeToken }
         attempt = 0
         if !reconnect {
-            while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
+            // one-shot must still observe the stop flag, or SIGINT hangs here
+            // forever (same class as the C# one-shot hang, #54)
+            while !stop.isStopped { try await Task.sleep(nanoseconds: 1_000_000_000) }
         }
         while !stop.isStopped && !et.isClosed {
             try await Task.sleep(nanoseconds: 200_000_000)

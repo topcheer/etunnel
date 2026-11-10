@@ -42,7 +42,10 @@ DispatchQueue.global().async {
 print("local service: http://127.0.0.1:\(port)")
 
 let server = ProcessInfo.processInfo.environment["ETUNNEL_SERVER"] ?? "wss://t.etun.uk/tunnel"
-let tunnel = Etunnel(server: server, local: String(port))
+guard let tunnel = Etunnel(server: server, local: String(port)) else {
+    FileHandle.standardError.write(("etunnel: invalid server URL: \(server)\n").data(using: .utf8)!)
+    exit(2)
+}
 let url = try await tunnel.connect(
     token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
     subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"])
