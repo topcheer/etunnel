@@ -40,8 +40,22 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ```elixir
 {:ok, t} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000)
-Etunnel.url(t)
+url = Etunnel.url(t)              # waits ≤10s for welcome; {:error, reason} on failure
+
+# the server's signed resume token arrives at the start_link caller:
+receive do {:etunnel_resume_token, tok} -> tok end
+
+Etunnel.close(t)                  # sends bye and tears down the connection
+{:ok, t2} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000, resume: tok)
 ```
+
+`Etunnel.url/1` waits up to 10s for the welcome frame and returns the URL, or
+`{:error, reason}` — including the structured `{code, message}` of a server
+error frame, which also stops the tunnel process. Reconnecting with the
+`resumeToken` reclaims the same subdomain.
+
+TLS verifies the peer against the OS CA store by default (`verify_peer` +
+SNI). Pass `tls_verify: :verify_none` only for throwaway self-signed servers.
 
 ## Environment variables
 

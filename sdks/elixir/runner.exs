@@ -103,12 +103,13 @@ defmodule EtunnelRunner do
     end
   end
 
-  # The SDK publishes the URL once the welcome frame arrived; a dead process
-  # races with us, so a failed call simply means "not up".
+  # The SDK publishes the URL once the welcome frame arrived; url/1 returns
+  # {:error, _} (never raises) when the process is gone or still handshaking.
   defp up?(pid) do
-    Etunnel.url(pid) != nil
-  catch
-    :exit, _ -> false
+    case Etunnel.url(pid) do
+      url when is_binary(url) -> true
+      _ -> false
+    end
   end
 
   defp shutdown(pid, reason \\ :shutdown) do
@@ -155,7 +156,7 @@ end
 local = List.first(System.argv()) || System.get_env("ETUNNEL_LOCAL") || "3000"
 
 conf = %{
-  server: System.get_env("ETUNNEL_SERVER") || "wss://t.ggcode.uk/tunnel",
+  server: System.get_env("ETUNNEL_SERVER") || "wss://t.etun.uk/tunnel",
   local: local,
   token: System.get_env("ETUNNEL_TOKEN"),
   subdomain: System.get_env("ETUNNEL_SUBDOMAIN"),
