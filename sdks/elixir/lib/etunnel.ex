@@ -66,8 +66,7 @@ defmodule Etunnel do
         [
           verify: :verify_peer,
           cacerts: :public_key.cacerts_get(),
-          server_name_indication: host,
-          depth: 3
+          server_name_indication: host
         ]
     end
   end
@@ -275,7 +274,7 @@ defmodule Etunnel do
 
     headers =
       (req["headers"] || %{})
-      |> Enum.reject(fn {k, _v} -> k in @hop end)
+      |> Enum.reject(fn {k, _v} -> String.downcase(k) in @hop end)
       |> Enum.flat_map(fn {k, vs} -> Enum.map(vs, &{String.to_charlist(k), String.to_charlist(&1)}) end)
 
     case Map.fetch(@http_methods, String.downcase(method)) do
