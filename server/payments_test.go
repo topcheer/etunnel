@@ -241,6 +241,7 @@ func TestRegisterForcesFreeTier(t *testing.T) {
 	} {
 		body := `{"email":"r` + tc.tier + `@x.com","tier":"` + tc.tier + `"}`
 		r := httptest.NewRequest(http.MethodPost, "/api/register", strings.NewReader(body))
+		r.Host = "t.test"                                                          // reserved endpoints only answer on the base domain (#35)
 		r.RemoteAddr = "10.0.0." + fmt.Sprint(len(tc.tier)+len(body)%50) + ":1234" // distinct IPs: bypass per-IP register limit
 		r.Header.Set("content-type", "application/json")
 		rec := httptest.NewRecorder()

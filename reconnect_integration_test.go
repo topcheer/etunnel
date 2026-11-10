@@ -81,7 +81,7 @@ func startOn(t *testing.T, addr string) *restartableServer {
 		t.Fatalf("listen %s: %v", addr, err)
 	}
 	tl := newTrackingListener(ln)
-	hs := &http.Server{Handler: s.Handler()}
+	hs := &http.Server{Handler: hostNormalizer("t.test", s.Handler())} // SDK dials by IP; map to base domain (#35)
 	go hs.Serve(tl)
 	return &restartableServer{addr: ln.Addr().String(), srv: hs, ln: tl}
 }
