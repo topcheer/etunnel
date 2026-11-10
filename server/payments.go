@@ -311,6 +311,13 @@ func (s *Server) handleBillingSuccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, _ := sess["customer_email"].(string)
+	// #40: the session id is a bearer capability - activation must only run
+	// for the account that actually paid, never for whoever replays the id.
+	if !s.paymentActingFor(r, email) {
+		s.logf("billing: success refused: session %s belongs to %q, visitor %q", sid, email, s.sessionEmail(r))
+		http.Error(w, "this payment belongs to a different account; log in as the buyer to claim it", http.StatusForbidden)
+		return
+	}
 	meta, _ := sess["metadata"].(map[string]any)
 	tier, _ := meta["tier"].(string)
 	key, err := s.activate(email, tier)
@@ -346,6 +353,13 @@ func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
 	if !paypalCaptureCompleted(order) {
 		s.logf("billing: paypal order %s captured but not cleared yet (eCheck?); webhook will activate", token)
 		http.Error(w, "payment captured but still clearing (eCheck) — your account activates automatically once PayPal completes it", http.StatusAccepted)
+		return
+	}
+	// #40 (same family as /billing/success): the order token is a bearer
+	// capability; only the buyer's session may capture-and-activate with it.
+	if !s.paymentActingFor(r, email) {
+		s.logf("billing: paypal return refused: order %s belongs to %q, visitor %q", token, email, s.sessionEmail(r))
+		http.Error(w, "this payment belongs to a different account; log in as the buyer to claim it", http.StatusForbidden)
 		return
 	}
 	key, err := s.activate(email, tier)
@@ -444,12 +458,15 @@ func nowpaymentsPaidEnough(ev map[string]any) bool {
 
 var stripeHTTP = &http.Client{Timeout: 20 * time.Second}
 
+// stripeAPIBase is a var so tests can point the client at a stub.
+var stripeAPIBase = "https://api.stripe.com"
+
 func (s *Server) stripeReq(method, path string, form url.Values) (map[string]any, error) {
 	var body io.Reader
 	if form != nil {
 		body = strings.NewReader(form.Encode())
 	}
-	req, err := http.NewRequest(method, "https://api.stripe.com"+path, body)
+	req, err := http.NewRequest(method, stripeAPIBase+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -505,6 +522,48 @@ func (s *Server) stripeGetSession(id string) (map[string]any, error) {
 
 // handleStripeWebhook verifies the v1 signature then activates on
 // checkout.session.completed.
+// paymentEventDedup remembers payment events that already ran activate()
+// so a captured-signature webhook replay inside the timestamp tolerance
+// cannot re-run it (#39). Bounded: entries older than paymentEventWindow
+// are dropped lazily on each call.
+var (
+	paymentEventsMu sync.Mutex
+	paymentEvents   = map[string]time.Time{}
+)
+
+const paymentEventWindow = 7 * 24 * time.Hour
+
+// paymentEventSeen marks id as processed and reports whether it was already
+// seen. An empty id (provider sent none) never dedupes - behaviour then
+// matches the pre-#39 code exactly.
+func paymentEventSeen(id string) bool {
+	if id == "" {
+		return false
+	}
+	paymentEventsMu.Lock()
+	defer paymentEventsMu.Unlock()
+	now := time.Now()
+	for k, ts := range paymentEvents {
+		if now.Sub(ts) > paymentEventWindow {
+			delete(paymentEvents, k)
+		}
+	}
+	if _, ok := paymentEvents[id]; ok {
+		return true
+	}
+	paymentEvents[id] = now
+	return false
+}
+
+// paymentActingFor reports whether the visitor's login session may act for
+// the buyer's email (#40): post-pay activation endpoints must only run for
+// the account that paid, so a leaked session/order id cannot be replayed by
+// someone else to trigger activation.
+func (s *Server) paymentActingFor(r *http.Request, buyerEmail string) bool {
+	se := s.sessionEmail(r)
+	return se != "" && se == buyerEmail
+}
+
 func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	if s.billing.StripeWebhookSecret == "" {
 		http.Error(w, "not configured", http.StatusServiceUnavailable)
@@ -520,6 +579,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ev struct {
+		ID   string `json:"id"`
 		Type string `json:"type"`
 		Data struct {
 			Object struct {
@@ -533,7 +593,9 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &ev)
 	if ev.Type == "checkout.session.completed" && ev.Data.Object.PaymentStatus == "paid" {
-		if _, err := s.activate(ev.Data.Object.Metadata.Email, ev.Data.Object.Metadata.Tier); err != nil {
+		if paymentEventSeen("stripe:" + ev.ID) {
+			s.logf("billing: stripe webhook replay suppressed (event %s)", ev.ID)
+		} else if _, err := s.activate(ev.Data.Object.Metadata.Email, ev.Data.Object.Metadata.Tier); err != nil {
 			s.logf("billing: stripe webhook activation failed: %v", err)
 		}
 	}
@@ -908,11 +970,25 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 	if status == "finished" && nowpaymentsPaidEnough(ev) { // #3: "confirmed" is seen-on-chain, not settled
 		oid, _ := ev["order_id"].(string)
 		email, tier, _ := strings.Cut(oid, ":")
-		if _, err := s.activate(email, tier); err != nil {
+		if paymentEventSeen("now:" + nowPaymentID(ev)) {
+			s.logf("billing: nowpayments IPN replay suppressed (payment %s)", nowPaymentID(ev))
+		} else if _, err := s.activate(email, tier); err != nil {
 			s.logf("billing: nowpayments activation failed: %v", err)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// nowPaymentID extracts the NOWPayments payment id as a string: the IPN
+// sends it as a JSON number.
+func nowPaymentID(ev map[string]any) string {
+	switch v := ev["payment_id"].(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return ""
 }
 
 // startTierReaper downgrades paid accounts whose subscription lapsed.
