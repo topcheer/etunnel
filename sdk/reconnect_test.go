@@ -21,9 +21,9 @@ func TestGrowBackoff(t *testing.T) {
 		{min, time.Second},
 		{time.Second, 2 * time.Second},
 		{16 * time.Second, max}, // doubles then caps at max (16*2=32 > 30)
-		{20 * time.Second, max},              // capped at max
-		{max, max},                           // already at ceiling
-		{0, max},                             // degenerate input saturates
+		{20 * time.Second, max}, // capped at max
+		{max, max},              // already at ceiling
+		{0, max},                // degenerate input saturates
 	}
 	for _, c := range cases {
 		if got := grow(c.in, max); got != c.want {
