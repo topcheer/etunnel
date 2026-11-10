@@ -80,6 +80,14 @@ jobs:
         env:
           ET_PG_TEST_DSN: postgres://etunnel:etunnel-ci@localhost:5432/etunnel?sslmode=disable
           ET_REDIS_TEST_URL: redis://localhost:6379/15
+      - name: Live cluster-store tests must PASS (not skip)
+        run: |
+          out=$(go test -count=1 -v -run 'TestPgAccountStoreLive|TestRedisCounterLive|TestStickyRouterLive' ./server/ 2>&1)
+          echo "$out" | grep -E '^--- (PASS|SKIP)'
+          echo "$out" | grep -q '^--- SKIP' && { echo "FAIL: live tests skipped"; exit 1; } || true
+        env:
+          ET_PG_TEST_DSN: postgres://etunnel:etunnel-ci@localhost:5432/etunnel?sslmode=disable
+          ET_REDIS_TEST_URL: redis://localhost:6379/15
 
       - name: Version gate (tag must match every manifest)
         if: startsWith(github.ref, 'refs/tags/v')
