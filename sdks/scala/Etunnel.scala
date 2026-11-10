@@ -281,7 +281,9 @@ the tunnel stays connected and keeps retrying for you.</div>
     .connectTimeout(Duration.ofSeconds(10))
     .proxy(java.net.ProxySelector.of(null))
     .build()
-  private val wsHttp = HttpClient.newHttpClient()
+  private val wsHttp = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(15))
+    .build()
 
   def connect(server: String, localPort: Int, token: String = null, subdomain: String = null,
               resume: String = null): Tunnel = {
