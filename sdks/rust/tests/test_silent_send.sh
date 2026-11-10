@@ -36,7 +36,7 @@ ADDR=$(head -1 "$ADDR_FILE")
 
 echo "== run (server silent after req+FIN; res must arrive within seconds) =="
 OUT=$(ETUNNEL_SERVER="ws://$ADDR/tunnel" ETUNNEL_RECONNECT=0 \
-    ETUNNEL_LOCAL=39701 timeout 20 ./target/debug/etunnel 2>&1 || true)
+    ETUNNEL_LOCAL=39701 timeout 4 ./target/debug/etunnel 2>&1 || true)
 echo "$OUT" | grep -E 'TUNNEL_URL' | sed 's/^/    /'
 if ! grep -q 'RES_RECEIVED' "$ADDR_FILE"; then
     echo "FAIL: res never arrived while the server was silent (send blocked by reader lock)"
