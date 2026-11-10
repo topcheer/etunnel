@@ -126,6 +126,10 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 		Path:     r.URL.RequestURI(),
 		Headers:  headers,
 	}); err != nil {
+		// Proxy failures must leave a trace: accessLog only covers the base
+		// domain (#42/#46), which made exactly this class of incident - tunnel
+		// up, requests failing - invisible in production logs (#62).
+		s.logf("proxy: %s %s%s: send req: %v", r.Method, r.Host, r.URL.RequestURI(), err)
 		s.badGateway(w, r.Host, "tunnel disconnected")
 		st.abort()
 		return
@@ -148,8 +152,11 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 	res, err := st.waitRes(s.cfg.HeaderWaitTimeout)
 	if err != nil {
 		if errors.Is(err, errStreamReset) {
+			s.logf("proxy: %s %s%s: stream reset", r.Method, r.Host, r.URL.RequestURI())
 			s.badGateway(w, r.Host, "tunnel disconnected")
 		} else {
+			s.logf("proxy: %s %s%s: no client response within %s (client stalled or gone)",
+				r.Method, r.Host, r.URL.RequestURI(), s.cfg.HeaderWaitTimeout)
 			http.Error(w, "tunnel did not answer in time", http.StatusGatewayTimeout)
 		}
 		return
