@@ -90,10 +90,20 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/webhooks/nowpayments", s.handleNowPaymentsIPN)
 	mux.HandleFunc("/billing/crypto/success", s.handleCryptoSuccess)
 	// Serve bundled brand assets (hero video etc.): local ./assets first,
-	// then the server install dir.
+	// then the server install dir. Host-scoped to the base domain only:
+	// a tunnel subdomain's own /assets/* must reach the tunneled service,
+	// not this file server (ServeMux prefers /assets/ over the "/" catch-
+	// all, which 404'd every tunneled WebUI asset with Go's default page).
 	for _, dir := range []string{"assets", "/opt/etunnel/assets"} {
 		if st, err := os.Stat(dir); err == nil && st.IsDir() {
-			mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(dir))))
+			brand := http.StripPrefix("/assets/", http.FileServer(http.Dir(dir)))
+			mux.Handle("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, isBase, _ := s.hostLabel(r.Host); isBase {
+					brand.ServeHTTP(w, r)
+					return
+				}
+				s.handleProxy(w, r)
+			}))
 			break
 		}
 	}

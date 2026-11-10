@@ -415,3 +415,46 @@ func TestConcurrentRequests(t *testing.T) {
 		t.Fatalf("%d/24 concurrent requests failed", failed)
 	}
 }
+
+// Regression: the server's brand-asset file server used to claim the global
+// /assets/ subtree, so a tunneled WebUI's own /assets/*.js|css requests never
+// reached the tunnel - they hit the FileServer and returned Go's default
+// "404 page not found". /assets/ must be host-scoped: base host gets brand
+// files, any tunnel subdomain proxies to the local service.
+func TestTunnelServesOwnAssets(t *testing.T) {
+	_, srvURL := startTestServer(t, nil)
+	ui := http.NewServeMux()
+	ui.HandleFunc("/assets/app.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		io.WriteString(w, "window.__ui=1")
+	})
+	ui.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<html>ui</html>")
+	})
+	local := newLocalService(t, ui)
+	tun := connectTunnel(t, srvURL, local, nil)
+	cli := clientThroughServer(t, srvURL)
+
+	resp, err := cli.Get(tun.URL() + "/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("tunneled asset: %d %q", resp.StatusCode, body)
+	}
+	if string(body) != "window.__ui=1" {
+		t.Fatalf("tunneled asset body: %q", body)
+	}
+
+	// Homepage still proxies (control).
+	resp, err = cli.Get(tun.URL() + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("tunneled homepage: %d", resp.StatusCode)
+	}
+}
