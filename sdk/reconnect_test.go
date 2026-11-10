@@ -34,7 +34,9 @@ func TestGrowBackoff(t *testing.T) {
 
 func TestJitterStaysWithinBand(t *testing.T) {
 	const d = time.Second
-	lo, hi := d-d/5, d+d/5+time.Millisecond // +1ms: rand.Int63n bound is inclusive-ish
+	// Issue #55: implementation delivers +-10%; assert that exact band so a
+	// regression to a wider or narrower jitter fails here.
+	lo, hi := d-d/10, d+d/10+time.Millisecond // +1ms: rand.Int63n bound is inclusive-ish
 	for i := 0; i < 500; i++ {
 		g := jitter(d)
 		if g < lo || g > hi {
@@ -47,7 +49,10 @@ func TestJitterStaysWithinBand(t *testing.T) {
 }
 
 func TestIsPermanentClassification(t *testing.T) {
-	permanent := []string{"unauthorized", "subdomain_plan", "subdomain_bad", "bad_message"}
+	// protocol.ErrCode* literals; note the invalid-name code the server sends
+	// is "subdomain_invalid" (issue #55: the old "subdomain_bad" literal never
+	// matched and was dead).
+	permanent := []string{"unauthorized", "subdomain_plan", "subdomain_invalid", "bad_message"}
 	for _, code := range permanent {
 		if !isPermanent(&APIError{Code: code, Message: "x"}) {
 			t.Errorf("code %q must be permanent (stop retrying)", code)

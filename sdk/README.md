@@ -74,6 +74,11 @@ open until `Ctrl-C`; `-token` and `-subdomain` select a paid plan.
 | Symbol | Returns / effect |
 |---|---|
 | `Connect(ctx, Options)` | `(*Tunnel, error)` - returns after the server's `welcome` |
+| `ConnectReconnecting(ctx, Options)` | `(*ReconnectingTunnel, error)` - first dial fails fast, then supervises forever |
+| `ReconnectingTunnel.URL()` / `Subdomain()` / `Attempts()` | last-known facts across reconnects |
+| `ReconnectingTunnel.Tunnel()` | current `*Tunnel` (nil while a reconnect is in flight) |
+| `ReconnectingTunnel.Done()` | closed when the supervisor stops (user close, parent ctx, permanent error) |
+| `ReconnectingTunnel.Close(reason)` | stops the supervisor; no reconnect follows |
 | `Tunnel.URL()` | `string` - public HTTPS URL |
 | `Tunnel.Hostname()` / `Subdomain()` / `Plan()` | connection facts |
 | `Tunnel.ExpiresAt()` | `time.Time` - plan TTL deadline |
@@ -92,6 +97,18 @@ open until `Ctrl-C`; `-token` and `-subdomain` select a paid plan.
 | `Subdomain` | custom subdomain, requires a paid plan |
 | `Client` | free-form client identifier sent in `hello` |
 | `OnLog` | `func(format string, args ...any)` lifecycle log sink |
+| `OnReconnect` | called after each successful reconnect (`func(url string, attempt int)`) |
+| `ReconnectMinBackoff` / `ReconnectMaxBackoff` | backoff bounds for `ConnectReconnecting` (defaults 500ms / 30s, doubling, +-10% jitter, reset after a successful reconnect) |
+
+### Reconnecting
+
+`ConnectReconnecting` dials once (so bad credentials fail fast with the real
+error) and then rebuilds the tunnel whenever it drops, replaying the server's
+signed `resumeToken` so the same subdomain is reclaimed instead of
+re-randomised (token lifetime is 30 minutes server-side; after that the
+server assigns a fresh subdomain). Retrying stops permanently on errors that
+cannot fix themselves (`unauthorized`, `subdomain_plan`, `subdomain_invalid`,
+`bad_message`).
 
 `DefaultServer` is the connect target when `Server` is empty. Override it at
 build time for an internal deployment:
