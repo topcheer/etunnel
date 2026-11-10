@@ -151,7 +151,7 @@ func TestTLSUpgradeRepro(t *testing.T) {
 					NextProtos:   []string{"http/1.1"},
 				})
 			}
-			hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second}
+			hs := &http.Server{Handler: hostNormalizer("t.local", srv.Handler()), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second} // dial-by-IP → base domain (#35)
 			go hs.Serve(ln)
 			t.Cleanup(func() { hs.Close() })
 

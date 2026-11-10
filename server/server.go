@@ -117,7 +117,10 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	mux.HandleFunc("/", s.handleProxy)
-	s.handler = s.accessLog(mux)
+	// accessLog outermost: it logs only base-domain requests and bypasses
+	// upgrade requests untouched; routeByHost inside dispatches base hosts to
+	// etunneld's own endpoints and everything else straight to the proxy.
+	s.handler = s.accessLog(s.routeByHost(mux))
 	s.buildAdmin()
 	s.billing = billingFromEnv(cfg.Domain)
 	s.auth = oauthFromEnv()
@@ -237,7 +240,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if s.cfg.TLS.Mode == TLSModeHTTP {
 			httpHandler = s.handler // dev mode: everything over plain HTTP
 		} else {
-			httpHandler = redirectHandler(tlsConf.httpChallenge)
+			httpHandler = s.redirectHandler(tlsConf.httpChallenge)
 		}
 		httpSrv := &http.Server{
 			Handler:           httpHandler,
@@ -266,13 +269,65 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-func redirectHandler(challenge http.Handler) http.Handler {
+// routeByHost splits traffic at the host level (#35, #41): etunneld's own
+// endpoints (login, portal, API, webhooks, the tunnel websocket) are served
+// only on the base domain; every other host - a tunnel subdomain or a host we
+// do not recognise at all - goes straight to the proxy. Go's ServeMux matches
+// exact patterns before the "/" catch-all, so without this the reserved
+// paths shadow the same routes on a user's tunnel, silently breaking user
+// WebUIs and rendering our login page on other people's domains.
+//
+// The /tunnel websocket yields too, by design: SDK clients dial the base
+// domain (wss://<domain>/tunnel), so a subdomain's /tunnel belongs to the
+// user's own service.
+//
+// Base-host responses also get the security headers (#41) here - and ONLY
+// here, on responses etunneld itself generates; proxied bytes pass through
+// untouched.
+func (s *Server) routeByHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, isBase, _ := s.hostLabel(r.Host); isBase {
+			secureHeaders(w)
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.handleProxy(w, r)
+	})
+}
+
+// secureHeaders is the baseline hardening for pages etunneld renders (#41).
+// HSTS deliberately omits includeSubDomains: the wildcard subdomains are
+// tenants, and a tenant serving something other than browser HTTPS must not
+// inherit our TLS policy. The CSP is frame-ancestors only because the portal
+// uses inline styles and scripts; a default-src policy would break it.
+func secureHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Strict-Transport-Security", "max-age=31536000")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+}
+
+// redirectHandler moves plain-HTTP traffic to HTTPS (#37). The Location host
+// is never taken from the request verbatim: base hosts redirect to the
+// canonical domain, tunnel subdomains (which are ours) keep their host, and
+// any other Host gets 421 Misdirected Request - previously a spoofed Host was
+// reflected into a valid-looking https:// URL. The ACME challenge path stays
+// first and answers for any host, as issuance requires.
+func (s *Server) redirectHandler(challenge http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if challenge != nil && strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
 			challenge.ServeHTTP(w, r)
 			return
 		}
-		target := "https://" + r.Host + r.URL.RequestURI()
+		host := r.Host
+		if _, isBase, isSub := s.hostLabel(host); isBase {
+			host = s.cfg.Domain
+		} else if !isSub {
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			return
+		}
+		target := "https://" + host + r.URL.RequestURI()
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	})
 }

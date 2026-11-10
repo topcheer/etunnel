@@ -10,6 +10,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,15 @@ func quotaTestServer(t *testing.T, mut func(*Config)) (*Server, *memCounter, *ht
 	}
 	mc := newMemCounter()
 	s.counter = mc
-	ts := httptest.NewServer(s.Handler())
+	// #35/#44: the WS endpoint now serves the base domain only (tunnel
+	// subdomains proxy everything, including /tunnel, to the user's
+	// service). httptest's Host is 127.0.0.1:port, which routing would send
+	// straight to handleProxy - rewrite it to the base domain so these
+	// admission tests exercise the real handshake path.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "t.test"
+		s.Handler().ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 	return s, mc, ts
 }

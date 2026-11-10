@@ -39,9 +39,26 @@ func startTestServer(t *testing.T, mut func(*server.Config)) (*server.Server, st
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	// Clients and the SDK dial this listener by IP, so Host arrives as
+	// 127.0.0.1:port. Production traffic reaches the same handler via vhost
+	// routing on the configured domain; normalize the dial-by-IP artifact so
+	// host-based routing (#35) behaves exactly as in production. Explicit
+	// hosts - tunnel subdomains, foreign hosts in security tests - pass
+	// through untouched.
+	ts := httptest.NewServer(hostNormalizer(testDomain, srv.Handler()))
 	t.Cleanup(ts.Close)
 	return srv, ts.URL
+}
+
+// hostNormalizer maps a dial-by-IP Host header to the given base domain,
+// simulating the vhost routing production traffic goes through (#35).
+func hostNormalizer(domain string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h, _, err := net.SplitHostPort(r.Host); err == nil && net.ParseIP(h) != nil {
+			r.Host = domain
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func sdkURL(serverURL string) string {
