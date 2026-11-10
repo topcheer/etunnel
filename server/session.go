@@ -26,6 +26,13 @@ var (
 	errStreamReset   = errors.New("etunnel: stream reset by peer")
 )
 
+// ipCounterTTL is the rolling expiry on per-IP anonymous quota keys
+// (issue #36). Each accepted handshake from the IP refreshes it, so an active
+// NAT with long-lived tunnels never loses its count, while a key whose owner
+// vanished (SIGKILL behind a NAT, no Bye) is garbage-collected instead of
+// keeping the IP locked out of quota forever.
+const ipCounterTTL = 24 * time.Hour
+
 type wsOut struct {
 	text bool
 	data []byte
@@ -222,18 +229,31 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	// Per-IP limit for anonymous tunnels. In a cluster this counter is the
 	// shared one (Redis), so the limit is global; single node keeps the
 	// in-memory counter with identical semantics.
-	if acct == nil && s.cfg.MaxTunnelsPerIP > 0 {
-		if s.counter != nil {
-			n, err := s.counter.Incr(r.Context(), "ip:"+ip, 1)
-			if err == nil && n > int64(s.cfg.MaxTunnelsPerIP) {
-				_ = s.counter.Decr(r.Context(), "ip:"+ip)
-				s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
-					fmt.Sprintf("too many tunnels from %s", ip))
-				return
-			}
-			if err != nil {
-				s.logf("session %s: counter unavailable, per-IP limit not enforced: %v", ip, err)
-			}
+	//
+	// The accepted key gets a rolling expiry (issue #36): nothing else bounds
+	// the keyspace, and without a TTL every accepted handshake leaves a
+	// Redis key with TTL=-1 that only a clean disconnect would remove. The
+	// TTL is refreshed on each accepted handshake from the same IP.
+	ipSlot := false // this handshake owns one slot of "ip:<ip>" until the session starts
+	releaseIPSlot := func() {
+		if ipSlot {
+			_ = s.counter.Decr(r.Context(), "ip:"+ip)
+			ipSlot = false
+		}
+	}
+	if acct == nil && s.cfg.MaxTunnelsPerIP > 0 && s.counter != nil {
+		n, err := s.counter.Incr(r.Context(), "ip:"+ip, 1)
+		switch {
+		case err != nil:
+			s.logf("session %s: counter unavailable, per-IP limit not enforced: %v", ip, err)
+		case n > int64(s.cfg.MaxTunnelsPerIP):
+			_ = s.counter.Decr(r.Context(), "ip:"+ip)
+			s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
+				fmt.Sprintf("too many tunnels from %s", ip))
+			return
+		default:
+			_ = s.counter.SetTTL(r.Context(), "ip:"+ip, ipCounterTTL)
+			ipSlot = true
 		}
 	}
 
@@ -282,12 +302,14 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	if resumed == "" && hello.Subdomain != "" {
 		if acct == nil || tier.CustomDomains <= 0 {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainPlan,
 				"custom subdomains require a paid plan")
 			return
 		}
 		if used := s.reg.countCustomForAccount(acct); used >= tier.CustomDomains {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
 				fmt.Sprintf("plan %s allows %d custom subdomain(s), all in use", tier.Name, tier.CustomDomains))
 			return
@@ -297,17 +319,20 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		// via the portal (/me) - purchase alone does not unlock any name.
 		if !containsStr(acct.Domains, sub) {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainPlan,
 				fmt.Sprintf("subdomain %q is not in your account's domain list (add it at /me first)", sub))
 			return
 		}
 		if err := protocol.ValidateSubdomain(sub); err != nil {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainBad, err.Error())
 			return
 		}
 		if err := s.reg.Acquire(sub, sess); err != nil {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainTaken,
 				fmt.Sprintf("subdomain %q is already in use", sub))
 			return
@@ -326,6 +351,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if sub == "" {
 			cancel()
+			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels, "no free subdomains, try again")
 			return
 		}

@@ -55,8 +55,17 @@ func (c *redisCounter) Incr(ctx context.Context, key string, delta int64) (int64
 	return c.rdb.IncrBy(ctx, "et:"+key, delta).Result()
 }
 
+// decrDel is the atomic decrement used by Decr: it removes the key once the
+// count reaches zero (or below, which only a double release can produce) so a
+// released quota leaves no zero-valued - or negative - residue behind
+// (issue #36).
+var decrDel = redis.NewScript(`
+local v = redis.call('INCRBY', KEYS[1], -1)
+if v <= 0 then redis.call('DEL', KEYS[1]) end
+return v`)
+
 func (c *redisCounter) Decr(ctx context.Context, key string) error {
-	return c.rdb.IncrBy(ctx, "et:"+key, -1).Err()
+	return decrDel.Run(ctx, c.rdb, []string{"et:" + key}).Err()
 }
 
 func (c *redisCounter) Get(ctx context.Context, key string) (int64, error) {
