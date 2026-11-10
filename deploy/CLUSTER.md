@@ -5,6 +5,91 @@ design makes client failover free: any instance can validate a reconnecting
 SDK (shared `SESSION_SECRET`) and hand back the same subdomain, so visitors
 never see the switch.
 
+## Architecture
+
+```mermaid
+graph TB
+    subgraph "Shared services"
+        PG[(Postgres<br/>accounts + claims)]
+        RD[(Redis<br/>global counters<br/>+ routing table)]
+    end
+
+    subgraph "etunneld instances"
+        I1["instance 1"]
+        I2["instance 2"]
+        I3["instance N"]
+    end
+
+    SDK["SDK client<br/>(resume token)"] -->|any instance| LB
+
+    subgraph "Edge"
+        LB["LB (L4 or L7)"]
+        V["visitor<br/>https://sub.domain"]
+    end
+
+    V -->|HTTPS| LB
+    LB --> I1
+    LB --> I2
+    LB --> I3
+
+    I1 & I2 & I3 --> PG
+    I1 & I2 & I3 --> RD
+
+    I1 <-.->|gossip / leases| I2
+    I2 <-.->|gossip / leases| I3
+```
+
+### Mode B: mesh (gossip + cross-peer forward)
+
+```mermaid
+flowchart LR
+    V["visitor"] -->|wrong node| I2["instance 2"]
+    I2 -->|"router.Lookup(sub)<br/>= instance 1"| FW["Forward()"]
+    FW -->|"HTTP + Host header<br/>X-Etunnel-Forward"| I1["instance 1 (owner)"]
+    I1 -->|serve tunnel| L["localhost"]
+    V -.->|right node| I1
+
+    I1 <-.->|"memberlist gossip<br/>claim / release / snapshot"| I2
+```
+
+### Mode A: sticky (Redis routing table + L7 LB)
+
+```mermaid
+flowchart LR
+    V["visitor"] -->|Host: sub.domain| LB["L7 LB<br/>(nginx / traefik)"]
+    LB -->|"read et:route:sub<br/>= instance 1"| I1["instance 1 (owner)"]
+    LB -.->|"stale / unknown<br/>any instance"| I2["instance 2"]
+    I1 -->|serve tunnel| L["localhost"]
+
+    I1 -->|"SET et:route:sub<br/>= addr (15s TTL)"| RD[(Redis)]
+    I1 -->|"heartbeat 5s<br/>renew lease"| RD
+```
+
+### Client failover (both modes)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SDK as SDK client
+    participant I1 as Instance 1 (dies)
+    participant I2 as Instance 2
+    participant V as Visitor
+
+    SDK->>I1: tunnel active (sub = quiet-frog-42)
+    I1-->>SDK: welcome + resumeToken (HMAC)
+    Note over I1: process dies / SIGTERM
+
+    SDK->>SDK: connection lost, backoff 500ms
+    SDK->>I2: hello {resume: resumeToken}
+    Note over I2: HMAC verifies with shared SESSION_SECRET
+    I2-->>SDK: welcome {subdomain: quiet-frog-42}
+    Note over SDK,V: same URL, zero client-side change
+
+    V->>I2: https://quiet-frog-42.domain
+    I2->>SDK: forwarded request
+    SDK-->>V: response
+```
+
 ## Modes
 
 | Mode | env | Routing | Best for |
@@ -19,21 +104,6 @@ never see the switch.
 - `ETUNNEL_REDIS_URL` - exact global per-IP / per-account limits. Without it: per-instance limits.
 - `SESSION_SECRET` - required in any multi-instance mode: signs session cookies AND resume tokens.
 - `ETUNNEL_ADVERTISE` / `ETUNNEL_JOIN` - mesh only; gossip port is advertise+100 (or `ETUNNEL_GOSSIP_PORT`).
-
-## Verified deployments
-
-| Environment | Artifact | Evidence |
-|---|---|---|
-| Docker Compose | `deploy/docker-compose.yml` (3 nodes + PG + Redis) | SDK->node1, visitors on ANY node get `CLUSTER-FINAL` |
-| k3s | `deploy/helm/etunnel` (StatefulSet, 3 pods) | same via ClusterIP, `K3S-CLUSTER-OK` x3 |
-| Bare metal | `deploy/systemd/etunneld-cluster@.service` x3 on one host | same over loopback, `200` x3 |
-
-## Scaling notes
-
-- Horizontal: `kubectl scale sts` / add `systemctl enable etunneld-cluster@N` / compose `--scale`; mesh converges in seconds.
-- Rolling updates: `/healthz` flips to 503 on SIGTERM (Drain) before sessions close; SDKs reconnect to a surviving peer with the same URL.
-- Limits: with Redis the per-IP cap is global (a shared IP cannot open N x replicas tunnels).
-- A dead instance's subdomains: mesh re-broadcasts ownership and leases (sticky) expire; clients re-land on any peer.
 
 ## Minimum infrastructure per mode
 
@@ -93,10 +163,9 @@ never see the switch.
   until convergence. Mitigated by the rebroadcast; not eliminated.
 - **Network partition**: two partitions each hand out the same random
   subdomain with probability ~0 (adjective-noun-nn space). Custom
-  subdomains are claimed per-host in Postgres... actually no: custom
-  subdomain claims are still registry-local in this version. **A partition
-  can give the same CUSTOM subdomain to two clients** - do not run mesh
-  across a partition-prone WAN without sticky+PG.
+  subdomain claims are registry-local in this version — a partition can
+  give the same CUSTOM subdomain to two clients. Do not run mesh across a
+  partition-prone WAN without sticky+PG.
 - **Forwarding adds one hop**: a misrouted visitor request pays one
   extra internal hop (~1ms LAN). Steady state >99% of requests land
   directly on the owner.
@@ -123,3 +192,18 @@ never see the switch.
   distributed lock in this version (see mesh partition note above).
 - Session (tunnel) state is never migrated between instances; recovery is
   always client-side reconnect via resume token.
+
+## Verified deployments
+
+| Environment | Artifact | Evidence |
+|---|---|---|
+| Docker Compose | `deploy/docker-compose.yml` (3 nodes + PG + Redis) | SDK->node1, visitors on ANY node get `CLUSTER-FINAL` |
+| k3s | `deploy/helm/etunnel` (StatefulSet, 3 pods) | same via ClusterIP, `K3S-CLUSTER-OK` x3 |
+| Bare metal | `deploy/systemd/etunneld-cluster@.service` x3 on one host | same over loopback, `200` x3 |
+
+## Scaling notes
+
+- Horizontal: `kubectl scale sts` / add `systemctl enable etunneld-cluster@N` / compose `--scale`; mesh converges in seconds.
+- Rolling updates: `/healthz` flips to 503 on SIGTERM (Drain) before sessions close; SDKs reconnect to a surviving peer with the same URL.
+- Limits: with Redis the per-IP cap is global (a shared IP cannot open N x replicas tunnels).
+- A dead instance's subdomains: mesh re-broadcasts ownership and leases (sticky) expire; clients re-land on any peer.
