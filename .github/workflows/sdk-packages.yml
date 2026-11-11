@@ -183,7 +183,7 @@ jobs:
   # the source tarball; THIS job is the compile gate. macos-13 pool
   # (macos-14 rejected configs in earlier attempts).
   swift-macos:
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: swift build (Apple platforms gate)
