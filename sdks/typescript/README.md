@@ -59,3 +59,9 @@ console.log(t.url);
 MIT — see [LICENSE](../../LICENSE). Buffer-based protocol client: request and
 response bodies are buffered per stream (fine for webhooks/dashboards/demos;
 use the [Go SDK](../../sdk) for streaming and WebSocket pass-through).
+
+## Service terms
+
+Use of the etunnel relay service (default `wss://t.etun.uk/tunnel`) is governed
+by its [Terms of Service](https://t.etun.uk/terms) and
+[Privacy Policy](https://t.etun.uk/privacy).
