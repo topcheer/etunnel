@@ -77,7 +77,12 @@ jobs:
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          # The runner's apt mirrors (azure.archive/security.ubuntu.com) flap
+          # for tens of minutes at a time; one v1.6.1 run burned 38 minutes
+          # in retries and died. Retry the update, then fall back to the
+          # canonical archive before giving up.
+          upd() { sudo apt-get update -o Acquire::Retries=5 "$@"; }
+          upd || upd || { sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|' /etc/apt/sources.list && upd; }
           sudo apt-get install -y php-cli lua5.4 luarocks elixir cmake \
             libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
             libwebsocketpp-dev libasio-dev
