@@ -227,6 +227,7 @@ migration (static wildcard cert from the ACME directory, not renewed).
 | `/` | landing page (quickstart, pricing) |
 | `/pricing`, `/login`, `/me` | subscription flow and account dashboard |
 | `/setlang` | UI language switch (sets the `et_lang` cookie, redirects back) |
+| `GET /me/domain-check?d=<sub>` | subdomain availability probe for the `/me` page (session); custom subdomains are 1-63 chars, cross-account duplicates rejected |
 | `/webhooks/stripe`, `/webhooks/paypal` | payment provider callbacks |
 | `127.0.0.1:9090/stats` | live tunnels, uptime, byte counters, billing status |
 | `127.0.0.1:9090/admin/accounts` | account management (`X-Admin-Token`) |
