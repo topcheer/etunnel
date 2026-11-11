@@ -164,11 +164,32 @@ func (s *Server) checkStateCookie(w http.ResponseWriter, r *http.Request, state 
 	return true
 }
 
+// canonicalAuthHost reports whether the request is already on the service
+// host; when it is not (apex marketing site, alias domains), it redirects to
+// the same auth URL there and returns false so the caller stops.
+func (s *Server) canonicalAuthHost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Host == s.cfg.Domain {
+		return true
+	}
+	target := "https://" + s.cfg.Domain + r.URL.RequestURI()
+	s.logf("auth: canonicalizing %s auth flow from host %q", r.URL.Path, r.Host)
+	http.Redirect(w, r, target, http.StatusSeeOther)
+	return false
+}
+
 var oauthHTTP = &http.Client{Timeout: 15 * time.Second}
 
 func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provider string) {
 	if !s.oauthEnabled(provider) {
 		http.Error(w, "provider not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// OAuth must start and land on the same host: the state cookie is
+	// host-only, so a login started on the apex (etun.uk) but redirected back
+	// to the service host (t.etun.uk) arrives cookieless and every provider
+	// fails with "bad oauth state". Canonicalize first: one 303 hop to the
+	// service domain with the full path and query preserved.
+	if !s.canonicalAuthHost(w, r) {
 		return
 	}
 	base := s.billing.PublicBaseURL
@@ -214,6 +235,9 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provid
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, provider string) {
 	if !s.oauthEnabled(provider) {
 		http.Error(w, "provider not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !s.canonicalAuthHost(w, r) {
 		return
 	}
 	// Apple posts (response_mode=form_post); others redirect with query params.

@@ -195,7 +195,11 @@ func TestOAuthLoginRedirectsToGithub(t *testing.T) {
 	s.auth.githubID = "gh-id"
 	s.billing.PublicBaseURL = "https://x.test"
 	rec := httptest.NewRecorder()
-	s.handleOAuthLogin(rec, httptest.NewRequest(http.MethodGet, "/auth/github/login", nil), "github")
+	s.handleOAuthLogin(rec, func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/auth/github/login", nil)
+		r.Host = "t.test"
+		return r
+	}(), "github")
 	loc := rec.Header().Get("Location")
 	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "https://github.com/login/oauth/authorize?") ||
 		!strings.Contains(loc, "client_id=gh-id") || !strings.Contains(loc, "read%3Auser") {
@@ -272,7 +276,9 @@ func TestAppleFormPostFlow(t *testing.T) {
 
 	// authorize URL must carry response_mode=form_post
 	rec := httptest.NewRecorder()
-	s.handleOAuthLogin(rec, httptest.NewRequest(http.MethodGet, "/auth/apple/login", nil), "apple")
+	ar := httptest.NewRequest(http.MethodGet, "/auth/apple/login", nil)
+	ar.Host = "t.test" // auth flows canonicalize to the service host (newBillingTestServer Domain)
+	s.handleOAuthLogin(rec, ar, "apple")
 	loc, _ := url.Parse(rec.Header().Get("Location"))
 	if got := loc.Query().Get("response_mode"); got != "form_post" {
 		t.Fatalf("response_mode=%q, want form_post", got)

@@ -31,6 +31,7 @@ func TestStateCookieSameSitePerProvider(t *testing.T) {
 	// the /login redirect itself carries the Lax cookie for google
 	s.auth.googleID = "x"
 	r := httptest.NewRequest(http.MethodGet, "/auth/google/login", nil)
+	r.Host = "t.test" // auth flows canonicalize to the service host
 	rec := httptest.NewRecorder()
 	s.handleOAuthLogin(rec, r, "google")
 	sc := rec.Header().Get("Set-Cookie")
