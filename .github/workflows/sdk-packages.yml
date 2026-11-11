@@ -83,20 +83,28 @@ jobs:
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
-          # Pool-level mirror flaps (azure.archive unreachable for hours on
-          # 2026-11-11) burned 38-minute timeouts on three runs. Bound the
-          # default attempt, then swap the deb822 source to the canonical
-          # archive and retry once. Runner VMs are disposable; swapping the
-          # mirror in-place is standard CI practice.
+          # Root cause on 2026-11-11 was DNS: the runner could not resolve
+          # ANY *.archive.ubuntu.com host (azure and canonical alike, Err:
+          # "Temporary failure resolving") while unrelated domains worked.
+          # Retrying or switching ubuntu.com mirrors cannot help when the
+          # name never resolves. Instead: probe a set of mirrors on distinct
+          # domains, rewrite the deb822 source to whichever resolves, force
+          # IPv4 (broken AAAA paths also surface as resolution failures),
+          # and bound every stage.
           set -x
-          if timeout 300 sudo apt-get update; then
-            echo "primary mirror OK"
-          else
-            echo "primary mirror slow/down - falling back to archive.ubuntu.com"
-            sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources
-            sudo apt-get update
+          pick=""
+          for m in mirrors.edge.kernel.org/ubuntu mirror.math.princeton.edu/pub/ubuntu azure.archive.ubuntu.com/ubuntu; do
+            if timeout 10 getent hosts "$m" >/dev/null 2>&1; then pick="http://$m"; break; fi
+          done
+          if [ -z "$pick" ]; then
+            echo "no candidate mirror resolves - dumping diagnostics"
+            cat /etc/resolv.conf; timeout 10 getent hosts github.com || true
+            exit 1
           fi
-          sudo apt-get install -y php-cli lua5.4 luarocks elixir cmake \
+          echo "chosen mirror: $pick"
+          sudo sed -i "s|URIs: .*|URIs: $pick|" /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get -o Acquire::ForceIPv4=true update
+          sudo apt-get -o Acquire::ForceIPv4=true install -y php-cli lua5.4 luarocks elixir cmake \
             libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
             libwebsocketpp-dev libasio-dev
 
