@@ -388,52 +388,7 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		s.accounts.CancelSubscription(email)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "subscription cancelled - back on free tier"})
 	case "domain":
-		dom := normalizeSubdomainInput(req.Domain, s.cfg.Domain)
-		if dom == "" || !validSubdomain(dom) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": "invalid subdomain: " + subdomainError(dom),
-				"got":   strings.ToLower(strings.TrimSpace(req.Domain)),
-			})
-			return
-		}
-		tier := s.cfg.Tiers[acct.Tier]
-		if tier == nil {
-			http.Error(w, `{"error":"unknown tier"}`, http.StatusInternalServerError)
-			return
-		}
-		if req.Remove {
-			s.accounts.Mutate(email, func(a *Account) { a.Domains = removeStr(a.Domains, dom) })
-			writeJSON(w, http.StatusOK, map[string]string{"message": "removed " + dom})
-			return
-		}
-		owned := false
-		dup := false
-		for _, a := range s.accounts.List() {
-			if a.Email != email && containsStr(a.Domains, dom) {
-				dup = true
-				break
-			}
-		}
-		if dup {
-			http.Error(w, `{"error":"subdomain already taken by another account"}`, http.StatusConflict)
-			return
-		}
-		_ = s.accounts.Mutate(email, func(a *Account) {
-			if containsStr(a.Domains, dom) {
-				owned = true
-				return
-			}
-			if len(a.Domains) >= tier.CustomDomains {
-				return
-			}
-			a.Domains = append(a.Domains, dom)
-			owned = true
-		})
-		if !owned {
-			http.Error(w, `{"error":"tier domain limit reached (upgrade for more)"}`, http.StatusForbidden)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"message": "domain " + dom + " added"})
+		s.domainAction(w, acct, req.Domain, req.Remove)
 	case "close":
 		// Only allow closing accounts with no active tunnels.
 		for _, sess := range s.reg.Snapshot() {
@@ -448,6 +403,62 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 	default:
 		http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
 	}
+}
+
+// domainAction serves the "domain" case of handleMeAction: add (with
+// cross-account uniqueness) or remove a custom subdomain on acct.
+func (s *Server) domainAction(w http.ResponseWriter, acct *Account, rawDomain string, remove bool) {
+	dom := normalizeSubdomainInput(rawDomain, s.cfg.Domain)
+	if dom == "" || !validSubdomain(dom) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "invalid subdomain: " + subdomainError(dom),
+			"got":   strings.ToLower(strings.TrimSpace(rawDomain)),
+		})
+		return
+	}
+	tier := s.cfg.Tiers[acct.Tier]
+	if tier == nil {
+		http.Error(w, `{"error":"unknown tier"}`, http.StatusInternalServerError)
+		return
+	}
+	if remove {
+		s.accounts.Mutate(acct.Email, func(a *Account) { a.Domains = removeStr(a.Domains, dom) })
+		writeJSON(w, http.StatusOK, map[string]string{"message": "removed " + dom})
+		return
+	}
+	if s.subdomainTakenBy(acct.Email, dom) {
+		http.Error(w, `{"error":"subdomain already taken by another account"}`, http.StatusConflict)
+		return
+	}
+	owned := false
+	_ = s.accounts.Mutate(acct.Email, func(a *Account) {
+		if containsStr(a.Domains, dom) {
+			owned = true
+			return
+		}
+		if len(a.Domains) >= tier.CustomDomains {
+			return
+		}
+		a.Domains = append(a.Domains, dom)
+		owned = true
+	})
+	if !owned {
+		http.Error(w, `{"error":"tier domain limit reached (upgrade for more)"}`, http.StatusForbidden)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "domain " + dom + " added"})
+}
+
+// subdomainTakenBy reports whether dom is registered on an account other
+// than owner (the cross-account uniqueness rule shared by the add path and
+// the availability check).
+func (s *Server) subdomainTakenBy(owner, dom string) bool {
+	for _, a := range s.accounts.List() {
+		if a.Email != owner && containsStr(a.Domains, dom) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDomainCheck reports whether a custom subdomain is available for
@@ -469,11 +480,9 @@ func (s *Server) handleDomainCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "invalid"})
 		return
 	}
-	for _, a := range s.accounts.List() {
-		if a.Email != session && containsStr(a.Domains, dom) {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": "taken", "domain": dom})
-			return
-		}
+	if s.subdomainTakenBy(session, dom) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": "taken", "domain": dom})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "domain": dom})
 }
