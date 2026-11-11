@@ -56,9 +56,18 @@ jobs:
         with: { ruby-version: '3.3' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - uses: swift-actions/setup-swift@v2
+      # setup-swift@v2 refreshes GPG keys from keyserver.ubuntu.com, which is
+      # unreachable from GH runners often enough to kill every release
+      # (v1.5.0 and v1.6.0 both died here). Install the official tarball
+      # directly instead - no signature/keyserver round-trip.
+      - name: Install Swift (tarball)
         if: runner.os == 'Linux'
-        with: { swift-version: '5.9' }
+        run: |
+          curl -fsSL https://download.swift.org/swift-5.9.2-release/ubuntu2204/swift-5.9.2-RELEASE/swift-5.9.2-RELEASE-ubuntu22.04.tar.gz -o /tmp/swift.tar.gz
+          sudo mkdir -p /usr/share/swift
+          sudo tar -xzf /tmp/swift.tar.gz -C /usr/share/swift --strip-components=1
+          echo "/usr/share/swift/usr/bin" >> "$GITHUB_PATH"
+          /usr/share/swift/usr/bin/swift --version
 
       - name: Install Linux system deps
         if: runner.os == 'Linux'
