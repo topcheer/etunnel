@@ -84,6 +84,26 @@ func (s *Server) tierPriceCents(tierID string) (int64, bool) {
 	return n, ok
 }
 
+// cryptoPriceCents is the price charged on the crypto (NOWPayments) path.
+// NOWPayments' minimum invoice size is dynamic per coin pair (network fees);
+// low-fee coins floor around $2 but mainstream mainnets commonly sit at $3-5,
+// which made the $3 Starter unpayable in practice. Crypto prices are set
+// above that floor (and overridable without a rebuild via
+// TIER_<ID>_CRYPTO_PRICE_CENTS); other providers keep tierPriceCents.
+func (s *Server) cryptoPriceCents(tierID string) (int64, bool) {
+	if v := os.Getenv("TIER_" + strings.ToUpper(tierID) + "_CRYPTO_PRICE_CENTS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil && n > 0 {
+			return n, true
+		}
+	}
+	builtin := map[string]int64{"starter": 500}
+	if n, ok := builtin[tierID]; ok {
+		return n, true
+	}
+	return s.tierPriceCents(tierID)
+}
+
 // --------------------------------------------------------------------------
 // routes
 
@@ -93,6 +113,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 		TTLLine         string
 		CustomLine      string
 		MbpsLine        string
+		CryptoLine      string
 		Buyable         bool
 	}
 	var rows []row
@@ -132,10 +153,17 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 		if t.CustomDomains > 1 {
 			plural = "s"
 		}
+		cryptoLine := ""
+		if buyable {
+			if cp, ok := s.cryptoPriceCents(id); ok && cp != cents {
+				cryptoLine = fmt.Sprintf("$%d.%02d/mo", cp/100, cp%100)
+			}
+		}
 		rows = append(rows, row{ID: id, Name: t.Name, Price: p,
 			TTLLine:    strings.ReplaceAll(tr("price.li.ttl"), "{ttl}", humanTTL(t.TTL)),
 			CustomLine: strings.ReplaceAll(strings.ReplaceAll(tr("price.li.custom"), "{n}", fmt.Sprintf("%d", t.CustomDomains)), "{s}", plural),
 			MbpsLine:   strings.ReplaceAll(tr("price.li.mb"), "{n}", fmt.Sprintf("%d", t.Bandwidth/1_000_000)),
+			CryptoLine: cryptoLine,
 			Buyable:    buyable})
 	}
 	const pricingHTML = `<!doctype html><html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
@@ -190,7 +218,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
       <li>{{T "price.li.key"}}</li>
     </ul>
     <div class="pay">
-      <button class="btn" onclick="pay(this,'{{.ID}}','crypto')">{{T "price.pay.crypto"}}</button>
+      <button class="btn" onclick="pay(this,'{{.ID}}','crypto')">{{T "price.pay.crypto"}}{{if .CryptoLine}} &middot; {{.CryptoLine}}{{end}}</button>
       <button class="btn paypal" onclick="pay(this,'{{.ID}}','paypal')">{{T "price.pay.paypal"}}</button>
     </div>
   </section>
@@ -309,7 +337,8 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"crypto payments not configured"}`, http.StatusServiceUnavailable)
 			return
 		}
-		payURL, err = s.nowpaymentsInvoice(base, req.Email, req.Tier, cents)
+		cryptoCents, _ := s.cryptoPriceCents(req.Tier)
+		payURL, err = s.nowpaymentsInvoice(base, req.Email, req.Tier, cryptoCents)
 	default:
 		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
 		return
