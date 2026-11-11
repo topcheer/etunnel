@@ -87,10 +87,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	loginHTML := `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Sign in - etunnel</title>
+<title>{{T "login.title"}}</title>
 <link rel="icon" href="` + portalFavicon + `">
 <style>` + portalCSS + `
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem 1rem;position:relative}
@@ -113,18 +113,22 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;marg
 <div class="auth">
 <div class="card">
 <div class="brand">` + logoMark + ` etunnel</div>
-<h1>Sign in to <span class="g">etunnel</span></h1>
-<p class="sub">Your account holds the API key, the plan and the subdomains you own.</p>
-{{if .Providers}}{{range .Providers}}<a class="prov" href="/auth/{{.ID}}/login">{{.Icon}}<span>Continue with {{.Label}}</span><span class="arrow">&#8594;</span></a>{{end}}{{else}}<p class="none">No sign-in provider is configured on this server.</p>{{end}}
-<p class="fine">The provider returns your email address and display name, and that is what the account is built from. Free tunnels need no account at all.</p>
+<h1>{{T "login.h1.pre"}}<span class="g">{{T "login.h1.em"}}</span></h1>
+<p class="sub">{{T "login.sub"}}</p>
+{{if .Providers}}{{range .Providers}}<a class="prov" href="/auth/{{.ID}}/login">{{.Icon}}<span>{{T "login.continue"}} {{.Label}}</span><span class="arrow">&#8594;</span></a>{{end}}{{else}}<p class="none">{{T "login.none"}}</p>{{end}}
+<p class="fine">{{T "login.fine"}}</p>
 </div>
-<div class="foot"><a href="/">&#8592; etunnel home</a><span>&middot;</span><a href="/pricing">pricing</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">docs</a><span>&middot;</span><a href="/terms">terms</a><span>&middot;</span><a href="/privacy">privacy</a></div>
+<div class="foot"><a href="/">&#8592; {{T "foot.home"}} etunnel</a><span>&middot;</span><a href="/pricing">{{T "nav.pricing"}}</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">{{T "nav.docs"}}</a><span>&middot;</span><a href="/terms">{{T "foot.terms"}}</a><span>&middot;</span><a href="/privacy">{{T "foot.privacy"}}</a></div>
 </div>
+<div class="langrow">{{.LangSwitch}}</div>
 </body></html>`
 
-	tpl := template.Must(template.New("l").Parse(loginHTML))
+	lang := pickLang(r)
+	tpl := template.Must(template.New("l").Funcs(template.FuncMap{
+		"T": func(key string) string { return T(lang, key) },
+	}).Parse(loginHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = tpl.Execute(w, map[string]any{"Providers": providers})
+	_ = tpl.Execute(w, map[string]any{"Providers": providers, "Lang": lang, "Dir": langDir(lang), "LangSwitch": template.HTML(langSwitchHTML(lang))})
 }
 
 func providerLabel(p string) string {
@@ -175,10 +179,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meHTML := `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Account - etunnel</title>
+<title>{{T "me.title"}}</title>
 <link rel="icon" href="` + portalFavicon + `">
 <style>` + portalCSS + `
 body{padding-bottom:4rem}
@@ -201,37 +205,37 @@ body{padding-bottom:4rem}
 </style></head><body>
 <nav>
   <a class="logo" href="/">` + logoMark + ` etunnel</a>
-  <div class="links"><a href="/#quickstart">quickstart</a><a href="/pricing">pricing</a><a href="https://github.com/topcheer/etunnel">docs</a><a href="/logout">sign out</a></div>
+  <div class="links"><a href="/#quickstart">{{T "nav.quickstart"}}</a><a href="/pricing">{{T "nav.pricing"}}</a><a href="https://github.com/topcheer/etunnel">{{T "nav.docs"}}</a><a href="/logout">{{T "nav.signout"}}</a></div>
 </nav>
 <main class="wrap">
 <header class="pagehead">
-  <h1>Account</h1>
-  <p class="sub">Signed in as <b>{{.Email}}</b>{{if .Provider}} via {{.Provider}}{{end}}{{if .Name}} &middot; {{.Name}}{{end}}</p>
+  <h1>{{T "me.h1"}}</h1>
+  <p class="sub">{{.SubLine}}</p>
 </header>
 <div class="grid">
   <section class="card">
-    <h2>Plan</h2>
-    <p class="hint">Tunnel lifetime, custom subdomains and bandwidth.</p>
+    <h2>{{T "me.plan.h"}}</h2>
+    <p class="hint">{{T "me.plan.hint"}}</p>
     <div class="row" style="margin:.8rem 0 .35rem"><span class="tier">{{.Tier}}</span></div>
-    {{if .Expires}}<div class="row" style="margin-bottom:.9rem"><span class="badge">renews/expires: {{.Expires}}</span></div>{{end}}
-    <p class="hint" style="margin-bottom:1.1rem">{{if .MaxDomains}}Up to {{.MaxDomains}} custom subdomains.{{else}}Random subdomain only.{{end}}</p>
-    <div class="row"><a class="btn" href="/pricing">Subscribe / change plan</a><button class="btn ghost" onclick="act('cancel')">Cancel subscription</button></div>
+    {{if .Expires}}<div class="row" style="margin-bottom:.9rem"><span class="badge">{{.ExpiresLine}}</span></div>{{end}}
+    <p class="hint" style="margin-bottom:1.1rem">{{.MaxDomainsLine}}</p>
+    <div class="row"><a class="btn" href="/pricing">{{T "me.plan.sub"}}</a><button class="btn ghost" onclick="act('cancel')">{{T "me.plan.cancel"}}</button></div>
   </section>
   <section class="card">
-    <h2>API key</h2>
-    <p class="hint" style="margin-bottom:.9rem">Pass it as the <code>token</code> option in any SDK; it also unlocks the plan features on the CLI.</p>
-    <div class="key"><input id="apikey" value="{{.Key}}" readonly><button class="btn ghost" onclick="copyKey(this)">copy</button><button class="btn ghost" onclick="act('reset')">reset</button></div>
+    <h2>{{T "me.key.h"}}</h2>
+    <p class="hint" style="margin-bottom:.9rem">{{T "me.key.hint"}}</p>
+    <div class="key"><input id="apikey" value="{{.Key}}" readonly><button class="btn ghost" onclick="copyKey(this)">{{T "me.key.copy"}}</button><button class="btn ghost" onclick="act('reset')">{{T "me.key.reset"}}</button></div>
   </section>
   <section class="card wide">
-    <h2>Custom subdomains</h2>
-    <p class="hint" style="margin-bottom:.9rem">A subdomain you own keeps the same public URL between restarts.</p>
-    <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">none yet</span>{{end}}</div>
-    <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem"><button class="btn" onclick="addDom()">Add</button><button class="btn ghost" onclick="delDom()">Remove</button></div>
+    <h2>{{T "me.dom.h"}}</h2>
+    <p class="hint" style="margin-bottom:.9rem">{{T "me.dom.hint"}}</p>
+    <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">{{T "me.dom.none"}}</span>{{end}}</div>
+    <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem"><button class="btn" onclick="addDom()">{{T "me.dom.add"}}</button><button class="btn ghost" onclick="delDom()">{{T "me.dom.remove"}}</button></div>
   </section>
   <section class="card wide zone">
-    <h2>Danger zone</h2>
-    <p class="hint" style="margin-bottom:1rem">Closing the account deletes the API key, the subdomains and the plan. Running tunnels stop immediately.</p>
-    <button class="btn danger" onclick="if(confirm('Delete account permanently?'))act('close')">Close account</button>
+    <h2>{{T "me.zone.h"}}</h2>
+    <p class="hint" style="margin-bottom:1rem">{{T "me.zone.hint"}}</p>
+    <button class="btn danger" onclick="if(confirm('{{.ZoneConfirm}}'))act('close')">{{T "me.zone.close"}}</button>
   </section>
 </div>
 <p id="msg" class="msg"></p>
@@ -244,31 +248,60 @@ async function act(a, body){
   const data = await res.json().catch(()=>({}));
   const el = document.getElementById('msg');
   el.className = 'msg ' + (res.ok ? 'ok' : 'err');
-  el.textContent = res.ok ? (data.message||data.apiKey||'done') : (data.error||'failed');
+  el.textContent = res.ok ? (data.message||data.apiKey||'{{.MsgDone}}') : (data.error||'{{.MsgFailed}}');
   if (res.ok) setTimeout(()=>location.reload(), 900);
 }
 function addDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:false}); }
 function delDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:true}); }
 function copyKey(btn){
   const v = document.getElementById('apikey').value;
-  const done = ()=>{ btn.textContent='copied'; setTimeout(()=>{btn.textContent='copy';},1500); };
+  const done = ()=>{ btn.textContent='{{.MsgCopied}}'; setTimeout(()=>{btn.textContent='{{T "me.key.copy"}}';},1500); };
   if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, done); } else { done(); }
 }
 </script>
+<div class="langrow">{{.LangSwitch}}</div>
 </body></html>`
 
-	tpl := template.Must(template.New("m").Parse(meHTML))
+	lang := pickLang(r)
+	tr := func(k string) string { return T(lang, k) }
+	subLine := strings.ReplaceAll(tr("me.sub"), "{email}", "<b>"+acct.Email+"</b>")
+	if acct.Provider != "" {
+		subLine += " via " + acct.Provider
+	}
+	if acct.Name != "" {
+		subLine += " &middot; " + acct.Name
+	}
+	maxDomainsLine := tr("me.plan.random")
+	if maxDomains > 0 {
+		maxDomainsLine = strings.ReplaceAll(tr("me.plan.maxdom"), "{n}", fmt.Sprintf("%d", maxDomains))
+	}
+	expiresLine := ""
+	if lbl := expiresLabel(acct.ExpiresAt); lbl != "" {
+		expiresLine = strings.ReplaceAll(tr("me.plan.expires"), "{date}", lbl)
+	}
+	tpl := template.Must(template.New("m").Funcs(template.FuncMap{
+		"T": func(key string) string { return T(lang, key) },
+	}).Parse(meHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{
-		"Email":      acct.Email,
-		"Provider":   acct.Provider,
-		"Name":       acct.Name,
-		"EmailJS":    template.JS(fmt.Sprintf("%q", acct.Email)),
-		"Tier":       acct.Tier,
-		"Key":        acct.APIKey,
-		"MaxDomains": maxDomains,
-		"DomainList": acct.Domains,
-		"Expires":    expiresLabel(acct.ExpiresAt),
+		"Email":          acct.Email,
+		"SubLine":        template.HTML(subLine),
+		"Provider":       acct.Provider,
+		"Name":           acct.Name,
+		"EmailJS":        template.JS(fmt.Sprintf("%q", acct.Email)),
+		"Tier":           acct.Tier,
+		"Key":            acct.APIKey,
+		"MaxDomains":     maxDomains,
+		"MaxDomainsLine": template.HTML(maxDomainsLine),
+		"ExpiresLine":    template.HTML(expiresLine),
+		"DomainList":     acct.Domains,
+		"Expires":        expiresLabel(acct.ExpiresAt),
+		"ZoneConfirm":    tr("me.zone.confirm"),
+		"MsgDone":        tr("me.msg.done"),
+		"MsgFailed":      tr("me.msg.failed"),
+		"MsgCopied":      tr("btn.copied"),
+		"Lang":           lang, "Dir": langDir(lang),
+		"LangSwitch": template.HTML(langSwitchHTML(lang)),
 	})
 }
 

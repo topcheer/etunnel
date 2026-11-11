@@ -453,24 +453,25 @@ service and reload this page - no need to restart anything.</div>
 func (s *Server) landing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, landingHTML(s.cfg))
+	_, _ = io.WriteString(w, landingHTML(s.cfg, pickLang(r)))
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	_, _ = io.WriteString(w, notFoundHTML(s.cfg, r.Host))
+	_, _ = io.WriteString(w, notFoundHTML(s.cfg, r))
 }
 
-func landingHTML(cfg Config) string {
+func landingHTML(cfg Config, lang string) string {
 	server := "wss://" + cfg.Domain + cfg.WSPath
 	qsTabs, qsPanels := quickstartHTML(server)
+	t := func(key string) string { return T(lang, key) }
 	return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="` + lang + `" dir="` + langDir(lang) + `"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="etunnel - expose any local service to the internet with one command. Instant public HTTPS URLs, automatic TLS, zero signup. 20 language SDKs.">
+<meta name="description" content="` + t("land.meta.desc") + `">
 <link rel="icon" href="` + portalFavicon + `">
-<title>etunnel - your localhost, on the internet</title>
+<title>` + t("land.title") + `</title>
 <style>
 :root{--bg:#0b0e14;--panel:#0d1117;--line:#21262d;--fg:#e6edf3;--dim:#8b949e;--green:#3fb950;--green2:#7ee787}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -568,7 +569,7 @@ footer .sep{margin:0 .6rem}
     etunnel
   </div>
   <div class="links">
-    <a href="#features">features</a><a href="#quickstart">quickstart</a><a href="#pricing">pricing</a><a href="https://github.com/topcheer/etunnel">github</a>
+    <a href="#features">` + t("nav.features") + `</a><a href="#quickstart">` + t("nav.quickstart") + `</a><a href="#pricing">` + t("nav.pricing") + `</a><a href="https://github.com/topcheer/etunnel">github</a>
   </div>
 </nav>
 
@@ -579,33 +580,33 @@ footer .sep{margin:0 .6rem}
   </video>
   <div class="fallback"></div>
   <div class="inner">
-    <div class="badge">zero signup &middot; automatic TLS &middot; 20 language SDKs</div>
-    <h1>your localhost,<br>on the <span class="g">internet</span></h1>
-    <p>One command exposes any local service through NAT and firewalls to a live public HTTPS URL. No account, no config, no waiting.</p>
-    <div class="cmd"><span class="dollar">$</span><span id="c">npx @easytunnel/et-sdk 3000</span><button class="copy" onclick="navigator.clipboard().writeText?navigator.clipboard.writeText(document.getElementById('c').textContent):0;this.textContent='copied'">copy</button></div>
+    <div class="badge">` + t("land.badge") + `</div>
+    <h1>` + t("land.h1.pre") + `<span class="g">` + t("land.h1.em") + `</span></h1>
+    <p>` + t("land.sub") + `</p>
+    <div class="cmd"><span class="dollar">$</span><span id="c">npx @easytunnel/et-sdk 3000</span><button class="copy" onclick="navigator.clipboard().writeText?navigator.clipboard.writeText(document.getElementById('c').textContent):0;this.textContent='` + t("btn.copied") + `'">` + t("btn.copy") + `</button></div>
     <div class="cta">
-      <a class="btn primary" href="/pricing">Get your tunnel</a>
-      <a class="btn ghost" href="https://github.com/topcheer/etunnel">Star on GitHub</a>
+      <a class="btn primary" href="/pricing">` + t("land.cta.main") + `</a>
+      <a class="btn ghost" href="https://github.com/topcheer/etunnel">` + t("land.cta.gh") + `</a>
     </div>
   </div>
 </div>
 
 <section id="features">
-  <h2>Built for developers</h2>
-  <p class="sub">Everything localhost.run and friends do, without the signup wall.</p>
+  <h2>` + t("land.feat.h") + `</h2>
+  <p class="sub">` + t("land.feat.sub") + `</p>
   <div class="grid">
-    <div class="card"><div class="ic">&#128274;</div><h3>Instant HTTPS</h3><p>Wildcard TLS on every subdomain. Your webhook receivers, OAuth callbacks and payment IPNs work on the first try.</p></div>
-    <div class="card"><div class="ic">&#9889;</div><h3>Zero signup</h3><p>Anonymous tunnels are free: random subdomain, 4-hour lifetime, 1 Mbps. No email, no credit card, no waitlist.</p></div>
-    <div class="card"><div class="ic">&#128187;</div><h3>Any language</h3><p>20 dependency-light SDKs - Go, Node, Python, Rust, Swift, Java, C, Elixir... Embed the tunnel straight in your app.</p></div>
-    <div class="card"><div class="ic">&#128200;</div><h3>WebSocket ready</h3><p>Full 101-upgrade pass-through, verified end-to-end. Real-time apps, sockets and streams just work.</p></div>
-    <div class="card"><div class="ic">&#127760;</div><h3>Self-hostable</h3><p>The server is one Go binary. Point it at your domain, get your own tunnel infra in minutes.</p></div>
-    <div class="card"><div class="ic">&#128179;</div><h3>Pay for more</h3><p>Custom subdomains, 30-day tunnels and 10 Mbps from $3/mo - card, PayPal or crypto.</p></div>
+    <div class="card"><div class="ic">&#128274;</div><h3>` + t("land.f1.h") + `</h3><p>` + t("land.f1.p") + `</p></div>
+    <div class="card"><div class="ic">&#9889;</div><h3>` + t("land.f2.h") + `</h3><p>` + t("land.f2.p") + `</p></div>
+    <div class="card"><div class="ic">&#128187;</div><h3>` + t("land.f3.h") + `</h3><p>` + t("land.f3.p") + `</p></div>
+    <div class="card"><div class="ic">&#128200;</div><h3>` + t("land.f4.h") + `</h3><p>` + t("land.f4.p") + `</p></div>
+    <div class="card"><div class="ic">&#127760;</div><h3>` + t("land.f5.h") + `</h3><p>` + t("land.f5.p") + `</p></div>
+    <div class="card"><div class="ic">&#128179;</div><h3>` + t("land.f6.h") + `</h3><p>` + t("land.f6.p") + `</p></div>
   </div>
 </section>
 
 <section id="how">
-  <h2>How it works</h2>
-  <p class="sub">One outbound WebSocket from your process. No inbound port, no router config, no firewall change.</p>
+  <h2>` + t("land.how.h") + `</h2>
+  <p class="sub">` + t("land.how.sub") + `</p>
   <div class="flow">
     <pre class="mermaid" id="flowdiagram" data-mobile="flowchart TD
   V[&quot;visitor<br/>https://quiet-frog-42.t.etun.uk&quot;] -->|HTTPS 443| E[&quot;etunneld<br/>wildcard TLS + plan limits&quot;]
@@ -620,33 +621,34 @@ flowchart LR
     </pre>
   </div>
   <div class="grid" style="margin-top:1rem">
-    <div class="card"><h3>1. Your process dials out</h3><p>The SDK opens <code>wss://&lt;domain&gt;/tunnel</code> and says <code>hello</code>. The server answers <code>welcome</code> with the public URL and the plan's TTL.</p></div>
-    <div class="card"><h3>2. A request lands</h3><p>The server matches the <code>Host</code> header to your tunnel, allocates a stream id and forwards the request as JSON metadata plus binary body frames.</p></div>
-    <div class="card"><h3>3. Your app answers</h3><p>The SDK replays the request against <code>localhost:3000</code> and streams the response back over the same socket. Upgrades become a raw byte pipe.</p></div>
+    <div class="card"><h3>` + t("land.how.1.h") + `</h3><p>` + t("land.how.1.p") + `</p></div>
+    <div class="card"><h3>` + t("land.how.2.h") + `</h3><p>` + t("land.how.2.p") + `</p></div>
+    <div class="card"><h3>` + t("land.how.3.h") + `</h3><p>` + t("land.how.3.p") + `</p></div>
   </div>
 </section>
 
 <section id="quickstart">
-  <h2>Quickstart</h2>
-  <p class="sub">The same protocol in 20 languages. Copy the snippet into your service and your app is reachable from the internet; run the file on its own and it doubles as a CLI. Free tunnels need no account.</p>
+  <h2>` + t("land.qs.h") + `</h2>
+  <p class="sub">` + t("land.qs.sub") + `</p>
   <div class="tabs" id="langtabs">` + qsTabs + `</div>
   ` + qsPanels + `
-  <p class="sub" style="text-align:center;margin:1.4rem 0 0">Custom subdomain, 30-day lifetime and 10 Mbps come with an API key - pass <code>token</code> (and <code>subdomain</code>) to the same call, see <a href="/pricing">pricing</a>.</p>
+  <p class="sub" style="text-align:center;margin:1.4rem 0 0">` + t("land.qs.note") + `</p>
 </section>
 
 <section id="pricing">
-  <h2>Pricing</h2>
-  <p class="sub">Start free. Upgrade when your demo needs a name of its own.</p>
+  <h2>` + t("land.price.h") + `</h2>
+  <p class="sub">` + t("land.price.sub") + `</p>
   <div class="tiers">
-    <div class="tier"><div class="name">Free</div><div class="price">$0</div><ul><li>random subdomain</li><li>4-hour tunnels</li><li>1 Mbps</li><li>no account needed</li></ul><a class="btn ghost" href="#quickstart">Run it now</a></div>
-    <div class="tier pro"><div class="name">Starter</div><div class="price">$3<small>/mo</small></div><ul><li>custom subdomain</li><li>72-hour tunnels</li><li>10 Mbps</li><li>API key + portal</li></ul><a class="btn primary" href="/pricing">Subscribe</a></div>
-    <div class="tier"><div class="name">Pro</div><div class="price">$9<small>/mo</small></div><ul><li>5 custom subdomains</li><li>30-day tunnels</li><li>10 Mbps</li><li>priority support</li></ul><a class="btn primary" href="/pricing">Subscribe</a></div>
+    <div class="tier"><div class="name">` + t("land.tier.free") + `</div><div class="price">$0</div><ul><li>` + t("land.tier.free.li1") + `</li><li>` + t("land.tier.free.li2") + `</li><li>` + t("land.tier.free.li3") + `</li><li>` + t("land.tier.free.li4") + `</li></ul><a class="btn ghost" href="#quickstart">` + t("land.tier.free.btn") + `</a></div>
+    <div class="tier pro"><div class="name">` + t("land.tier.starter") + `</div><div class="price">$3<small>/mo</small></div><ul><li>` + t("land.tier.starter.li1") + `</li><li>` + t("land.tier.starter.li2") + `</li><li>` + t("land.tier.starter.li3") + `</li><li>` + t("land.tier.starter.li4") + `</li></ul><a class="btn primary" href="/pricing">` + t("land.tier.btn.sub") + `</a></div>
+    <div class="tier"><div class="name">` + t("land.tier.pro") + `</div><div class="price">$9<small>/mo</small></div><ul><li>` + t("land.tier.pro.li1") + `</li><li>` + t("land.tier.pro.li2") + `</li><li>` + t("land.tier.pro.li3") + `</li><li>` + t("land.tier.pro.li4") + `</li></ul><a class="btn primary" href="/pricing">` + t("land.tier.btn.sub") + `</a></div>
   </div>
 </section>
 
 <footer>
   <span>` + cfg.Domain + `</span><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel">GitHub</a><span class="sep">&middot;</span><a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">Protocol</a><span class="sep">&middot;</span><a href="/pricing">Pricing</a><span class="sep">&middot;</span><a href="/terms">Terms</a><span class="sep">&middot;</span><a href="/privacy">Privacy</a>
-  <br><span style="opacity:.6">etunnel - one binary, twenty SDKs, your localhost worldwide.</span>
+  <br><span style="opacity:.6">` + t("foot.tagline") + `</span>
+  <div class="langrow">` + langSwitchHTML(lang) + `</div>
 <script>
 function showLang(btn){
   var id = btn.getAttribute('data-id');
@@ -681,9 +683,12 @@ mermaid.initialize({startOnLoad:true,theme:'dark',themeVariables:{fontFamily:'ui
 </body></html>`
 }
 
-func notFoundHTML(cfg Config, host string) string {
+func notFoundHTML(cfg Config, r *http.Request) string {
+	lang := pickLang(r)
+	t := func(key string) string { return T(lang, key) }
+	host := r.Host
 	return `<!doctype html>
-<html><head><meta charset="utf-8"><title>tunnel not found</title>
+<html><head><meta charset="utf-8"><title>` + t("nf.title") + `</title>
 <meta http-equiv="refresh" content="5; url=https://github.com/topcheer/etunnel">
 <style>body{font-family:ui-monospace,monospace;background:#0b0e14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}main{max-width:560px;padding:2rem;text-align:center}h1{color:#f85149}a{color:#58a6ff}</style>
 </head><body><main>
