@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -112,7 +113,13 @@ func TestPerIPAdmissionSetsRedisTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.counter = c
-	ts := httptest.NewServer(srv.Handler())
+	// #35/#44: the WS endpoint serves the base domain only; httptest's
+	// Host is 127.0.0.1:port, which routing sends straight to the proxy.
+	// Rewrite it to the base domain so the handshake reaches the endpoint.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "t.test"
+		srv.Handler().ServeHTTP(w, r)
+	}))
 	defer ts.Close()
 
 	wsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
