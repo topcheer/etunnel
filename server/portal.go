@@ -360,9 +360,12 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		s.accounts.CancelSubscription(email)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "subscription cancelled - back on free tier"})
 	case "domain":
-		dom := strings.ToLower(strings.TrimSpace(req.Domain))
+		dom := normalizeSubdomainInput(req.Domain, s.cfg.Domain)
 		if dom == "" || !validSubdomain(dom) {
-			http.Error(w, `{"error":"invalid subdomain"}`, http.StatusBadRequest)
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "invalid subdomain: " + subdomainError(dom),
+				"got":   strings.ToLower(strings.TrimSpace(req.Domain)),
+			})
 			return
 		}
 		tier := s.cfg.Tiers[acct.Tier]
@@ -413,7 +416,7 @@ func jsonDecodeBody(r *http.Request, v any) error {
 }
 
 func validSubdomain(s string) bool {
-	if len(s) < 3 || len(s) > 63 {
+	if len(s) < 2 || len(s) > 63 {
 		return false
 	}
 	for _, c := range s {
@@ -422,6 +425,45 @@ func validSubdomain(s string) bool {
 		}
 	}
 	return s[0] != '-' && s[len(s)-1] != '-'
+}
+
+// subdomainError explains why a value cannot be a custom subdomain, for the
+// 400 body (users repeatedly pasted full hostnames into the "my-sub" field
+// and got an opaque rejection - see the Nov 11 400 burst).
+func subdomainError(s string) string {
+	switch {
+	case s == "":
+		return `"domain" is required (just the subdomain part, e.g. my-sub)`
+	case len(s) < 2:
+		return `too short: subdomains are 2-63 characters (a-z, 0-9, -)`
+	case len(s) > 63:
+		return `too long: subdomains are 2-63 characters (a-z, 0-9, -)`
+	case s[0] == '-' || s[len(s)-1] == '-':
+		return `cannot start or end with a hyphen`
+	default:
+		return `invalid character(s): use a-z, 0-9 and - only (no dots, underscores or spaces) - just the subdomain part, e.g. my-sub`
+	}
+}
+
+// normalizeSubdomainInput accepts what users actually paste into the
+// "my-sub" field and returns the subdomain part: strips a scheme and path,
+// drops the service domain suffix, and takes the first label of any
+// remaining dotted hostname ("my-sub.t.etun.uk" / "my-sub.com" -> "my-sub").
+// It deliberately never invents a value: if nothing label-like remains the
+// original string is returned and the caller's validity check reports it.
+func normalizeSubdomainInput(v, domain string) string {
+	s := strings.ToLower(strings.TrimSpace(v))
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "https://"), "http://")
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if domain != "" {
+		s = strings.TrimSuffix(s, "."+strings.ToLower(domain))
+	}
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.Trim(s, "-")
 }
 
 func containsStr(xs []string, v string) bool {
