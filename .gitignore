@@ -84,3 +84,5 @@ sdks/lua/*.rock
 /.swiftpm/
 /sdks/scala/.bsp/
 /sdks/scala/.scala-build/
+etunnel-pentest-report.md
+pentest_probe/
