@@ -108,7 +108,7 @@ jobs:
           sudo apt-get -o Acquire::ForceIPv4=true update
           sudo apt-get -o Acquire::ForceIPv4=true install -y php-cli lua5.4 luarocks elixir cmake \
             libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
-            libwebsocketpp-dev libasio-dev
+            libwebsocketpp-dev libasio-dev libboost-dev
           # apt-get update exits 0 even when every Ubuntu index failed and
           # stale caches were silently reused (observed: "Temporary failure
           # resolving" x4, then "primary mirror OK"). Verify the installable
@@ -310,7 +310,6 @@ jobs:
       id-token: write
       contents: read
     environment: hex
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
