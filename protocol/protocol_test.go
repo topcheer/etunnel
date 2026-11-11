@@ -102,14 +102,30 @@ func TestValidateSubdomain(t *testing.T) {
 
 func TestRandomSubdomain(t *testing.T) {
 	seen := make(map[string]bool)
+	suffixChars := map[rune]bool{}
+	for _, c := range "23456789abcdefghjkmnpqrstvwxyz" {
+		suffixChars[c] = true
+	}
 	for i := 0; i < 100; i++ {
 		s := RandomSubdomain()
 		if err := ValidateSubdomain(s); err != nil {
 			t.Fatalf("generated invalid subdomain %q: %v", s, err)
 		}
+		parts := strings.Split(s, "-")
+		if len(parts) != 3 {
+			t.Fatalf("want adjective-noun-suffix, got %q", s)
+		}
+		if len(parts[2]) != 6 {
+			t.Fatalf("suffix length: %q", parts[2])
+		}
+		for _, c := range parts[2] {
+			if !suffixChars[c] {
+				t.Fatalf("suffix %q contains lookalike/out-of-alphabet %q", parts[2], c)
+			}
+		}
 		seen[s] = true
 	}
-	if len(seen) < 50 {
+	if len(seen) < 99 {
 		t.Fatalf("poor entropy: %d unique in 100", len(seen))
 	}
 }
