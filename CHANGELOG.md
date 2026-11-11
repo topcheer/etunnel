@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.6.0 — 2026-11-11
+
+Site i18n, OAuth reliability, premium short domains & hardening follow-up.
+
+### Server (etunneld)
+
+- **11-language user site** (#72/#73/#75): landing, pricing, billing, login,
+  `/me` and the legal pages' chrome localized (ar renders RTL); language
+  negotiated from the `et_lang` cookie, then `Accept-Language` with
+  q-values, then English. Legal document bodies stay English (governing).
+- **OAuth logins fixed end-to-end** (#83/#86): the state cookie is now
+  SameSite per provider (Lax for redirect flows - None cookies were dropped
+  by third-party-cookie blocking and every provider failed "bad oauth
+  state"), and auth flows canonicalize onto the service host so a login
+  started on the apex no longer loses its host-only cookie.
+- **Premium 1-3 character subdomains** (#82): $3/$2/$1 (one-time per 30-day
+  period, crypto floors at $2); Free accounts may buy; entitlement is
+  exact-length and survives tier lapse.
+- **Subdomain UX** (#79/#80/#81): 1-63 chars, pasted hostnames normalized,
+  debounced availability probe with inline status, taken names block the
+  Add button, cross-account duplicates rejected (409), and a toast surfaces
+  every action error that used to be silent (#87).
+- **Anonymous tunnel names carry 2^40.6 of entropy** (#84): the old
+  word-word-NN format was exhaustively scannable in under an hour; the
+  new 6-char no-lookalike suffix needs millennia.
+- **Crypto pricing above the processor floor** (#78): NOWPayments minimums
+  (~$2-5 per coin pair) made the $3 Starter unpayable on crypto; the crypto
+  path now carries its own price (Starter $5) shown on the button.
+- **Rendering** (#76): i18n inline HTML renders verbatim (identity lines,
+  pricing hint) while user-controlled values stay escaped.
+- **Terms** (#77): explicit unlawful-use ban (fraud, trafficking, sanctions
+  evasion, unlicensed regulated trade) with termination and cooperation
+  clauses; legal-page chrome localized.
+- **Session ledger & observability** (#70): session open/close with source
+  IP and disconnect reason in journal + Postgres; proxy upstream-failure
+  logging and a first-requests regression test (#68).
+- **Security hygiene**: pentest report redacted and ignored; short-domain
+  gating exact-length; release script refuses non-semantic versions.
+
+### Docs & SDKs
+
+- README: localized-site section, `/setlang` and `/me/domain-check`
+  endpoints, premium short-domain checkout products, high-entropy example
+  names.
+- All 19 SDK READMEs link the service terms and privacy policy (#commit).
+
 ## v1.5.0 — 2026-11-11
 
 Pentest-hardening & SDK quality release. Full external penetration test

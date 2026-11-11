@@ -1,6 +1,6 @@
 {
   "name": "@ggcode/etunnel",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "exports": "./etunnel.ts",
   "license": "MIT",
   "description": "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server.",

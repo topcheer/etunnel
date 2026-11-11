@@ -132,9 +132,15 @@ def check(expect=None):
     print(f"all versioned manifests == {v}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(__doc__); sys.exit(2)
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        print("usage: bump-release.py X.Y.Z   |  bump-release.py --check [X.Y.Z]")
+        sys.exit(0 if len(sys.argv) >= 2 else 2)
     if sys.argv[1] == "--check":
         check(sys.argv[2] if len(sys.argv) > 2 else None)
+    elif not re.fullmatch(r"v?[\d]+\.[\d]+\.[\d]+", sys.argv[1]):
+        # guards against stamping arbitrary words (an early "--help" probe
+        # corrupted every JSON manifest before this guard existed)
+        print(f"refusing to stamp {sys.argv[1]!r}: not a semantic version"); sys.exit(2)
     else:
         bump(sys.argv[1].lstrip("v"))
