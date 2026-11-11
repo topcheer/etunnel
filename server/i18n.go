@@ -131,6 +131,11 @@ func registerDict(lang string, d map[string]string) {
 			d[k] = v
 		}
 	}
+	if dk := domKeys[lang]; dk != nil {
+		for k, v := range dk {
+			d[k] = v
+		}
+	}
 	dicts[lang] = d
 }
 

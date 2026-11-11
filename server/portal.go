@@ -67,6 +67,7 @@ nav .links a{color:var(--dim)}nav .links a:hover{color:var(--fg);text-decoration
 .btn.ghost:hover{border-color:var(--dim);background:var(--panel)}
 .btn.danger{background:transparent;border-color:rgba(218,54,51,.6);color:#ff7b72}
 .btn.danger:hover{background:rgba(218,54,51,.14);border-color:var(--red)}
+.btn[disabled]{opacity:.45;cursor:not-allowed;pointer-events:none}
 .badge{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--line);border-radius:99px;padding:.15rem .7rem;font-size:.72rem;color:var(--dim);white-space:nowrap}
 .g{color:var(--green2)}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
@@ -236,7 +237,8 @@ body{padding-bottom:4rem}
     <h2>{{T "me.dom.h"}}</h2>
     <p class="hint" style="margin-bottom:.9rem">{{T "me.dom.hint"}}</p>
     <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">{{T "me.dom.none"}}</span>{{end}}</div>
-    <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem"><button class="btn" onclick="addDom()">{{T "me.dom.add"}}</button><button class="btn ghost" onclick="delDom()">{{T "me.dom.remove"}}</button></div>
+    <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem" oninput="domTyped()"><button class="btn" id="domAdd" onclick="addDom()">{{T "me.dom.add"}}</button><button class="btn ghost" onclick="delDom()">{{T "me.dom.remove"}}</button></div>
+    <p class="hint" id="domStatus" style="margin-top:.5rem;min-height:1.1rem"></p>
   </section>
   <section class="card wide zone">
     <h2>{{T "me.zone.h"}}</h2>
@@ -259,6 +261,28 @@ async function act(a, body){
 }
 function addDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:false}); }
 function delDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:true}); }
+// Debounced availability check: 2s after typing stops, ask the server
+// whether the subdomain is taken and block Add when it is (#79 follow-up:
+// report conflicts inline instead of failing the submit).
+let domTimer = null;
+const domSt = () => document.getElementById('domStatus');
+function domTyped(){
+  clearTimeout(domTimer);
+  domSt().textContent = '';
+  document.getElementById('domAdd').disabled = false;
+  const v = document.getElementById('dom').value.trim();
+  if (!v) return;
+  domSt().textContent = '{{.DomChecking}}';
+  domTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/me/domain-check?d=' + encodeURIComponent(v));
+      const j = await res.json();
+      if (res.status === 400) { domSt().textContent = j.reason === 'invalid' ? '{{.DomInvalid}}' : ''; document.getElementById('domAdd').disabled = j.reason === 'invalid'; return; }
+      if (j.ok) { domSt().textContent = j.domain + ': {{.DomFree}}'; document.getElementById('domAdd').disabled = false; }
+      else { domSt().textContent = j.domain + ': {{.DomTaken}}'; document.getElementById('domAdd').disabled = true; }
+    } catch (e) { /* advisory only: leave the button enabled */ }
+  }, 2000);
+}
 function copyKey(btn){
   const v = document.getElementById('apikey').value;
   const done = ()=>{ btn.textContent='{{.MsgCopied}}'; setTimeout(()=>{btn.textContent='{{T "me.key.copy"}}';},1500); };
@@ -313,6 +337,10 @@ function copyKey(btn){
 		"MsgDone":        tr("me.msg.done"),
 		"MsgFailed":      tr("me.msg.failed"),
 		"MsgCopied":      tr("btn.copied"),
+		"DomChecking":    tr("me.dom.checking"),
+		"DomTaken":       tr("me.dom.taken"),
+		"DomFree":        tr("me.dom.free"),
+		"DomInvalid":     tr("me.dom.invalid"),
 		"Lang":           lang, "Dir": langDir(lang),
 		"LangSwitch": template.HTML(langSwitchHTML(lang)),
 	})
@@ -379,6 +407,17 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 			return
 		}
 		owned := false
+		dup := false
+		for _, a := range s.accounts.List() {
+			if a.Email != email && containsStr(a.Domains, dom) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			http.Error(w, `{"error":"subdomain already taken by another account"}`, http.StatusConflict)
+			return
+		}
 		_ = s.accounts.Mutate(email, func(a *Account) {
 			if containsStr(a.Domains, dom) {
 				owned = true
@@ -411,12 +450,40 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 	}
 }
 
+// handleDomainCheck reports whether a custom subdomain is available for
+// the signed-in account (taken = registered on another account). Called by
+// the /me page's debounced input check so users see conflicts before they
+// submit; the POST still re-checks as the authority.
+func (s *Server) handleDomainCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	session := s.sessionEmail(r)
+	if session == "" {
+		http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
+		return
+	}
+	dom := normalizeSubdomainInput(r.URL.Query().Get("d"), s.cfg.Domain)
+	if dom == "" || !validSubdomain(dom) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "invalid"})
+		return
+	}
+	for _, a := range s.accounts.List() {
+		if a.Email != session && containsStr(a.Domains, dom) {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": "taken", "domain": dom})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "domain": dom})
+}
+
 func jsonDecodeBody(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(v)
 }
 
 func validSubdomain(s string) bool {
-	if len(s) < 2 || len(s) > 63 {
+	if len(s) == 0 || len(s) > 63 {
 		return false
 	}
 	for _, c := range s {
@@ -434,10 +501,10 @@ func subdomainError(s string) string {
 	switch {
 	case s == "":
 		return `"domain" is required (just the subdomain part, e.g. my-sub)`
-	case len(s) < 2:
-		return `too short: subdomains are 2-63 characters (a-z, 0-9, -)`
+	case len(s) == 0:
+		return `"domain" is required (just the subdomain part, e.g. my-sub)`
 	case len(s) > 63:
-		return `too long: subdomains are 2-63 characters (a-z, 0-9, -)`
+		return `too long: subdomains are 1-63 characters (a-z, 0-9, -)`
 	case s[0] == '-' || s[len(s)-1] == '-':
 		return `cannot start or end with a hyphen`
 	default:

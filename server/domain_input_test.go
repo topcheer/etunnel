@@ -56,13 +56,12 @@ func TestDomainAddAcceptsShortAndExplainsRejects(t *testing.T) {
 	if rec := post("my-sub.t.etun.uk"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "my-sub") {
 		t.Fatalf("full hostname: got %d %s", rec.Code, rec.Body.String())
 	}
-	// one character stays invalid, with a reason in the body
-	rec := post("a")
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "too short") {
+	// single characters are valid since the 1-63 relaxation
+	if rec := post("a"); rec.Code != http.StatusOK {
 		t.Fatalf("1-char: got %d %s", rec.Code, rec.Body.String())
 	}
 	// illegal characters get the no-dots explanation, echoed via writeJSON
-	rec = post("my sub")
+	rec := post("my sub")
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "a-z, 0-9") {
 		t.Fatalf("space: got %d %s", rec.Code, rec.Body.String())
 	}

@@ -80,6 +80,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/setlang", s.handleSetLang)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/me", s.handleMe)
+	mux.HandleFunc("/me/domain-check", s.handleDomainCheck) // exact path beats the /me/ prefix below
 	mux.HandleFunc("/me/", func(w http.ResponseWriter, r *http.Request) {
 		s.handleMeAction(w, r, strings.TrimPrefix(r.URL.Path, "/me/"))
 	})
