@@ -178,6 +178,20 @@ jobs:
   # -> Trusted Publisher: repository topcheer/etunnel, workflow filename
   # sdk-packages.yml, environment "npm" (create that GH environment first).
   # ------------------------------------------------------------------
+  # Swift SDK is Apple-platforms-only (#90: URLSessionWebSocketTask never
+  # existed in Linux swift-corelibs-foundation). The Linux pack job ships
+  # the source tarball; THIS job is the compile gate. macos-13 pool
+  # (macos-14 rejected configs in earlier attempts).
+  swift-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build (Apple platforms gate)
+        working-directory: sdks/swift
+        run: |
+          swift build -c release
+          echo "swift: compile verified on macOS"
+
   publish-npm:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')

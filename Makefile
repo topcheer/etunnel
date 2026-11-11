@@ -9,6 +9,7 @@
 
 PACK    := dist/packages
 Sdks    := sdks
+UNAME_S := $(shell uname -s)
 V       := $(shell cat VERSION 2>/dev/null || echo unknown)
 NODE_V  := $(shell node -p "require('./$(Sdks)/node/package.json').version" 2>/dev/null || echo unknown)
 RUST_V  := $(shell grep -m1 '^version' $(Sdks)/rust/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
@@ -41,7 +42,11 @@ verify: check-versions
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
 	cd $(Sdks)/java && javac -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
+ifeq ($(UNAME_S),Darwin)
 	cd $(Sdks)/swift && swift build 2>&1 && echo "swift: ok"
+else
+	@echo "swift: skipped on Linux (Apple-only #90; verified by CI swift-macos job)"
+endif
 	cd $(Sdks)/clojure && clojure -M -e '(load-file "etunnel.clj")' > /dev/null && echo "clojure: ok"
 	cd $(Sdks)/ruby && ruby -c lib/etunnel.rb > /dev/null && echo "ruby: ok"
 	cd $(Sdks)/perl && perl -c etunnel.pl > /dev/null && echo "perl: ok"
@@ -83,10 +88,20 @@ pack-rust: prereq
 	cd $(Sdks)/rust && cargo package --no-verify --allow-dirty --quiet \
 	  && cp target/package/etunnel-$(RUST_V).crate ../../$(PACK)/
 
+# Swift SDK is Apple-platforms-only (#90: URLSessionWebSocketTask never
+# existed in Linux swift-corelibs-foundation). On Apple hosts, compile; on
+# Linux, package sources only - compile verification is the dedicated
+# swift-macos CI job, never silently skipped.
+ifeq ($(UNAME_S),Darwin)
 pack-swift: prereq
 	cd $(Sdks)/swift && swift build -c release \
-	  && echo "swift: compiled" \
+	  && echo "swift: compiled (macOS)" \
 	  && tar czf ../../$(PACK)/etunnel-swift-$(V).tar.gz etunnel.swift Package.swift README.md
+else
+pack-swift: prereq
+	cd $(Sdks)/swift && tar czf ../../$(PACK)/etunnel-swift-$(V).tar.gz etunnel.swift Package.swift README.md \
+	  && echo "swift: source pack (Apple-only #90; compile verified by CI swift-macos job)"
+endif
 
 pack-dart: prereq
 	cd $(Sdks)/dart && tar czf ../../$(PACK)/etunnel-dart-$(V).tar.gz etunnel.dart pubspec.yaml README.md
