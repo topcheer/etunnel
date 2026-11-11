@@ -6,6 +6,8 @@ package server
 import (
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"time"
 )
 
@@ -220,6 +222,46 @@ func (c *Config) normalize() error {
 	}
 	if c.TLS.Mode == TLSModeDNS && c.TLS.CacheDir == "" {
 		return errors.New("etunnel: dns TLS mode requires CacheDir")
+	}
+	// Fail fast on settings that would otherwise only break at first renewal
+	// or first handshake, hours after startup (issue #16).
+	if c.TLS.Mode == TLSModeDNS {
+		switch c.TLS.DNSProvider {
+		case "cloudflare", "alidns", "dnspod":
+		case "":
+			return errors.New("etunnel: dns TLS mode requires DNSProvider (cloudflare|alidns|dnspod)")
+		default:
+			return fmt.Errorf("etunnel: unknown DNS provider %q (cloudflare|alidns|dnspod)", c.TLS.DNSProvider)
+		}
+	}
+	if c.TLS.Mode == TLSModeStatic {
+		for _, f := range []struct{ name, path string }{
+			{"CertFile", c.TLS.CertFile},
+			{"KeyFile", c.TLS.KeyFile},
+		} {
+			if _, err := os.Stat(f.path); err != nil {
+				return fmt.Errorf("etunnel: static TLS %s %q is unreadable: %w", f.name, f.path, err)
+			}
+		}
+	}
+	// Listen addresses: catch malformed host:port pairs and collisions before
+	// the first bind, where the error would be opaque ("address already in use").
+	seen := make(map[string]string, 3)
+	for _, a := range []struct{ name, addr string }{
+		{"Addr", c.Addr},
+		{"HTTPAddr", c.HTTPAddr},
+		{"AdminAddr", c.AdminAddr},
+	} {
+		if a.addr == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(a.addr); err != nil {
+			return fmt.Errorf("etunnel: %s %q is not a host:port address: %w", a.name, a.addr, err)
+		}
+		if prev, dup := seen[a.addr]; dup {
+			return fmt.Errorf("etunnel: %s and %s both listen on %q", prev, a.name, a.addr)
+		}
+		seen[a.addr] = a.name
 	}
 	return nil
 }
