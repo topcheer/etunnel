@@ -55,6 +55,10 @@ type Session struct {
 	tier    *Tier
 	account *Account
 	expires time.Time // zero = no expiry
+	// started is the handshake completion time (issue #69): the session
+	// ledger's open/close journal lines and the duration column derive
+	// from it. Written once at build, read at close.
+	started time.Time
 	// ttlTimer expires the session; it is stopped on early close so a closed
 	// 30-day session is not retained until its expiry (#12). Written and read
 	// under mu: the callback can fire before the field is assigned.
@@ -123,6 +127,15 @@ func (s *Session) RemoteIP() string { return s.ip }
 
 // IsCustom reports whether the tunnel holds a plan-gated custom subdomain.
 func (s *Session) IsCustom() bool { return s.custom }
+
+// accountEmail returns the account email or "" for anonymous tunnels -
+// the journal/ledger projection of account (issue #69).
+func (s *Session) accountEmail() string {
+	if s.account == nil {
+		return ""
+	}
+	return s.account.Email
+}
 
 func (s *Session) streamCount() int {
 	s.mu.Lock()
@@ -276,6 +289,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		closed:  make(chan struct{}),
 		streams: make(map[uint32]*Stream),
 		nextID:  1,
+		started: now,
 	}
 	if tier.Bandwidth > 0 {
 		sess.limiter = rate.NewLimiter(rate.Limit(tier.Bandwidth/8), protocol.MaxPayload)
@@ -400,6 +414,15 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	nowNano := time.Now().UnixNano()
 	sess.lastPong.Store(nowNano)
 	sess.lastActivity.Store(nowNano)
+
+	// Session ledger (issue #69): the audit main line. Tier 1 journal line
+	// always; Tier 2 PG row when a DSN is configured. Format is stable for
+	// grep/structured collection on purpose.
+	s.logf("session %s: open ip=%s sub=%s plan=%s account=%s custom=%t",
+		sess.id, sess.ip, sess.sub, tier.Name, sess.accountEmail(), sess.custom)
+	if err := s.ledger.recordOpen(sess); err != nil {
+		s.logf("session %s: ledger open failed: %v", sess.id, err)
+	}
 
 	// Serve until the connection dies.
 	sess.readLoop()
@@ -690,6 +713,15 @@ func (s *Session) Close(reason string) {
 		}
 		s.streams = make(map[uint32]*Stream)
 		s.mu.Unlock()
+
+		// Session ledger (issue #69): the paired close line - duration,
+		// reason, stream count - and the PG row update. Best effort: an audit
+		// sink never blocks the close path.
+		s.srv.logf("session %s: close ip=%s sub=%s dur=%s reason=%s streams=%d",
+			s.id, s.ip, s.sub, time.Since(s.started).Round(time.Second), reason, len(streams))
+		if err := s.srv.ledger.recordClose(s, reason, len(streams)); err != nil {
+			s.srv.logf("session %s: ledger close failed: %v", s.id, err)
+		}
 		for _, st := range streams {
 			st.abort()
 		}
