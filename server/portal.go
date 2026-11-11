@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"net/http"
@@ -69,6 +70,11 @@ nav .links a{color:var(--dim)}nav .links a:hover{color:var(--fg);text-decoration
 .badge{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--line);border-radius:99px;padding:.15rem .7rem;font-size:.72rem;color:var(--dim);white-space:nowrap}
 .g{color:var(--green2)}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.langrow{display:flex;justify-content:center;align-items:center;margin-top:1.1rem;font-size:.78rem;color:var(--dim)}
+.langsw{line-height:2;text-align:center}
+.langsw a{color:var(--dim);margin:0 .3rem;white-space:nowrap}
+.langsw a:hover{color:var(--fg);text-decoration:none}
+.langsw b{color:var(--fg);font-weight:700;margin:0 .3rem;white-space:nowrap}
 @media(max-width:700px){
   nav{flex-wrap:wrap;justify-content:center;gap:.45rem;padding:.75rem 1rem}
   nav .links{order:3;width:100%;justify-content:center;gap:1.1rem;font-size:.8rem}
@@ -119,8 +125,8 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;marg
 <p class="fine">{{T "login.fine"}}</p>
 </div>
 <div class="foot"><a href="/">&#8592; {{T "foot.home"}} etunnel</a><span>&middot;</span><a href="/pricing">{{T "nav.pricing"}}</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">{{T "nav.docs"}}</a><span>&middot;</span><a href="/terms">{{T "foot.terms"}}</a><span>&middot;</span><a href="/privacy">{{T "foot.privacy"}}</a></div>
-</div>
 <div class="langrow">{{.LangSwitch}}</div>
+</div>
 </body></html>`
 
 	lang := pickLang(r)
@@ -264,13 +270,20 @@ function copyKey(btn){
 
 	lang := pickLang(r)
 	tr := func(k string) string { return T(lang, k) }
-	subLine := strings.ReplaceAll(tr("me.sub"), "{email}", "<b>"+acct.Email+"</b>")
+	// Substitute every placeholder the translations declare ({email}/{via}/
+	// {name}) - word order differs per language (ja puts {name} mid-sentence),
+	// so appending after lookup would leak literal braces. User-controlled
+	// values stay html-escaped; the surrounding inline HTML is trusted i18n
+	// content passed through as template.HTML below.
+	via, namePart := "", ""
 	if acct.Provider != "" {
-		subLine += " via " + acct.Provider
+		via = " via " + html.EscapeString(acct.Provider)
 	}
 	if acct.Name != "" {
-		subLine += " &middot; " + acct.Name
+		namePart = " &middot; " + html.EscapeString(acct.Name)
 	}
+	subLine := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(tr("me.sub"),
+		"{email}", html.EscapeString(acct.Email)), "{via}", via), "{name}", namePart)
 	maxDomainsLine := tr("me.plan.random")
 	if maxDomains > 0 {
 		maxDomainsLine = strings.ReplaceAll(tr("me.plan.maxdom"), "{n}", fmt.Sprintf("%d", maxDomains))
