@@ -208,6 +208,11 @@ body{padding-bottom:4rem}
 .zone{border-color:rgba(218,54,51,.45)}
 .msg{margin-top:1.2rem;font-size:.82rem;min-height:1.3rem;color:var(--dim)}
 .msg.ok{color:var(--green2)}.msg.err{color:#ff7b72}
+.toast{position:fixed;top:1.1rem;right:1.1rem;z-index:99;display:flex;flex-direction:column;gap:.5rem;max-width:22rem}
+.toast .t{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.7rem 1rem;font-size:.82rem;box-shadow:0 14px 40px rgba(0,0,0,.5);animation:tin .18s ease-out}
+.toast .t.err{border-color:rgba(218,54,51,.6);color:#ff7b72}
+.toast .t.ok{border-color:rgba(63,185,80,.55);color:var(--green2)}
+@keyframes tin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 @media(max-width:700px){.wrap{padding:1.7rem 1rem}.pagehead h1{font-size:1.35rem}.grid{grid-template-columns:1fr}}
 </style></head><body>
 <nav>
@@ -250,10 +255,21 @@ body{padding-bottom:4rem}
     <button class="btn danger" onclick="if(confirm('{{.ZoneConfirm}}'))act('close')">{{T "me.zone.close"}}</button>
   </section>
 </div>
+<div class="toast" id="toast"></div>
 <p id="msg" class="msg"></p>
 </main>
 <script>
 const email = {{.EmailJS}};
+// Toast: visible, auto-dismissing feedback for every action outcome - the
+// old #msg line sat below the fold, so API errors were effectively silent.
+function toast(text, kind){
+  const host = document.getElementById('toast');
+  const t = document.createElement('div');
+  t.className = 't ' + (kind || 'err');
+  t.textContent = text;
+  host.appendChild(t);
+  setTimeout(() => t.remove(), kind === 'ok' ? 2600 : 6000);
+}
 async function act(a, body){
   const res = await fetch('/me/'+a, {method:'POST',headers:{'content-type':'application/json'},
     body: JSON.stringify(body||{email})});
@@ -261,6 +277,7 @@ async function act(a, body){
   const el = document.getElementById('msg');
   el.className = 'msg ' + (res.ok ? 'ok' : 'err');
   el.textContent = res.ok ? (data.message||data.apiKey||'{{.MsgDone}}') : (data.error||'{{.MsgFailed}}');
+  toast(res.ok ? (data.message||'{{.MsgDone}}') : (data.error||'{{.MsgFailed}}'), res.ok ? 'ok' : 'err');
   if (res.ok) setTimeout(()=>location.reload(), 900);
 }
 function addDom(){ act('domain', {email, domain: document.getElementById('dom').value, remove:false}); }
@@ -286,7 +303,7 @@ function domTyped(){
       document.getElementById('domBuyWrap').style.display = 'none'; window.domProduct = null;
       if (j.ok) { domSt().textContent = j.domain + ': {{.DomFree}}'; document.getElementById('domAdd').disabled = false; }
       else { domSt().textContent = j.domain + ': {{.DomTaken}}'; document.getElementById('domAdd').disabled = true; }
-    } catch (e) { /* advisory only: leave the button enabled */ }
+    } catch (e) { toast(String(e.message || e), 'err'); }
   }, 2000);
 }
 // Buy the premium short-domain entitlement via checkout, then return to /me.
@@ -298,8 +315,9 @@ async function domBuy(provider){
       body: JSON.stringify({tier: window.domProduct, provider})});
     const data = await res.json();
     if (res.ok && data.url) { location.href = data.url; return; }
-  } catch (e) { /* fall through */ }
+  } catch (e) { toast(String(e.message || e), 'err'); return; }
   const el = document.getElementById('msg'); el.className = 'msg err'; el.textContent = '{{.MsgFailed}}';
+  toast('{{.MsgFailed}}', 'err');
 }
 function copyKey(btn){
   const v = document.getElementById('apikey').value;
