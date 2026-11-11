@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
     <PackageId>etunnel</PackageId>
-    <Version>1.6.1</Version>
+    <Version>1.6.2</Version>
     <Authors>etunnel authors</Authors>
     <Description>Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup. Webhook-friendly ngrok-style reverse tunnel, with SDKs in 20 languages and a single-binary Go server.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
