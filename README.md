@@ -231,11 +231,13 @@ migration (static wildcard cert from the ACME directory, not renewed).
 | `127.0.0.1:9090/stats` | live tunnels, uptime, byte counters, billing status |
 | `127.0.0.1:9090/admin/accounts` | account management (`X-Admin-Token`) |
 
-The web UI (landing, pricing, billing, login, `/me`) is localized in 11
-languages — English, 简体中文, 日本語, 한국어, Deutsch, Français, Español,
-Português, Italiano, Русский and العربية (RTL). Language is negotiated from
-the `et_lang` cookie, then `Accept-Language`, then English; the footer
-switcher calls `/setlang`.
+The web UI (landing, pricing, billing, login, `/me`, and the legal pages'
+chrome on `/terms` / `/privacy`) is localized in 11 languages — English,
+简体中文, 日本語, 한국어, Deutsch, Français, Español, Português, Italiano,
+Русский and العربية (RTL). Language is negotiated from the `et_lang` cookie,
+then `Accept-Language`, then English; the footer switcher calls `/setlang`.
+Legal document bodies stay in English (the English version governs) with a
+localized governing-language note.
 
 ### Operational limits
 
