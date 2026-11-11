@@ -441,3 +441,21 @@ func TestDowngradeKeepsEverPaidMarker(t *testing.T) {
 		}
 	}
 }
+
+// TestPricingAnonHintRendersInlineHTML locks the #83 fix: translation
+// values with inline HTML must render verbatim on the anonymous pricing
+// page too (the {{T}} funcmap returns template.HTML). This family of
+// double-escape bugs has recurred twice (#76 logged-in line, #83 anon
+// hint), so the assertion covers the anonymous path explicitly.
+func TestPricingAnonHintRendersInlineHTML(t *testing.T) {
+	s := newBillingTestServer(t)
+	rec := httptest.NewRecorder()
+	s.handlePricing(rec, httptest.NewRequest(http.MethodGet, "/pricing", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `<a href="/me">your account</a>`) {
+		t.Fatalf("anon pricing hint must render the trusted inline <a>: %.300s", body)
+	}
+	if strings.Contains(body, "&lt;a href=") {
+		t.Fatal("anon pricing hint double-escapes the translation HTML")
+	}
+}
