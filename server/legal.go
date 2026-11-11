@@ -12,9 +12,14 @@ import (
 	"time"
 )
 
-// legalHTML renders one legal document with the shared chrome.
-func (s *Server) legalHTML(w http.ResponseWriter, title, updated, body string) {
-	tpl := `<!doctype html><html><head><meta charset="utf-8">
+// legalHTML renders one legal document with the shared chrome. The document
+// body is English on purpose (legal precision; the English version governs),
+// but the page chrome - title, nav, footer, language switcher, lang/dir - is
+// localized like the rest of the site, with a note pointing at the governing
+// English text.
+func (s *Server) legalHTML(w http.ResponseWriter, lang, title, updated, body string) {
+	tr := func(key string) string { return T(lang, key) }
+	tpl := `<!doctype html><html lang="` + lang + `" dir="` + langDir(lang) + `"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="` + portalFavicon + `">
 <title>` + title + ` - etunnel</title>
@@ -27,22 +32,25 @@ func (s *Server) legalHTML(w http.ResponseWriter, title, updated, body string) {
 .legal ul{padding-left:1.2rem;margin:.4rem 0}
 .legal strong{color:var(--fg)}
 .legal a{color:#58a6ff}
+.legal .ennote{border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem;margin-bottom:1.6rem;font-size:.76rem}
 </style></head><body>
 <nav>
   <a class="logo" href="/" style="text-decoration:none">` + logoMark + ` <span>etunnel</span></a>
   <div class="links">
-    <a href="/#quickstart">quickstart</a>
-    <a href="/pricing">pricing</a>
-    <a href="/terms">terms</a>
-    <a href="/privacy">privacy</a>
+    <a href="/#quickstart">` + tr("nav.quickstart") + `</a>
+    <a href="/pricing">` + tr("nav.pricing") + `</a>
+    <a href="/terms">` + tr("foot.terms") + `</a>
+    <a href="/privacy">` + tr("foot.privacy") + `</a>
   </div>
 </nav>
 <main class="legal">
 <h1>` + title + `</h1>
-<p class="updated">Last updated: ` + updated + `</p>
+<p class="updated">` + tr("legal.updated") + `: ` + updated + `</p>
+<p class="ennote">` + tr("legal.en.note") + `</p>
 ` + body + `
 </main>
-<footer class="foot">` + s.cfg.Domain + ` &middot; <a href="/">home</a> &middot; <a href="/terms">terms</a> &middot; <a href="/privacy">privacy</a></footer>
+<footer class="foot">` + s.cfg.Domain + ` &middot; <a href="/">` + tr("foot.home") + `</a> &middot; <a href="/terms">` + tr("foot.terms") + `</a> &middot; <a href="/privacy">` + tr("foot.privacy") + `</a>
+<div class="langrow">` + langSwitchHTML(lang) + `</div></footer>
 </body></html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprint(w, tpl)
@@ -80,8 +88,19 @@ responsibility.</li>
 </ul>
 
 <h2>3. Acceptable use</h2>
+<p><strong>You must use the Service lawfully.</strong> Using etunnel to carry
+out, facilitate, or promote any activity that is illegal - under the law
+applicable to you, to the operator, or to your visitors - is strictly
+prohibited. Violations are grounds for immediate suspension or termination
+without refund, and we will cooperate with competent authorities as required
+by law.</p>
 <p>You may not use the Service to:</p>
 <ul>
+<li>commit or facilitate criminal acts, including fraud, identity theft,
+trafficking (weapons, drugs, persons), illegal gambling, or circumvention of
+sanctions and export controls;</li>
+<li>trade in regulated goods or services without the licences the applicable
+law requires;</li>
 <li>serve content that is illegal where you or your visitors are located,
 including malware, phishing, child sexual abuse material, or content that
 infringes others' rights;</li>
@@ -130,7 +149,8 @@ establishment, without affecting consumer rights you have where you live.</p>
 <h2>8. Contact</h2>
 <p>Questions about these terms: <a href="mailto:info@` + d + `">info@` + d + `</a>.</p>
 `
-	s.legalHTML(w, "Terms of Service", time.Now().Format("2006-01-02"), body)
+	lang := pickLang(r)
+	s.legalHTML(w, lang, T(lang, "terms.title"), time.Now().Format("2006-01-02"), body)
 }
 
 func (s *Server) handlePrivacy(w http.ResponseWriter, r *http.Request) {
@@ -224,5 +244,6 @@ for significant changes, mention it in the account page.</p>
 <p>Operator of this instance: <strong>` + s.ownerName() + `</strong>.
 Privacy questions and requests: <a href="mailto:info@` + d + `">info@` + d + `</a>.</p>
 `
-	s.legalHTML(w, "Privacy Policy", time.Now().Format("2006-01-02"), body)
+	lang := pickLang(r)
+	s.legalHTML(w, lang, T(lang, "privacy.title"), time.Now().Format("2006-01-02"), body)
 }

@@ -19,6 +19,8 @@ func TestLegalPages(t *testing.T) {
 		"/terms": {
 			handle: s.handleTerms,
 			want: []string{"Terms of Service", "Acceptable use",
+				"must use the Service lawfully", "trafficking",
+				"sanctions and export controls", "regulated goods",
 				"Payments are processed by third parties", "info@"},
 		},
 		"/privacy": {
