@@ -338,37 +338,6 @@ jobs:
             cd sdks/deno && deno publish --allow-dirty --no-check
           fi
 
-  publish-packagist:
-    # Packagist (ggcode/etunnel): the package was submitted manually but the
-    # GitHub webhook auto-sync was never configured, so only dev-* branches
-    # ever appeared - no tagged release reached PHP users. This job forces a
-    # metadata sync via the update-package API on every tag. Inherently
-    # idempotent: Packagist derives versions from git tags, so re-running a
-    # tag can never create a duplicate release. Secret needed:
-    # PACKAGIST_TOKEN (packagist.org -> Profile -> API token).
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Sync Packagist (idempotent)
-        env:
-          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
-        run: |
-          if [ -z "$PACKAGIST_TOKEN" ]; then
-            echo "::warning::PACKAGIST_TOKEN not set - PHP release not synced"
-            exit 0
-          fi
-          V=$(python3 -c "import json;print(json.load(open('composer.json'))['version'])" 2>/dev/null || echo "")
-          if [ -n "$V" ] && curl -sf "https://repo.packagist.org/p2/ggcode/etunnel.json" \
-              | grep -q "\"v\\?${V}\""; then
-            echo "packagist: ${V} already present, refresh only"
-          fi
-          curl -sf -X POST \
-            "https://packagist.org/api/update-package?username=topcheer&apiToken=${PACKAGIST_TOKEN}" \
-            -H 'Content-Type: application/json' \
-            -d '{"repository":{"url":"https://github.com/topcheer/etunnel"}}'
-          echo "packagist: sync requested"
-
   publish-central:
     # Maven Central (dev.ggcode namespace, verified via NS on the Portal).
     # Secrets: MAVEN_USERNAME/MAVEN_PASSWORD (Portal token), GPG_PRIVATE_KEY,
