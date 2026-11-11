@@ -241,12 +241,12 @@ func TestOAuthTokenAcceptsFormAndJSON(t *testing.T) {
 func TestStateCookieAttributes(t *testing.T) {
 	s := newBillingTestServer(t)
 	rec := httptest.NewRecorder()
-	st := s.setStateCookie(rec)
+	st := s.setStateCookie(rec, "google")
 	if st == "" {
 		t.Fatal("empty state")
 	}
 	c := rec.Result().Cookies()[0]
-	if c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteNoneMode {
+	if c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie attrs: path=%q secure=%v httpOnly=%v ss=%v", c.Path, c.Secure, c.HttpOnly, c.SameSite)
 	}
 	// round-trip: the cookie satisfies its own check, a wrong value does not
