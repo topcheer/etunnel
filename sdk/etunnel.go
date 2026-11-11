@@ -124,6 +124,11 @@ func NormalizeServerURL(s string) string {
 	return s
 }
 
+// ErrUnsupportedProto is returned when the server speaks a strictly newer
+// wire protocol than this SDK. Retrying cannot fix it; the reconnecting
+// supervisor treats it as permanent.
+var ErrUnsupportedProto = errors.New("etunnel: server protocol too new")
+
 // Connect establishes a reverse tunnel and returns it once the server has
 // assigned a public hostname.
 func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
@@ -212,6 +217,28 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "bad welcome")
 		return nil, err
+	}
+	// Welcome.Proto gate (#14 F#5): the server rejects hello.proto != 1;
+	// the client must be symmetric - accepting any proto then decoding v2
+	// traffic as v1 produces silent garbage, worse than a clean error.
+	wel, _ := msg.(*protocol.Welcome)
+	protoOf := func() int {
+		if wel == nil {
+			return -1
+		}
+		return wel.Proto
+	}
+	// The server answers a rejected hello with an ErrorMsg (APIError path),
+	// which the switch below handles as-is; only a Welcome may be gated.
+	// 0 (field omitted on the wire) counts as v1: the reference server
+	// always sends 1, but lenient v1 peers may omit it. Only a strictly
+	// newer protocol must be rejected - decoding v2 traffic as v1 yields
+	// silent garbage.
+	if _, isErr := msg.(*protocol.ErrorMsg); !isErr && (wel == nil || protoOf() < 0 || protoOf() > protocol.ProtoVersion) {
+		tcancel()
+		_ = ws.Close(websocket.StatusProtocolError, "unsupported proto")
+		return nil, fmt.Errorf("%w (type=%T proto=%d, want proto %d)",
+			ErrUnsupportedProto, msg, protoOf(), protocol.ProtoVersion)
 	}
 	switch m := msg.(type) {
 	case *protocol.Welcome:
