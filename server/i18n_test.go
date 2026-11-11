@@ -172,3 +172,47 @@ func TestSetLangCookieAndRedirect(t *testing.T) {
 		t.Fatalf("foreign referer must redirect home, got %q", loc)
 	}
 }
+
+// TestPricingAndBillingRenderedInLanguage: the payments-facing pages
+// (pricing table + billing success) honor the negotiated language and do
+// not leak the English reference copy for the same keys.
+func TestPricingAndBillingRenderedInLanguage(t *testing.T) {
+	s, err := New(Config{
+		Domain: "t.test", WSPath: "/tunnel",
+		TLS:          TLSConfig{Mode: TLSModeHTTP},
+		AccountsFile: filepath.Join(t.TempDir(), "a.json"),
+		Tiers:        DefaultTiers(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pricing page: German via cookie.
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/pricing", nil)
+	r.AddCookie(&http.Cookie{Name: "et_lang", Value: "de"})
+	s.handlePricing(rec, r)
+	body := rec.Body.String()
+	if !strings.Contains(body, "Preise") {
+		t.Errorf("pricing page not translated (missing German %q)", "Preise")
+	}
+	if strings.Contains(body, "<h1>Pricing</h1>") {
+		t.Error("pricing page leaked the English h1 alongside the German one")
+	}
+	if !strings.Contains(body, "langsw") {
+		t.Error("language switcher missing on pricing page")
+	}
+
+	// Billing success page: German via cookie.
+	rec = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/billing/success", nil)
+	r.AddCookie(&http.Cookie{Name: "et_lang", Value: "de"})
+	s.writeSuccessKeyPage(rec, r, "starter", "u@example.com", "et_test_key")
+	body = rec.Body.String()
+	if !strings.Contains(body, "Zahlung eingegangen") {
+		t.Error("billing success page not translated (missing German bill.h1)")
+	}
+	if strings.Contains(body, "Payment received") {
+		t.Error("billing success page leaked the English bill.h1")
+	}
+}
