@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.5.0 — 2026-11-11
+
+Pentest-hardening & SDK quality release. Full external penetration test
+findings fixed; all 20 SDKs reviewed line-by-line, 11 HIGH issues closed.
+
+### Server (etunneld)
+
+- **Reserved paths no longer shadow tunnel subdomains** (#44/#35): `/login`,
+  `/healthz`, `/api/*`, `/pricing`, `/me`, `/tunnel`, `/webhooks/*` now serve
+  the tunnelled service on tunnel subdomains; etunneld's own endpoints live
+  on the base domain only.
+- **Non-reflecting 80→443 redirect** (#44/#37): unknown Host headers get 421,
+  base hosts redirect to the canonical domain.
+- **Security headers** on etunneld's own pages (#44/#41): HSTS, XFO DENY,
+  nosniff, CSP frame-ancestors.
+- **Per-IP quota keys expire** (#43/#36): rolling 24h TTL; all six
+  handshake-rejection paths release their slot; counters DEL at zero
+  (Redis via Lua, atomically).
+- **Webhook idempotency + buyer-owned activation** (#45/#39/#40).
+- **No /assets/ directory listing; base-domain access log; admin auth
+  logging** (#46/#38/#42).
+
+### SDKs (all 20 reviewed)
+
+- **C++/Elixir now verify TLS by default** (#57/#49, #58/#50) — previously
+  effectively `verify_none` (MITM exposure).
+- C: sends queued through the service loop (UAF fix), escaped hello,
+  owned stream slots, bounded writes (#60/#48).
+- C#: serialized WS sends, no HttpClient leaks, working one-shot signals
+  (#66/#54).
+- Rust/Swift/Dart: unblocked sends, no force-unwrap crashes, clamped
+  frames (#67/#53).
+- Elixir: working resume chain + structured errors + real close (#58/#50).
+- JVM: Kotlin close, welcome timeouts, Java escape order, NO_PROXY,
+  shared clients, 1.4.0→1.5.0 alignment (#59/#51).
+- Script pack: node self-dep, lua rockspec/unescape, ruby library-safety,
+  php metadata, perl regex, ts/deno types (#61/#52).
+- Go SDK: context cancelled on every error path, protocol constants for
+  permanent errors (`subdomain_invalid`), reconnect docs (#56/#55).
+
 ## v1.4.0 — 2026-11-10
 
 Multi-instance cluster layer. One binary, three modes; **single-node
