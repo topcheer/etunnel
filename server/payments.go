@@ -286,14 +286,17 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
-	tier, ok := s.cfg.Tiers[req.Tier]
-	if !ok {
+	shortCents, isShort := shortDomainSKUCents(req.Tier, false)
+	tier, isTier := s.cfg.Tiers[req.Tier]
+	if !isTier && !isShort {
 		http.Error(w, `{"error":"unknown tier"}`, http.StatusBadRequest)
 		return
 	}
-	if _, buyable := s.tierPriceCents(req.Tier); !buyable {
-		http.Error(w, `{"error":"tier not purchasable"}`, http.StatusBadRequest)
-		return
+	if isTier {
+		if _, buyable := s.tierPriceCents(req.Tier); !buyable {
+			http.Error(w, `{"error":"tier not purchasable"}`, http.StatusBadRequest)
+			return
+		}
 	}
 	// Email is optional in the request: the signed-in session supplies it.
 	if req.Email != "" && !strings.Contains(req.Email, "@") {
@@ -313,6 +316,13 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cents, _ := s.tierPriceCents(req.Tier)
+	if isShort {
+		cents = shortCents
+	}
+	productName := req.Tier
+	if isTier {
+		productName = tier.Name
+	}
 	base := s.billing.PublicBaseURL
 
 	var (
@@ -325,7 +335,7 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"card payments not configured"}`, http.StatusServiceUnavailable)
 			return
 		}
-		payURL, err = s.stripeCheckout(base, req.Email, req.Tier, tier.Name, cents)
+		payURL, err = s.stripeCheckout(base, req.Email, req.Tier, productName, cents)
 	case "paypal":
 		if s.billing.PayPalClientID == "" {
 			http.Error(w, `{"error":"paypal not configured"}`, http.StatusServiceUnavailable)
@@ -338,6 +348,9 @@ func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cryptoCents, _ := s.cryptoPriceCents(req.Tier)
+		if isShort {
+			cryptoCents, _ = shortDomainSKUCents(req.Tier, true)
+		}
 		payURL, err = s.nowpaymentsInvoice(base, req.Email, req.Tier, cryptoCents)
 	default:
 		http.Error(w, `{"error":"provider must be stripe or paypal"}`, http.StatusBadRequest)
@@ -427,9 +440,14 @@ func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
 }
 
 // activate creates or renews the account for email; returns the API key.
+// Products with the "short-domain-" prefix are premium subdomain purchases
+// and never touch the tier.
 func (s *Server) activate(email, tier string) (string, error) {
 	if email == "" || tier == "" {
 		return "", errors.New("missing email or tier in payment record")
+	}
+	if strings.HasPrefix(tier, "short-domain-") {
+		return s.activateShortDomain(email, tier)
 	}
 	if _, ok := s.cfg.Tiers[tier]; !ok {
 		return "", fmt.Errorf("unknown tier %q", tier)
@@ -456,6 +474,38 @@ func (s *Server) activate(email, tier string) (string, error) {
 	}
 	s.accounts.Mutate(email, func(a *Account) { a.ExpiresAt = expires })
 	s.notifyPayment(email, tier)
+	return acct.APIKey, nil
+}
+
+// activateShortDomain grants the premium short-subdomain entitlement for
+// one subscription period. A Free account can buy one without a tier, so
+// the account is created on demand.
+func (s *Server) activateShortDomain(email, product string) (string, error) {
+	n := 0
+	for _, c := range strings.TrimPrefix(product, "short-domain-") {
+		if c < '0' || c > '9' {
+			n = 0
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n < 1 || n > 3 {
+		return "", fmt.Errorf("invalid short-domain product %q", product)
+	}
+	expires := time.Now().Add(subscriptionPeriod)
+	acct, ok := s.accounts.LookupEmail(email)
+	if !ok {
+		var err error
+		acct, err = s.accounts.Create(email, "free")
+		if err != nil {
+			return "", err
+		}
+	}
+	s.accounts.Mutate(email, func(a *Account) { a.PaidShort = &ShortDomain{Len: n, ExpiresAt: expires} })
+	if js, ok := s.accounts.(jsonSaver); ok {
+		_ = js.saveLockedSafe()
+	}
+	s.notifyPayment(email, product)
 	return acct.APIKey, nil
 }
 

@@ -37,6 +37,13 @@ type accountBackend interface {
 	PruneInactive(olderThan time.Duration, now time.Time) int
 }
 
+// ShortDomain is the purchased entitlement to register premium short
+// subdomains (1-3 characters). Len is the maximum name length covered.
+type ShortDomain struct {
+	Len       int       `json:"len"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 // Account is a registered (paid-plan) identity identified by API key.
 type Account struct {
 	APIKey  string    `json:"apiKey"`
@@ -53,6 +60,10 @@ type Account struct {
 	// (free tier, or an account granted a tier manually). The reaper in
 	// Server.startTierReaper downgrades expired accounts to free.
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// PaidShort is the purchased entitlement to register 1-3 character
+	// subdomains (one-time purchase per subscription period; Free accounts
+	// can hold one without a paid tier).
+	PaidShort *ShortDomain `json:"paidShort,omitempty"`
 	// LapsedAt records when a paid subscription expired (zero = never paid).
 	// It survives the downgrade to free so retention logic can keep the
 	// account: a lapsed customer must never be garbage-collected like an

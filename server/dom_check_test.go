@@ -18,6 +18,10 @@ func TestDomainCheckEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.accounts.Mutate("a@x.com", func(a *Account) { a.Domains = []string{"taken-sub"} })
+	// premium gate: 3-char names need the entitlement before the dup probe
+	if _, err := s.activate("a@x.com", "short-domain-3"); err != nil {
+		t.Fatal(err)
+	}
 
 	get := func(q string, cookieEmail string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, "/me/domain-check"+q, nil)
@@ -69,6 +73,10 @@ func TestDomainAddRejectsCrossAccountDuplicate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// "dup" is a 3-char premium name: grant the buyer the entitlement
+	if _, err := s.activate("a@x.com", "short-domain-3"); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"email":"a@x.com","domain":"dup","remove":false}`
 	r := httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(body))
 	r.AddCookie(s.sessionCookie("a@x.com"))
@@ -85,12 +93,12 @@ func TestDomainAddRejectsCrossAccountDuplicate(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate: got %d %s, want 409", rec.Code, rec.Body.String())
 	}
-	// single character now valid
+	// single character is premium like all 1-3 char names: 402 without the entitlement
 	r = httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(`{"email":"b@x.com","domain":"z","remove":false}`))
 	r.AddCookie(s.sessionCookie("b@x.com"))
 	rec = httptest.NewRecorder()
 	s.handleMeAction(rec, r, "domain")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("1-char: %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusPaymentRequired || !strings.Contains(rec.Body.String(), "short-domain-1") {
+		t.Fatalf("1-char: got %d %s", rec.Code, rec.Body.String())
 	}
 }
