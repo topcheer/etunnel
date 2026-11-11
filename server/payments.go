@@ -259,7 +259,7 @@ async function pay(btn, tier, provider){
 </body></html>`
 
 	tpl := template.Must(template.New("p").Funcs(template.FuncMap{
-		"T": func(key string) string { return T(lang, key) },
+		"T": func(key string) template.HTML { return template.HTML(T(lang, key)) },
 	}).Parse(pricingHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{

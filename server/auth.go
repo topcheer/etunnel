@@ -131,13 +131,23 @@ func (s *Server) oauthEnabled(p string) bool {
 	return false
 }
 
-// state cookie guards the code-flow redirect (CSRF).
-func (s *Server) setStateCookie(w http.ResponseWriter) string {
+// state cookie guards the code-flow redirect (CSRF). SameSite is
+// provider-specific: redirect flows (google/gitlab/github) return via a
+// top-level GET navigation, where Lax is sufficient and, critically,
+// immune to third-party-cookie blocking (Chrome tracking protection drops
+// SameSite=None cookies on the cross-site callback, which broke every
+// redirect provider after 8778985 set None for Apple). Apple alone needs
+// None because form_post submits a cross-site POST.
+func (s *Server) setStateCookie(w http.ResponseWriter, provider string) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	st := base64.RawURLEncoding.EncodeToString(b)
+	sameSite := http.SameSiteLaxMode
+	if provider == "apple" {
+		sameSite = http.SameSiteNoneMode // Apple form_post is a cross-site POST
+	}
 	http.SetCookie(w, &http.Cookie{Name: "et_oauth_state", Value: st, Path: "/",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode, MaxAge: 600}) // None: Apple form_post is a cross-site POST
+		HttpOnly: true, Secure: true, SameSite: sameSite, MaxAge: 600})
 	return st
 }
 
@@ -162,7 +172,7 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provid
 		return
 	}
 	base := s.billing.PublicBaseURL
-	st := s.setStateCookie(w)
+	st := s.setStateCookie(w, provider)
 	var authURL string
 	switch provider {
 	case "google":

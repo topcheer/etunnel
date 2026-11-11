@@ -132,7 +132,7 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;marg
 
 	lang := pickLang(r)
 	tpl := template.Must(template.New("l").Funcs(template.FuncMap{
-		"T": func(key string) string { return T(lang, key) },
+		"T": func(key string) template.HTML { return template.HTML(T(lang, key)) },
 	}).Parse(loginHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{"Providers": providers, "Lang": lang, "Dir": langDir(lang), "LangSwitch": template.HTML(langSwitchHTML(lang))})
@@ -335,7 +335,7 @@ function copyKey(btn){
 		expiresLine = strings.ReplaceAll(tr("me.plan.expires"), "{date}", lbl)
 	}
 	tpl := template.Must(template.New("m").Funcs(template.FuncMap{
-		"T": func(key string) string { return T(lang, key) },
+		"T": func(key string) template.HTML { return template.HTML(T(lang, key)) },
 	}).Parse(meHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{
