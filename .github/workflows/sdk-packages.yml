@@ -80,6 +80,17 @@ jobs:
             swift --version
           fi
 
+      # scala 2.13: not preinstalled on ubuntu runners (kotlinc is);
+      # SDKMAN is the canonical installer - matches build.str's 2.13.14
+      - name: Install Scala 2.13 (SDKMAN)
+        if: runner.os == 'Linux'
+        run: |
+          curl -s https://get.sdkman.io | bash
+          source ~/.sdkman/bin/sdkman-init.sh
+          sdk install scala 2.13.14
+          scalac -version
+          echo ~/.sdkman/candidates/scala/current/bin >> "$GITHUB_PATH"
+
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
