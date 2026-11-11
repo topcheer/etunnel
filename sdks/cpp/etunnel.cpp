@@ -303,17 +303,18 @@ int main(int argc, char **argv) {
             } else {
                 ctx->set_verify_mode(websocketpp::lib::asio::ssl::context::verify_peer);
                 ctx->set_default_verify_paths();
+                SSL_CTX *ssl = ctx->native_handle();
                 // Optional extra trust root for internal CAs (#49); also what
                 // the hostname regression test uses to control the chain.
+                // Native OpenSSL call: websocketpp's load_verify_file wrapper
+                // does not compile against the Boost.Asio in noble 1.83
+                // (binds a non-const error_code& from an rvalue).
                 if (const char *ca = getenv("ETUNNEL_CA_FILE"); ca && *ca) {
-                    websocketpp::lib::error_code ec;
-                    ctx->load_verify_file(ca, ec);
-                    if (ec) {
-                        std::cerr << "etunnel: ETUNNEL_CA_FILE (" << ca << "): " << ec.message()
-                                  << std::endl;
+                    if (SSL_CTX_load_verify_locations(ssl, ca, nullptr) != 1) {
+                        std::cerr << "etunnel: ETUNNEL_CA_FILE (" << ca
+                                  << "): invalid or unreadable" << std::endl;
                     }
                 }
-                SSL_CTX *ssl = ctx->native_handle();
                 X509_VERIFY_PARAM *param = SSL_CTX_get0_param(ssl);
                 // set1_host compares a DNS name - an IP literal would never
                 // match an IP SAN and every dial to 127.0.0.1 would fail.
