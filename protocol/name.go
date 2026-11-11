@@ -41,11 +41,28 @@ var reservedSubdomains = map[string]bool{
 var ErrBadSubdomain = errors.New("etunnel: invalid subdomain")
 
 // RandomSubdomain generates a human-readable random subdomain such as
-// "quick-fox-42".
+// "quick-fox-k3f9qz". The word pair is memorable; the 6-char suffix from
+// a 30-symbol no-lookalike alphabet carries the entropy. Total keyspace
+// 48*48*30^6 ≈ 2^40.6: the old word-word-NN format (2^17.8, ~230k names)
+// could be exhaustively scanned in under an hour, which defeated the
+// purpose for anonymous users who do not want their URL guessed.
 func RandomSubdomain() string {
 	a := adjectives[randInt(len(adjectives))]
 	n := nouns[randInt(len(nouns))]
-	return fmt.Sprintf("%s-%s-%d", a, n, randInt(100))
+	return a + "-" + n + "-" + randomSuffix(6)
+}
+
+// suffixAlphabet is base32 without 0,1,o,i,l (lookalikes) so a spoken or
+// hand-copied name is unambiguous.
+const suffixAlphabet = "23456789abcdefghjkmnpqrstvwxyz"
+
+// randomSuffix returns n chars from suffixAlphabet using crypto/rand.
+func randomSuffix(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = suffixAlphabet[randInt(len(suffixAlphabet))]
+	}
+	return string(b)
 }
 
 func randInt(n int) int {
