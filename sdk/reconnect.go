@@ -158,6 +158,10 @@ func (r *ReconnectingTunnel) supervise() {
 // server's invalid-name code is "subdomain_invalid" (the previous literal
 // "subdomain_bad" never matched what the server sends).
 func isPermanent(err error) bool {
+	// a strictly-newer server protocol is unfixable by retrying (#14 F#5)
+	if errors.Is(err, ErrUnsupportedProto) {
+		return true
+	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.Code {
