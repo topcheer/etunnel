@@ -48,7 +48,10 @@ func TestDomainAddAcceptsShortAndExplainsRejects(t *testing.T) {
 		return rec
 	}
 
-	// two characters now accepted (was >= 3; users typed "ab" and hit 400)
+	// two characters are premium since the short-domain pricing landed
+	if _, err := s.activate("u@x.com", "short-domain-2"); err != nil {
+		t.Fatal(err)
+	}
 	if rec := post("ab"); rec.Code != http.StatusOK {
 		t.Fatalf("2-char subdomain: got %d %s", rec.Code, rec.Body.String())
 	}
@@ -56,8 +59,8 @@ func TestDomainAddAcceptsShortAndExplainsRejects(t *testing.T) {
 	if rec := post("my-sub.t.etun.uk"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "my-sub") {
 		t.Fatalf("full hostname: got %d %s", rec.Code, rec.Body.String())
 	}
-	// single characters are valid since the 1-63 relaxation
-	if rec := post("a"); rec.Code != http.StatusOK {
+	// single characters are premium (1-3 chars) since the pricing landed
+	if rec := post("a"); rec.Code != http.StatusPaymentRequired || !strings.Contains(rec.Body.String(), `"product":"short-domain-1"`) {
 		t.Fatalf("1-char: got %d %s", rec.Code, rec.Body.String())
 	}
 	// illegal characters get the no-dots explanation, echoed via writeJSON

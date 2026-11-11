@@ -88,7 +88,7 @@ func TestPortalActions(t *testing.T) {
 	}
 
 	// domain add within pro quota (5), then quota refusal after downgrade
-	for i, d := range []string{"alpha", "beta", "gamma", "delta", "eps", "zeta"} {
+	for i, d := range []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"} {
 		w := authedReq(t, s, "u@x.com", "/me/domain", `{"email":"u@x.com","domain":"`+d+`"}`)
 		if i < 5 && w.Code != 200 {
 			t.Fatalf("add %s: %d %s", d, w.Code, w.Body.String())

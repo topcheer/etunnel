@@ -239,6 +239,10 @@ body{padding-bottom:4rem}
     <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">{{T "me.dom.none"}}</span>{{end}}</div>
     <div class="row"><input id="dom" placeholder="my-sub" style="flex:1 1 12rem" oninput="domTyped()"><button class="btn" id="domAdd" onclick="addDom()">{{T "me.dom.add"}}</button><button class="btn ghost" onclick="delDom()">{{T "me.dom.remove"}}</button></div>
     <p class="hint" id="domStatus" style="margin-top:.5rem;min-height:1.1rem"></p>
+    <div class="row" id="domBuyWrap" style="display:none;margin-top:.3rem">
+      <button class="btn" style="font-size:.78rem;padding:.4rem .8rem" onclick="domBuy('crypto')">{{T "me.dom.buy"}} &middot; crypto</button>
+      <button class="btn ghost" style="font-size:.78rem;padding:.4rem .8rem" onclick="domBuy('paypal')">{{T "me.dom.buy"}} &middot; PayPal</button>
+    </div>
   </section>
   <section class="card wide zone">
     <h2>{{T "me.zone.h"}}</h2>
@@ -278,10 +282,24 @@ function domTyped(){
       const res = await fetch('/me/domain-check?d=' + encodeURIComponent(v));
       const j = await res.json();
       if (res.status === 400) { domSt().textContent = j.reason === 'invalid' ? '{{.DomInvalid}}' : ''; document.getElementById('domAdd').disabled = j.reason === 'invalid'; return; }
+      if (j.premium) { domSt().textContent = j.domain + ': ' + j.price_cents/100 + ' USD ' + '{{.DomPremium}}'; document.getElementById('domBuyWrap').style.display = 'flex'; window.domProduct = j.product; document.getElementById('domAdd').disabled = false; return; }
+      document.getElementById('domBuyWrap').style.display = 'none'; window.domProduct = null;
       if (j.ok) { domSt().textContent = j.domain + ': {{.DomFree}}'; document.getElementById('domAdd').disabled = false; }
       else { domSt().textContent = j.domain + ': {{.DomTaken}}'; document.getElementById('domAdd').disabled = true; }
     } catch (e) { /* advisory only: leave the button enabled */ }
   }, 2000);
+}
+// Buy the premium short-domain entitlement via checkout, then return to /me.
+async function domBuy(provider){
+  if (!window.domProduct) return;
+  try {
+    const res = await fetch('/api/billing/checkout', {method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({tier: window.domProduct, provider})});
+    const data = await res.json();
+    if (res.ok && data.url) { location.href = data.url; return; }
+  } catch (e) { /* fall through */ }
+  const el = document.getElementById('msg'); el.className = 'msg err'; el.textContent = '{{.MsgFailed}}';
 }
 function copyKey(btn){
   const v = document.getElementById('apikey').value;
@@ -341,6 +359,7 @@ function copyKey(btn){
 		"DomTaken":       tr("me.dom.taken"),
 		"DomFree":        tr("me.dom.free"),
 		"DomInvalid":     tr("me.dom.invalid"),
+		"DomPremium":     tr("me.dom.premium"),
 		"Lang":           lang, "Dir": langDir(lang),
 		"LangSwitch": template.HTML(langSwitchHTML(lang)),
 	})
@@ -430,13 +449,25 @@ func (s *Server) domainAction(w http.ResponseWriter, acct *Account, rawDomain st
 		http.Error(w, `{"error":"subdomain already taken by another account"}`, http.StatusConflict)
 		return
 	}
+	// Premium short subdomains (1-3 chars) need a purchased entitlement;
+	// Free accounts can buy one without a paid tier.
+	if price, isShort := shortDomainPriceCents(dom, false); isShort && !accountMayUseShortDomain(acct, dom, time.Now()) {
+		writeJSON(w, http.StatusPaymentRequired, map[string]any{
+			"error":       "premium subdomain: purchase required",
+			"product":     shortDomainProductID(dom),
+			"price_cents": price,
+		})
+		return
+	}
 	owned := false
 	_ = s.accounts.Mutate(acct.Email, func(a *Account) {
 		if containsStr(a.Domains, dom) {
 			owned = true
 			return
 		}
-		if len(a.Domains) >= tier.CustomDomains {
+		// a paid short-domain entitlement also lifts the tier's domain-count
+		// cap for that one name (Free would otherwise allow 0)
+		if len(a.Domains) >= tier.CustomDomains && !accountMayUseShortDomain(a, dom, time.Now()) {
 			return
 		}
 		a.Domains = append(a.Domains, dom)
@@ -447,6 +478,57 @@ func (s *Server) domainAction(w http.ResponseWriter, acct *Account, rawDomain st
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "domain " + dom + " added"})
+}
+
+// shortDomainPriceCents prices premium short subdomains (1-3 chars), one
+// time per subscription period on the account that buys them: 1 char $3,
+// 2 chars $2, 3 chars $1. Longer subdomains are free (0, false). Crypto
+// checkout floors near $2, so the 3-char $1 price is PayPal/card only -
+// crypto pays the 2-char $2 price at minimum, documented on the page.
+func shortDomainPriceCents(dom string, crypto bool) (int64, bool) {
+	switch len(dom) {
+	case 1:
+		return 300, true
+	case 2:
+		return 200, true
+	case 3:
+		if crypto {
+			return 200, true
+		}
+		return 100, true
+	}
+	return 0, false
+}
+
+// shortDomainProductID is the checkout product id for a premium short
+// domain purchase ("short-domain-<n>" where n is the name length).
+func shortDomainProductID(dom string) string { return "short-domain-" + fmt.Sprintf("%d", len(dom)) }
+
+// shortDomainSKUCents maps a checkout product id back to its price in cents
+// (PayPal/card; crypto floors at $2).
+func shortDomainSKUCents(product string, crypto bool) (int64, bool) {
+	switch product {
+	case "short-domain-1":
+		return 300, true
+	case "short-domain-2":
+		return 200, true
+	case "short-domain-3":
+		if crypto {
+			return 200, true
+		}
+		return 100, true
+	}
+	return 0, false
+}
+
+// accountMayUseShortDomain reports whether the account may use a premium
+// short subdomain: it holds a PaidShort entitlement whose expiry covers now.
+// (PaidShort outlives a paid tier to the end of its period; a Free account
+// can buy a short domain without a subscription.)
+func accountMayUseShortDomain(a *Account, dom string, now time.Time) bool {
+	// exact length: buying "short-domain-2" unlocks 2-char names only -
+	// a $2 entitlement must not grant the $3 single-character tier.
+	return a != nil && a.PaidShort != nil && len(dom) == a.PaidShort.Len && now.Before(a.PaidShort.ExpiresAt)
 }
 
 // subdomainTakenBy reports whether dom is registered on an account other
@@ -482,6 +564,12 @@ func (s *Server) handleDomainCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.subdomainTakenBy(session, dom) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "reason": "taken", "domain": dom})
+		return
+	}
+	acct, _ := s.accounts.LookupEmail(session)
+	if price, isShort := shortDomainPriceCents(dom, false); isShort && !accountMayUseShortDomain(acct, dom, time.Now()) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "domain": dom,
+			"premium": true, "price_cents": price, "product": shortDomainProductID(dom)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "domain": dom})
