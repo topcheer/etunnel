@@ -1,8 +1,13 @@
 # etunnel for Swift
 
-[![SwiftPM](https://img.shields.io/badge/SwiftPM-compatible-orange?logo=swift)](https://github.com/topcheer/etunnel)
+[![SwiftPM](https://img.shields.io/badge/SwiftPM-compatible-orange?logo=swift)](https://img.shields.io/badge/platforms-macOS%20%2B%20iOS-blue)](https://github.com/topcheer/etunnel)
 
 Foundation-only single-file SDK (URLSession WebSocket).
+
+> **Apple platforms only.** The SDK builds on `URLSessionWebSocketTask`,
+> which the Linux swift-corelibs-foundation has never implemented - `swift
+> build` on Linux cannot work (#90). Compile verification runs on the macOS
+> CI job; Linux users, see the other 19 SDKs.
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
@@ -14,7 +19,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 swift build   # SPM: .package(url:..., from: "1.0.0")
 ```
 
-Requires Swift 5.9+.
+Requires Swift 5.9+ on macOS 13+ / iOS 16+.
 
 ## CLI
 
