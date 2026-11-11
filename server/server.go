@@ -37,8 +37,9 @@ type Server struct {
 	billing      BillingConfig
 	tg           telegramConfig
 	auth         oauthConfig
-	counter      Counter // per-IP / per-account tunnel limits (mem or redis)
-	router       Router  // cluster routing (nil = single node)
+	counter      Counter        // per-IP / per-account tunnel limits (mem or redis)
+	ledger       *sessionLedger // session audit rows in PG (nil = journal-only, #69)
+	router       Router         // cluster routing (nil = single node)
 	draining     atomic.Bool
 }
 
@@ -188,6 +189,18 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	} else {
 		s.applyCluster(ctx, cc, closers)
+	}
+	// Session ledger (#69 Tier 2): same DSN knob as the account store, but
+	// independent of cluster mode - a single node with ETUNNEL_PG_DSN gets
+	// session rows too. No DSN: ledger stays nil (nil-method no-ops) and the
+	// journal lines are the only record.
+	if dsn := os.Getenv("ETUNNEL_PG_DSN"); dsn != "" {
+		lg, err := newSessionLedger(dsn)
+		if err != nil {
+			return err
+		}
+		s.ledger = lg
+		defer lg.Close()
 	}
 	go func() {
 		<-ctx.Done()
