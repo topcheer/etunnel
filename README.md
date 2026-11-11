@@ -40,7 +40,7 @@ Live deployment: `wss://t.etun.uk/tunnel`, tunnels at
 
 ```mermaid
 flowchart LR
-  V["visitor<br/>https://quiet-frog-42.t.etun.uk"] -->|HTTPS 443| E["etunneld<br/>wildcard TLS<br/>plan limits"]
+  V["visitor<br/>https://quiet-frog-k3f9qz.t.etun.uk"] -->|HTTPS 443| E["etunneld<br/>wildcard TLS<br/>plan limits"]
   E -->|"wss /tunnel<br/>one multiplexed socket"| C["SDK client<br/>inside your process"]
   C -->|HTTP/1.1| A["localhost:3000<br/>your service"]
   E -.->|"101 upgrade<br/>raw byte pipe"| A
@@ -60,7 +60,7 @@ sequenceDiagram
     Edge-->>SDK: welcome {url, hostname, plan, ttl}
     SDK-->>App: public URL
 
-    V->>Edge: GET /webhook (Host: quiet-frog-42.t.etun.uk)
+    V->>Edge: GET /webhook (Host: quiet-frog-k3f9qz.t.etun.uk)
     Edge->>SDK: {type: req, streamId: 1} + body frames
     SDK->>Local: GET /webhook
     Local-->>SDK: 200 OK + body
@@ -78,7 +78,7 @@ plan TTL expires) the subdomain is released immediately.
 
 ```sh
 npx @easytunnel/et-sdk 3000
-#   TUNNEL_URL: https://quiet-frog-42.t.etun.uk
+#   TUNNEL_URL: https://quiet-frog-k3f9qz.t.etun.uk
 #   plan: Free, expires in 4h
 ```
 
