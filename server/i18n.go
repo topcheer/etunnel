@@ -123,6 +123,14 @@ func normLang(tag string) string {
 var dicts = map[string]map[string]string{}
 
 func registerDict(lang string, d map[string]string) {
+	// Overlay the legal-page chrome keys (i18n_legal.go) at registration
+	// time: independent of Go's file-order init sequencing, and visible to
+	// TestI18nCompleteness like every other key.
+	if lk := legalKeys[lang]; lk != nil {
+		for k, v := range lk {
+			d[k] = v
+		}
+	}
 	dicts[lang] = d
 }
 
