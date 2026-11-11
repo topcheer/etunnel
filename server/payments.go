@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"net/http"
@@ -112,9 +113,13 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 	lang := pickLang(r)
 	tr := func(key string) string { return T(lang, key) }
 	user := s.sessionEmail(r)
+	// Translation values carry trusted inline HTML (<b>, <a>) per the i18n
+	// contract; the substituted {user} email is untrusted and stays escaped.
+	// The finished line goes to the template as template.HTML so the wrapper
+	// renders verbatim while html.EscapeString neutralises the email.
 	subLine := tr("price.sub.anon")
 	if user != "" {
-		subLine = strings.ReplaceAll(strings.ReplaceAll(tr("price.sub.user"), "{user}", user), "{account}", tr("foot.account"))
+		subLine = strings.ReplaceAll(strings.ReplaceAll(tr("price.sub.user"), "{user}", html.EscapeString(user)), "{account}", tr("foot.account"))
 	}
 	for _, id := range ids {
 		t := s.cfg.Tiers[id]
@@ -231,7 +236,7 @@ async function pay(btn, tier, provider){
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = tpl.Execute(w, map[string]any{
 		"Rows": rows, "Domain": s.cfg.Domain, "User": user,
-		"SubLine": subLine, "Lang": lang, "Dir": langDir(lang),
+		"SubLine": template.HTML(subLine), "Lang": lang, "Dir": langDir(lang),
 		"LangSwitch":     template.HTML(langSwitchHTML(lang)),
 		"MsgCreating":    tr("price.pay.creating"),
 		"MsgSigninFirst": tr("price.pay.signinfirst"),
