@@ -83,30 +83,39 @@ jobs:
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
-          # Root cause on 2026-11-11 was DNS: the runner could not resolve
-          # ANY *.archive.ubuntu.com host (azure and canonical alike, Err:
-          # "Temporary failure resolving") while unrelated domains worked.
-          # Retrying or switching ubuntu.com mirrors cannot help when the
-          # name never resolves. Instead: probe a set of mirrors on distinct
-          # domains, rewrite the deb822 source to whichever resolves, force
-          # IPv4 (broken AAAA paths also surface as resolution failures),
-          # and bound every stage.
+          # Earlier apt burnouts were real (azure mirror unreachable), but
+          # the first probe here fed "host/path" strings to `getent hosts`,
+          # which can never resolve - the "selectively dead DNS" theory was
+          # an artifact of that bug (bare hostnames like github.com resolved
+          # fine all along). Probe HOSTNAMES ONLY, map to paths separately.
           set -x
           pick=""
-          for m in mirrors.edge.kernel.org/ubuntu mirror.math.princeton.edu/pub/ubuntu azure.archive.ubuntu.com/ubuntu; do
-            if timeout 10 getent hosts "$m" >/dev/null 2>&1; then pick="http://$m"; break; fi
+          for h in mirrors.edge.kernel.org mirror.rackspace.com azure.archive.ubuntu.com; do
+            if timeout 10 getent hosts "$h" >/dev/null 2>&1; then pick="$h"; break; fi
           done
           if [ -z "$pick" ]; then
             echo "no candidate mirror resolves - dumping diagnostics"
-            cat /etc/resolv.conf; timeout 10 getent hosts github.com || true
+            resolvectl status || true
             exit 1
           fi
-          echo "chosen mirror: $pick"
-          sudo sed -i "s|URIs: .*|URIs: $pick|" /etc/apt/sources.list.d/ubuntu.sources
+          case "$pick" in
+            mirrors.edge.kernel.org) uri="http://mirrors.edge.kernel.org/ubuntu" ;;
+            mirror.rackspace.com)   uri="http://mirror.rackspace.com/ubuntu" ;;
+            *)                      uri="http://azure.archive.ubuntu.com/ubuntu" ;;
+          esac
+          echo "chosen mirror: $uri"
+          sudo sed -i "s|URIs: .*|URIs: $uri|" /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get -o Acquire::ForceIPv4=true update
           sudo apt-get -o Acquire::ForceIPv4=true install -y php-cli lua5.4 luarocks elixir cmake \
             libwebsockets-dev libcurl4-openssl-dev libjson-c-dev \
             libwebsocketpp-dev libasio-dev
+          # apt-get update exits 0 even when every Ubuntu index failed and
+          # stale caches were silently reused (observed: "Temporary failure
+          # resolving" x4, then "primary mirror OK"). Verify the installable
+          # set instead of trusting the exit code.
+          for p in php-cli elixir luarocks libwebsockets-dev; do
+            apt-cache policy "$p" | grep -q 'Candidate:' || { echo "::error::index for $p is missing - mirror did not actually work"; exit 1; }
+          done
 
       # kotlin/scala/clojure: no runtime download here - runner egress to
       # GitHub-release/SDKMAN CDNs is currently 504ing; pack targets emit
