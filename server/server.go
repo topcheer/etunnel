@@ -77,6 +77,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/terms", s.handleTerms)
 	mux.HandleFunc("/privacy", s.handlePrivacy)
 	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/setlang", s.handleSetLang)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/me", s.handleMe)
 	mux.HandleFunc("/me/", func(w http.ResponseWriter, r *http.Request) {

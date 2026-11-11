@@ -89,9 +89,9 @@ func (s *Server) tierPriceCents(tierID string) (int64, bool) {
 func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 	type row struct {
 		ID, Name, Price string
-		TTL             string
-		Custom          int
-		BandwidthMbps   int
+		TTLLine         string
+		CustomLine      string
+		MbpsLine        string
 		Buyable         bool
 	}
 	var rows []row
@@ -109,6 +109,13 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 		}
 		return ids[i] < ids[j]
 	})
+	lang := pickLang(r)
+	tr := func(key string) string { return T(lang, key) }
+	user := s.sessionEmail(r)
+	subLine := tr("price.sub.anon")
+	if user != "" {
+		subLine = strings.ReplaceAll(strings.ReplaceAll(tr("price.sub.user"), "{user}", user), "{account}", tr("foot.account"))
+	}
 	for _, id := range ids {
 		t := s.cfg.Tiers[id]
 		cents, buyable := s.tierPriceCents(id)
@@ -116,14 +123,20 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 		if buyable {
 			p = fmt.Sprintf("$%d.%02d/mo", cents/100, cents%100)
 		}
+		plural := ""
+		if t.CustomDomains > 1 {
+			plural = "s"
+		}
 		rows = append(rows, row{ID: id, Name: t.Name, Price: p,
-			TTL: humanTTL(t.TTL), Custom: t.CustomDomains,
-			BandwidthMbps: t.Bandwidth / 1_000_000, Buyable: buyable})
+			TTLLine:    strings.ReplaceAll(tr("price.li.ttl"), "{ttl}", humanTTL(t.TTL)),
+			CustomLine: strings.ReplaceAll(strings.ReplaceAll(tr("price.li.custom"), "{n}", fmt.Sprintf("%d", t.CustomDomains)), "{s}", plural),
+			MbpsLine:   strings.ReplaceAll(tr("price.li.mb"), "{n}", fmt.Sprintf("%d", t.Bandwidth/1_000_000)),
+			Buyable:    buyable})
 	}
-	const pricingHTML = `<!doctype html><html><head><meta charset="utf-8">
+	const pricingHTML = `<!doctype html><html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="` + portalFavicon + `">
-<title>Pricing - etunnel</title>
+<title>{{T "price.title"}}</title>
 <style>` + portalCSS + `
 .wrap{max-width:1000px;margin:0 auto;padding:2.5rem 1.5rem}
 .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.2rem 0}
@@ -141,22 +154,22 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 <nav>
   <a class="logo" href="/" style="text-decoration:none">` + logoMark + ` <span>etunnel</span></a>
   <div class="links">
-    <a href="/#quickstart">quickstart</a>
-    <a href="/pricing">pricing</a>
-    <a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">docs</a>
-    {{if .User}}<a href="/logout">sign out</a>{{else}}<a href="/login">sign in</a>{{end}}
+    <a href="/#quickstart">{{T "nav.quickstart"}}</a>
+    <a href="/pricing">{{T "nav.pricing"}}</a>
+    <a href="https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md">{{T "nav.docs"}}</a>
+    {{if .User}}<a href="/logout">{{T "nav.signout"}}</a>{{else}}<a href="/login">{{T "nav.signin"}}</a>{{end}}
   </div>
 </nav>
 <main class="wrap">
 <header>
-  <h1>Plans</h1>
-  <p class="sub">{{if .User}}Signed in as <b>{{.User}}</b> &middot; <a href="/me">my account</a>{{else}}Sign in to subscribe. Free tunnels need no account at all.{{end}}</p>
+  <h1>{{T "price.h1"}}</h1>
+  <p class="sub">{{.SubLine}}</p>
 </header>
 
 {{if not .User}}
 <div class="card">
-  <p class="hint">Prices are per month. Your API key is issued the moment payment clears and appears in <a href="/me">your account</a>.</p>
-  <div class="row"><a class="btn" href="/login">Sign in to subscribe</a></div>
+  <p class="hint">{{T "price.hint"}}</p>
+  <div class="row"><a class="btn" href="/login">{{T "price.signin"}}</a></div>
 </div>
 {{end}}
 
@@ -166,14 +179,14 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
     <div class="name">{{.Name}}</div>
     <div class="price">{{.Price}}</div>
     <ul>
-      <li>{{.TTL}} tunnel lifetime</li>
-      <li>{{.Custom}} custom subdomain{{if gt .Custom 1}}s{{end}}</li>
-      <li>{{.BandwidthMbps}} Mbps</li>
-      <li>API key + account portal</li>
+      <li>{{.TTLLine}}</li>
+      <li>{{.CustomLine}}</li>
+      <li>{{.MbpsLine}}</li>
+      <li>{{T "price.li.key"}}</li>
     </ul>
     <div class="pay">
-      <button class="btn" onclick="pay(this,'{{.ID}}','crypto')">Crypto</button>
-      <button class="btn paypal" onclick="pay(this,'{{.ID}}','paypal')">PayPal</button>
+      <button class="btn" onclick="pay(this,'{{.ID}}','crypto')">{{T "price.pay.crypto"}}</button>
+      <button class="btn paypal" onclick="pay(this,'{{.ID}}','paypal')">{{T "price.pay.paypal"}}</button>
     </div>
   </section>
 {{end}}{{end}}
@@ -182,16 +195,17 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 <p class="msg" id="msg"></p>
 
 <section class="card">
-  <h2>Not ready to pay?</h2>
-  <p class="hint">Anonymous tunnels are free forever: a random subdomain, 4 hours, 1 Mbps. No account, no card, no email.</p>
+  <h2>{{T "price.nrp.h"}}</h2>
+  <p class="hint">{{T "price.nrp.p"}}</p>
   <pre><code>npx @easytunnel/et-sdk 3000</code></pre>
 </section>
 </main>
-<footer class="foot">{{.Domain}} &middot; <a href="/">home</a> &middot; <a href="https://github.com/topcheer/etunnel">github</a> &middot; <a href="/me">account</a> &middot; <a href="/terms">terms</a> &middot; <a href="/privacy">privacy</a></footer>
+<footer class="foot">{{.Domain}} &middot; <a href="/">{{T "foot.home"}}</a> &middot; <a href="https://github.com/topcheer/etunnel">github</a> &middot; <a href="/me">{{T "foot.account"}}</a> &middot; <a href="/terms">{{T "foot.terms"}}</a> &middot; <a href="/privacy">{{T "foot.privacy"}}</a>
+<div class="langrow">{{.LangSwitch}}</div></footer>
 <script>
 async function pay(btn, tier, provider){
   const msg = document.getElementById('msg');
-  btn.disabled = true; msg.className = 'msg'; msg.textContent = 'Creating payment...';
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '{{.MsgCreating}}';
   try {
     const res = await fetch('/api/billing/checkout', {method:'POST',
       headers:{'content-type':'application/json'},
@@ -203,7 +217,7 @@ async function pay(btn, tier, provider){
   } catch(e){
     msg.className = 'msg err';
     msg.textContent = (e.message === 'login required before subscribing (see /login)')
-      ? 'Sign in first — the account must exist before payment.'
+      ? '{{.MsgSigninFirst}}'
       : e.message;
     btn.disabled = false;
   }
@@ -211,9 +225,17 @@ async function pay(btn, tier, provider){
 </script>
 </body></html>`
 
-	tpl := template.Must(template.New("p").Parse(pricingHTML))
+	tpl := template.Must(template.New("p").Funcs(template.FuncMap{
+		"T": func(key string) string { return T(lang, key) },
+	}).Parse(pricingHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = tpl.Execute(w, map[string]any{"Rows": rows, "Domain": s.cfg.Domain, "User": s.sessionEmail(r)})
+	_ = tpl.Execute(w, map[string]any{
+		"Rows": rows, "Domain": s.cfg.Domain, "User": user,
+		"SubLine": subLine, "Lang": lang, "Dir": langDir(lang),
+		"LangSwitch":     template.HTML(langSwitchHTML(lang)),
+		"MsgCreating":    tr("price.pay.creating"),
+		"MsgSigninFirst": tr("price.pay.signinfirst"),
+	})
 }
 
 func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
@@ -407,16 +429,18 @@ func (s *Server) activate(email, tier string) (string, error) {
 // API key is only shown to the logged-in buyer (#9) — success URL ids leak
 // into browser history, Referer headers and proxy logs.
 func (s *Server) writeSuccessKeyPage(w http.ResponseWriter, r *http.Request, tier, email, key string) {
+	lang := pickLang(r)
+	tr := func(k string) string { return T(lang, k) }
+	planLine := strings.ReplaceAll(strings.ReplaceAll(tr("bill.plan"), "{plan}", tier), "{email}", email)
 	if se := s.sessionEmail(r); se == "" || se != email {
-		fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
-<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
-<p>Your API key is ready — log in at <a href="/me">/me</a> to view it.</p></body>`, tier, email)
+		_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>`+tr("bill.h1")+`</h2><p>`+planLine+`</p>
+`+tr("bill.key.ready")+`</body>`)
 		return
 	}
-	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
-<h2>Payment received 🎉</h2><p>Plan: <b>%s</b> for %s</p>
-<p>Your API key: <code>%s</code></p><p>Use it as <code>ETUNNEL_TOKEN</code>. Keep it safe.</p></body>`,
-		tier, email, key)
+	_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
+<h2>`+tr("bill.h1")+`</h2><p>`+planLine+`</p>
+`+strings.ReplaceAll(tr("bill.key.is"), "{key}", key)+`</body>`)
 }
 
 // paypalCaptureCompleted reports whether a captured PayPal order is fully
