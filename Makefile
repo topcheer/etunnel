@@ -43,6 +43,9 @@ verify: check-versions
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
 	cd $(Sdks)/java && javac -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
 ifeq ($(UNAME_S),Darwin)
+	# Swift gate is a full swift build (compile-level), not a parse check:
+	# swiftc -parse misses type/symbol errors (e.g. #108's NSWorkspace/poll
+	# regressions passed parse but broke the build). Compile catches them.
 	cd $(Sdks)/swift && swift build 2>&1 && echo "swift: ok"
 else
 	@echo "swift: skipped on Linux (Apple-only #90; verified by CI swift-macos job)"

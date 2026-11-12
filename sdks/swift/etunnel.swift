@@ -3,6 +3,9 @@
 //
 // Run: swift etunnel.swift 3000
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 let MAXP = 32768
 
@@ -331,7 +334,9 @@ public func etunnelLogin(_ server: String, openBrowser: ((String) -> Void)? = ni
     if let opener = openBrowser {
         opener(authUrl); opened = true
     } else if let u = URL(string: authUrl) {
+        #if canImport(AppKit)
         opened = NSWorkspace.shared.open(u) // macOS; on Linux the task below is the fallback
+        #endif
     }
     if !opened {
         #if os(macOS)
@@ -349,9 +354,7 @@ public func etunnelLogin(_ server: String, openBrowser: ((String) -> Void)? = ni
             throw NSError(domain: "etunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: "etunnel: login timed out"])
         }
         var fds = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        _ = withUnsafePointer(to: &fds) { ptr in
-            ptr.withMemoryRebound(to: pollfd.self, capacity: 1) { poll($0, 1, 1000) }
-        }
+        _ = poll(&fds, 1, 1000)
         var client = sockaddr_in(); var clen = socklen_t(MemoryLayout<sockaddr_in>.size)
         let cfd = accept(fd, sockaddr_cast(&client), &clen)
         guard cfd >= 0 else { continue }
