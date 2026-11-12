@@ -1,0 +1,23 @@
+name: swift-macos
+
+# Swift SDK compile gate (#90). Split from sdk-packages.yml: the macOS
+# free-tier runner pool can queue for many hours, which stalled the whole
+# sdk-packages run's conclusion (publishes complete fine - they only need
+# the Linux pack job - but the run never turned green). As its own workflow
+# the queue wait no longer blocks anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  swift-macos:
+    runs-on: macos-13
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build (Apple platforms gate)
+        working-directory: sdks/swift
+        run: |
+          swift build -c release
+          echo "swift: compile verified on macOS"
