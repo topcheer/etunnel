@@ -699,7 +699,13 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			} `json:"object"`
 		} `json:"data"`
 	}
-	_ = json.Unmarshal(body, &ev)
+	if err := json.Unmarshal(body, &ev); err != nil {
+		// a payload Stripe actually signed but we cannot parse must not
+		// vanish behind a 200 (#94): surface it, let Stripe retry/diagnose
+		s.logf("billing: stripe webhook payload parse failed: %v", err)
+		http.Error(w, "{\"error\":\"bad payload\"}", http.StatusBadRequest)
+		return
+	}
 	if ev.Type == "checkout.session.completed" && ev.Data.Object.PaymentStatus == "paid" {
 		if paymentEventSeen("stripe:" + ev.ID) {
 			s.logf("billing: stripe webhook replay suppressed (event %s)", ev.ID)
@@ -904,7 +910,11 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 			CustomID string `json:"custom_id"`
 		} `json:"resource"`
 	}
-	_ = json.Unmarshal(body, &ev)
+	if err := json.Unmarshal(body, &ev); err != nil {
+		s.logf("billing: paypal webhook payload parse failed: %v", err)
+		http.Error(w, "{\"error\":\"bad payload\"}", http.StatusBadRequest)
+		return
+	}
 	if ev.EventType == "PAYMENT.CAPTURE.COMPLETED" {
 		email, tier, _ := strings.Cut(ev.Resource.CustomID, ":")
 		if _, err := s.activate(email, tier); err != nil {
@@ -953,7 +963,9 @@ func (s *Server) nowpaymentsAPI(method, path string, payload any) (map[string]an
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var out map[string]any
-	_ = json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("nowpayments %s: unparseable body: %w", resp.Status, err)
+	}
 	if resp.StatusCode >= 300 {
 		if m, _ := out["message"].(string); m != "" {
 			return nil, errors.New(m)
