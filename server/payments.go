@@ -1130,6 +1130,9 @@ func (s *Server) startTierReaper(ctx context.Context) {
 }
 
 // reapExpiredTiers performs one pass and reports how many accounts lapsed.
+// The same pass reclaims expired premium short-subdomain entitlements (#95):
+// without it a dead PaidShort kept its 1-3 char name registered (blocking
+// buyers for up to 30 days) and /me kept listing it as if owned.
 func (s *Server) reapExpiredTiers(now time.Time) int {
 	expired := s.accounts.ExpiredPaid(now)
 	for _, email := range expired {
@@ -1140,7 +1143,31 @@ func (s *Server) reapExpiredTiers(now time.Time) int {
 			}
 		}
 	}
+	s.reapExpiredShortDomains(now)
 	return len(expired)
+}
+
+// reapExpiredShortDomains clears PaidShort entitlements past their expiry
+// and drops the 1-3 character names they covered (longer custom domains
+// stay: they belong to the tier quota, not the entitlement).
+func (s *Server) reapExpiredShortDomains(now time.Time) {
+	for _, a := range s.accounts.List() {
+		if a.PaidShort == nil || now.Before(a.PaidShort.ExpiresAt) {
+			continue
+		}
+		email := a.Email
+		s.accounts.Mutate(email, func(a *Account) {
+			kept := a.Domains[:0]
+			for _, d := range a.Domains {
+				if len(d) > 3 {
+					kept = append(kept, d)
+				}
+			}
+			a.Domains = kept
+			a.PaidShort = nil
+		})
+		s.logf("billing: short-domain entitlement expired for %s (names released)", email)
+	}
 }
 
 // humanTTL renders a tier lifetime compactly: 720h0m0s reads as "30d".
