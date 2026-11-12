@@ -69,6 +69,11 @@ func New(cfg Config) (*Server, error) {
 	}
 	// #93: persistence failures must reach the operator log, not vanish.
 	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }
+	// #18: a corrupt accounts file was preserved aside at load - say so,
+	// loudly, instead of silently running on an empty store.
+	if accounts.recoveryNote != "" {
+		s.logf("accounts: RECOVERED: %s", accounts.recoveryNote)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WSPath, s.handleTunnelWS)

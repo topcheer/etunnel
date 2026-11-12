@@ -82,9 +82,16 @@ type AccountStore struct {
 	// operator sees them (#93: these used to be silently discarded, which
 	// split in-memory state from disk across restarts).
 	onSaveErr func(error)
+	// recoveryNote, when set, describes a startup recovery event (#18):
+	// the accounts file was corrupt and got preserved aside; the server
+	// logs it loudly once it has a logger.
+	recoveryNote string
 }
 
 // NewAccountStore creates a store, loading persisted accounts when path is set.
+// A corrupt (torn/hand-edited) file no longer bricks the daemon (#18): the
+// file is preserved as accounts.json.corrupt-<ts>, the store starts empty,
+// and the event is surfaced via RecoveryNote for the server to log loudly.
 func NewAccountStore(path string) (*AccountStore, error) {
 	s := &AccountStore{
 		path:   path,
@@ -106,7 +113,12 @@ func NewAccountStore(path string) (*AccountStore, error) {
 	}
 	var accounts []*Account
 	if err := json.Unmarshal(b, &accounts); err != nil {
-		return nil, fmt.Errorf("etunnel: parse accounts file: %w", err)
+		backup := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+		if renameErr := os.Rename(path, backup); renameErr != nil {
+			return nil, fmt.Errorf("etunnel: parse accounts file: %w (and preserving it as %s failed: %v)", err, backup, renameErr)
+		}
+		s.recoveryNote = fmt.Sprintf("accounts file was corrupt (%v); preserved as %s and started EMPTY - accounts must be re-registered or restored from the backup", err, backup)
+		return s, nil
 	}
 	for _, a := range accounts {
 		s.byKey[a.APIKey] = a
