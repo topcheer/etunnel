@@ -78,6 +78,10 @@ type AccountStore struct {
 	path   string
 	byKey  map[string]*Account
 	byMail map[string]*Account
+	// onSaveErr, when set, receives every persistence failure so the
+	// operator sees them (#93: these used to be silently discarded, which
+	// split in-memory state from disk across restarts).
+	onSaveErr func(error)
 }
 
 // NewAccountStore creates a store, loading persisted accounts when path is set.
@@ -122,16 +126,31 @@ func (s *AccountStore) saveLocked() error {
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].Created.Before(accounts[j].Created) })
 	b, err := json.MarshalIndent(accounts, "", "  ")
 	if err != nil {
+		s.reportSaveErr(err)
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		s.reportSaveErr(err)
 		return err
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		s.reportSaveErr(err)
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		s.reportSaveErr(err)
+		return err
+	}
+	return nil
+}
+
+// reportSaveErr surfaces a persistence failure through the injected
+// logger (no-op when unset, e.g. tests).
+func (s *AccountStore) reportSaveErr(err error) {
+	if s.onSaveErr != nil {
+		s.onSaveErr(err)
+	}
 }
 
 func newAPIKey() string {
@@ -204,7 +223,9 @@ func (s *AccountStore) Delete(key string) bool {
 	}
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// memory is already mutated; surface so operators can reconcile
+	}
 	return true
 }
 
@@ -219,7 +240,9 @@ func (s *AccountStore) ResetKey(email string) (string, bool) {
 	delete(s.byKey, a.APIKey)
 	a.APIKey = newAPIKey()
 	s.byKey[a.APIKey] = a
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// surfaced via reportSaveErr; the new key stays valid in-memory
+	}
 	return a.APIKey, true
 }
 
@@ -232,7 +255,9 @@ func (s *AccountStore) CancelSubscription(email string) bool {
 		return false
 	}
 	a.Tier = "free"
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// surfaced via reportSaveErr
+	}
 	return true
 }
 
@@ -257,7 +282,9 @@ func (s *AccountStore) Mutate(email string, fn func(*Account)) bool {
 		return false
 	}
 	fn(a)
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// surfaced via reportSaveErr
+	}
 	return true
 }
 

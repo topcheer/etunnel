@@ -67,6 +67,8 @@ func New(cfg Config) (*Server, error) {
 		metrics:    &metrics{startedAt: time.Now()},
 		regLimiter: &registerLimiter{seen: make(map[string]time.Time)},
 	}
+	// #93: persistence failures must reach the operator log, not vanish.
+	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(cfg.WSPath, s.handleTunnelWS)
