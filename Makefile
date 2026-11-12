@@ -100,7 +100,7 @@ pack-swift: prereq
 else
 pack-swift: prereq
 	cd $(Sdks)/swift && tar czf ../../$(PACK)/etunnel-swift-$(V).tar.gz etunnel.swift Package.swift README.md \
-	  && echo "swift: source pack (Apple-only #90; compile verified by CI swift-macos job)"
+	  && echo "swift: source pack (Apple-only #90; compile verified by local make verify on macOS)"
 endif
 
 pack-dart: prereq
