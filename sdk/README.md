@@ -86,6 +86,27 @@ open until `Ctrl-C`; `-token` and `-subdomain` select a paid plan.
 | `Tunnel.CloseReason()` | why the server closed it (`ttl_expired`, `kicked`, ...) |
 | `Tunnel.Close(reason)` | graceful shutdown; the subdomain is freed immediately |
 | `APIError` | policy rejection during handshake (`Code` + `Message`) |
+| `Login(ctx, server, openBrowser)` | `(*Credentials, error)` - browser authorization: returns the account's `APIToken`, `Subdomains`, `Plan` for persistence (see below) |
+
+### Login (browser authorization)
+
+`Login` runs the CLI loopback flow so a desktop app can get an API token
+without copy-pasting keys: it binds a random `127.0.0.1` port, asks the
+server for an authorization URL, opens the user's browser there (the
+`openBrowser` callback; nil uses `open`/`xdg-open` and prints the URL when
+headless), waits for the browser to land back on the loopback port with a
+one-time code (5-minute TTL, single use), and exchanges it:
+
+```go
+creds, err := etunnel.Login(ctx, "https://t.etun.uk", nil)
+if err != nil { ... }
+// creds.APIToken, creds.Subdomains, creds.Plan - persist these and pass
+// Options{Token: creds.APIToken, ...} on every future Connect.
+```
+
+Free accounts get the token with an empty `Subdomains` list. The whole flow
+times out after 10 minutes; the server's approval page requires the portal
+session, so no new credential surface is introduced.
 
 ### Options
 

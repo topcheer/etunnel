@@ -223,6 +223,9 @@ migration (static wildcard cert from the ACME directory, not renewed).
 |---|---|
 | `wss://<domain>/tunnel` | SDK WebSocket endpoint (subprotocol `etunnel-v1`) |
 | `POST /api/register` | `{"email"}` -> free-tier API key |
+| `POST /auth/cli/start` | CLI loopback login: `{"redirect_uri"}` (must be `http://127.0.0.1:<port>/callback`) -> `{auth_url, device_code}` |
+| `GET/POST /auth/cli/grant` | browser approval page (session required); allow -> 303 back to the loopback port with a one-time code (5-min TTL) |
+| `POST /auth/cli/exchange` | `{device_code, code}` -> `{api_token, subdomains, plan, expires_at}`; free tier gets the token with an empty domain list |
 | `GET /api/tiers` | plan catalog |
 | `/` | landing page (quickstart, pricing) |
 | `/pricing`, `/login`, `/me` | subscription flow and account dashboard |
