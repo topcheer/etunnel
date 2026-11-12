@@ -24,6 +24,7 @@ var ErrEmailTaken = errors.New("etunnel: email already registered")
 type accountBackend interface {
 	Create(email, tier string) (*Account, error)
 	Lookup(key string) (*Account, bool)
+	TryClaimDomain(email, dom string, mayClaim func(*Account) bool) bool
 	LookupEmail(email string) (*Account, bool)
 	FindByProvider(provider, subject string) (*Account, bool)
 	Delete(key string) bool
@@ -269,6 +270,37 @@ func (s *AccountStore) CancelSubscription(email string) bool {
 	a.Tier = "free"
 	if err := s.saveLocked(); err != nil {
 		// surfaced via reportSaveErr
+	}
+	return true
+}
+
+// TryClaimDomain atomically adds dom to the account ONLY if no other
+// account holds it (#101: the old lock-free subdomainTakenBy precheck
+// raced a concurrent Mutate, allowing the same name on two accounts).
+// The uniqueness check, the tier/entitlement gate and the append all run
+// under one critical section; mayClaim runs inside the lock.
+func (s *AccountStore) TryClaimDomain(email, dom string, mayClaim func(*Account) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.byMail[email]
+	if !ok {
+		return false
+	}
+	if containsStr(a.Domains, dom) {
+		return true // idempotent re-add on the same account
+	}
+	for _, other := range s.byKey {
+		if other.Email != email && containsStr(other.Domains, dom) {
+			return false
+		}
+	}
+	if mayClaim != nil && !mayClaim(a) {
+		return false
+	}
+	a.Domains = append(a.Domains, dom)
+	if err := s.saveLocked(); err != nil {
+		// surfaced via reportSaveErr (#93); memory keeps the claim so the
+		// operator reconciles from the log rather than silently losing it
 	}
 	return true
 }

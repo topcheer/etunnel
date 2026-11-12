@@ -477,21 +477,21 @@ func (s *Server) domainAction(w http.ResponseWriter, acct *Account, rawDomain st
 		})
 		return
 	}
-	owned := false
-	_ = s.accounts.Mutate(acct.Email, func(a *Account) {
-		if containsStr(a.Domains, dom) {
-			owned = true
-			return
+	// Atomic claim (#101): uniqueness + tier/entitlement gate + append in
+	// one critical section - the lock-free takenBy precheck above raced
+	// concurrent Mutates and let two accounts register the same name.
+	now := time.Now()
+	claimed := s.accounts.TryClaimDomain(acct.Email, dom, func(a *Account) bool {
+		if _, isShort := shortDomainPriceCents(dom, false); isShort && !accountMayUseShortDomain(a, dom, now) {
+			return false // premium short name without a live entitlement
 		}
-		// a paid short-domain entitlement also lifts the tier's domain-count
-		// cap for that one name (Free would otherwise allow 0)
-		if len(a.Domains) >= tier.CustomDomains && !accountMayUseShortDomain(a, dom, time.Now()) {
-			return
-		}
-		a.Domains = append(a.Domains, dom)
-		owned = true
+		return len(a.Domains) < tier.CustomDomains || accountMayUseShortDomain(a, dom, now)
 	})
-	if !owned {
+	if !claimed {
+		if s.subdomainTakenBy(acct.Email, dom) {
+			http.Error(w, `{"error":"subdomain already taken by another account"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, `{"error":"tier domain limit reached (upgrade for more)"}`, http.StatusForbidden)
 		return
 	}

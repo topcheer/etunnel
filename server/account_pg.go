@@ -296,6 +296,35 @@ func (s *pgAccountStore) Mutate(email string, fn func(*Account)) bool {
 	return true
 }
 
+// TryClaimDomain mirrors the JSON store's atomic claim (#101): uniqueness
+// check, gate and append under one lock, then async-ish persist.
+func (s *pgAccountStore) TryClaimDomain(email, dom string, mayClaim func(*Account) bool) bool {
+	s.mu.Lock()
+	a, ok := s.byMail[email]
+	if !ok {
+		s.mu.Unlock()
+		return false
+	}
+	if containsStr(a.Domains, dom) {
+		s.mu.Unlock()
+		return true // idempotent re-add
+	}
+	for _, other := range s.byKey {
+		if other.Email != email && containsStr(other.Domains, dom) {
+			s.mu.Unlock()
+			return false
+		}
+	}
+	if mayClaim != nil && !mayClaim(a) {
+		s.mu.Unlock()
+		return false
+	}
+	a.Domains = append(a.Domains, dom)
+	s.mu.Unlock()
+	_ = s.upsert(context.Background(), a)
+	return true
+}
+
 func (s *pgAccountStore) List() []*Account {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
