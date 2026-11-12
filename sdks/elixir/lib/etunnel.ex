@@ -80,6 +80,10 @@ defmodule Etunnel do
   Returns the public tunnel URL, or `{:error, reason}` if the welcome frame
   (or a server error frame) does not arrive within `timeout` ms.
 
+  Single-waiter semantics: a concurrent second call replaces the first
+  caller's registration (the first then returns `{:error, :exit}`).
+  Coordinate concurrent resolution on the caller side (#64 note 5).
+
   WebSockex processes are not GenServers - a GenServer.call lands in
   handle_info as a raw `{:"$gen_call", from, msg}` tuple, which we intercept
   and answer manually below (the old handle_call/3 clause was never
@@ -293,7 +297,11 @@ defmodule Etunnel do
             {url, headers, String.to_charlist("application/octet-stream"), body}
           end
 
-        case :httpc.request(method_atom, request, [{:timeout, 120_000}], [{:body_format, :binary}, {:sync, true}]) do
+        # Default :httpc profile honours http_proxy/https_proxy env vars,
+        # which can hijack the local (127.0.0.1) hop through a corporate
+        # proxy (#64 note 2): disable proxying explicitly for these calls.
+        http_opts = [{:timeout, 120_000}, {:proxy, {:undefined, []}}]
+        case :httpc.request(method_atom, request, http_opts, [{:body_format, :binary}, {:sync, true}]) do
           {:ok, {{_, status, _}, resp_headers, out}} ->
             hdrs =
               resp_headers
