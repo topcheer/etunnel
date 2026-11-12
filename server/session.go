@@ -564,6 +564,14 @@ func (s *Session) readLoop() {
 			if err != nil {
 				return
 			}
+			// Oversize control frames must fail with a reason, not a misleading
+			// JSON-decode error from the truncated prefix (#14 F#3): if the
+			// limit left bytes unread, the frame was over 64 KiB.
+			if extra, rerr := io.ReadAll(io.LimitReader(rd, 1)); rerr == nil && len(extra) > 0 {
+				s.srv.logf("session %s: control frame over 64 KiB; closing", s.Subdomain())
+				_ = s.ws.Close(websocket.StatusMessageTooBig, "control message too large (limit 64 KiB)")
+				return
+			}
 			// Tolerate client WebSocket libraries that send binary frames
 			// with the text opcode: JSON control messages start with '{',
 			// stream frames start with a kind byte.

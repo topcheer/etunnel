@@ -212,5 +212,5 @@ upgrade forwarding.)
 | WebSocket read limit | 128 KiB | `SetReadLimit` on both sides; a larger frame fails the connection. |
 | Hello timeout | 15 s | The server closes the connection if the first `hello` has not arrived. |
 | Concurrent streams | 256 per tunnel | The 4th `too_many_streams`-adjacent open is refused; `new_stream` with no free id fails (see error codes). |
-| Unknown control `type` | v1: fatal | Current v1 behaviour: the server drops the connection on an unknown control type (SDK clients skip unknown types instead). Target contract for v2: endpoints ignore+count unknown types and unknown error codes; malformed *known* types stay fatal (#14). |
+| Unknown control `type` | ignore | Both ends ignore unknown control types and unknown error codes (SDK clients always did; the server's read loop lands them in an ignore branch). Malformed *known* types remain fatal. |
 | `welcome.proto` / `hello.proto` | `1` | Both sides reject a strictly newer protocol version. An omitted `proto` field (JSON zero value) is accepted as v1 by lenient peers; the reference server always sends `1`. |
