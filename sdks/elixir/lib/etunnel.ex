@@ -333,4 +333,82 @@ defmodule Etunnel do
   defp frame(kind, sid, payload) do
     <<kind, sid::big-32, byte_size(payload)::big-32, payload::binary>>
   end
+
+  # --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+  #   creds = Etunnel.login("https://t.etun.uk")     # opens the browser
+  #   # -> %{api_token: ..., subdomains: [...], plan: ...}. Persist it and
+  #   #    pass api_token as the token opt of future Etunnel.connect calls.
+  def login(server, open_browser \\ nil, timeout \\ 600) do
+    base = String.trim_trailing(server || "", "/")
+    if base == "", do: raise(ArgumentError, message: "etunnel: login: server required")
+
+    {:ok, srv} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, listen_on: ~c"127.0.0.1", reuseaddr: true])
+    {:ok, port} = :inet.port(srv)
+
+    start = login_post(base, "/auth/cli/start", %{redirect_uri: "http://127.0.0.1:#{port}/callback"})
+    auth_url = start["auth_url"]
+    device_code = start["device_code"]
+    unless auth_url && device_code, do: raise(RuntimeError, message: "etunnel: login: empty start payload")
+
+    opened =
+      cond do
+        open_browser -> open_browser.(auth_url); true
+        true ->
+          {uname, 0} = System.cmd("uname", [], stderr_to_stdout: true)
+          cmd = if String.trim(uname) == "Darwin", do: "open", else: "xdg-open"
+          case System.cmd(cmd, [auth_url], stderr_to_stdout: true) do
+            {_out, 0} -> true
+            _ -> false
+          end
+      end
+    unless opened, do: IO.puts(:stderr, "etunnel: authorize in your browser: #{auth_url}")
+
+    deadline = System.monotonic_time(:second) + timeout
+    code = login_await_code(srv, deadline)
+    :gen_tcp.close(srv)
+    if code == "", do: raise(RuntimeError, message: "etunnel: login: callback without code")
+
+    creds = login_post(base, "/auth/cli/exchange", %{device_code: device_code, code: code})
+    unless creds["api_token"] not in [nil, ""], do: raise(RuntimeError, message: "etunnel: login: no api_token in exchange response")
+    %{api_token: creds["api_token"], subdomains: creds["subdomains"] || [], plan: creds["plan"] || ""}
+  end
+
+  defp login_await_code(srv, deadline) do
+    if System.monotonic_time(:second) > deadline do
+      raise RuntimeError, message: "etunnel: login timed out"
+    end
+    case :gen_tcp.accept(srv, 1000) do
+      {:ok, sock} ->
+        {:ok, req} = :gen_tcp.recv(sock, 0, 5000)
+        path = req |> to_string |> String.split(" ") |> Enum.at(1) || ""
+        code =
+          path
+          |> String.split("?")
+          |> Enum.at(1, "")
+          |> String.split("&")
+          |> Enum.find("", &String.starts_with?(&1, "code="))
+          |> String.trim_leading("code=")
+          |> URI.decode()
+        body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>"
+        :gen_tcp.send(sock, "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: #{byte_size(body)}\r\nConnection: close\r\n\r\n#{body}")
+        :gen_tcp.close(sock)
+        if code == "", do: login_await_code(srv, deadline), else: code
+      {:error, :timeout} -> login_await_code(srv, deadline)
+      {:error, other} -> raise RuntimeError, message: "etunnel: login: accept failed: #{inspect(other)}"
+    end
+  end
+
+  defp login_post(base, path, body) do
+    :application.ensure_all_started(:inets)
+    :application.ensure_all_started(:ssl)
+    url = base <> path
+    req = {to_charlist(url), [], ~c"application/json", Jason.encode!(body)}
+    case :httpc.request(:post, req, [{:timeout, 30_000}], body_format: :binary) do
+      {:ok, {{_, 200, _}, _, resp}} -> Jason.decode!(resp)
+      {:ok, {{_, status, _}, _, resp}} ->
+        raise RuntimeError, message: "etunnel: login: HTTP #{status} from #{path}: #{String.slice(to_string(resp), 0, 200)}"
+      {:error, why} -> raise RuntimeError, message: "etunnel: login: request to #{path} failed: #{inspect(why)}"
+    end
+  end
+
 end

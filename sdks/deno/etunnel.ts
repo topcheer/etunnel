@@ -276,3 +276,72 @@ the tunnel stays connected and keeps retrying for you.</div>
 <footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>
 </main></body></html>`;
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+// await login('https://t.etun.uk') -> { api_token, subdomains, plan, expires_at }
+// Persist the result; pass api_token as opts.token on future connect() calls.
+export interface Credentials {
+  api_token: string;
+  subdomains: string[] | null;
+  plan: string;
+  expires_at: number;
+}
+
+export interface LoginOptions {
+  openBrowser?: (url: string) => void;
+  timeoutMs?: number;
+}
+
+function defaultOpenBrowserDeno(u: string): void {
+  const cmd = Deno.build.os === 'darwin' ? 'open' : Deno.build.os === 'windows' ? 'rundll32 url.dll,FileProtocolHandler' : 'xdg-open';
+  new Deno.Command(cmd, { args: [u], stdout: 'null', stderr: 'null' }).spawn(); // fire-and-forget
+}
+
+export async function login(server: string, opts: LoginOptions = {}): Promise<Credentials> {
+  const base = String(server || '').replace(/\/+$/, '');
+  if (!base) throw new Error('etunnel: login: server required');
+  const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+  let deviceCode = '';
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error('etunnel: login timed out')), timeoutMs);
+
+  const code = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const srv = Deno.serve({ hostname: '127.0.0.1', port: 0, signal: ac.signal }, (req) => {
+      const u = new URL(req.url);
+      const c = u.searchParams.get('code');
+      if (u.pathname !== '/callback' || !c) return new Response('not found', { status: 404 });
+      settled = true;
+      clearTimeout(timer);
+      setTimeout(() => srv.unref(), 500); // let the response flush, then stop listening
+      resolve(c);
+      return new Response('<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    });
+    srv.finished.catch((e) => { if (!settled) { clearTimeout(timer); reject(e); } });
+    (async () => {
+      try {
+        const redirectUri = 'http://127.0.0.1:' + (srv.addr as { port: number }).port + '/callback';
+        const r = await fetch(base + '/auth/cli/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_uri: redirectUri }), signal: ac.signal,
+        });
+        if (!r.ok) throw new Error('etunnel: login start: HTTP ' + r.status + ' ' + (await r.text()).slice(0, 200));
+        const start = await r.json() as { auth_url?: string; device_code?: string };
+        if (!start.auth_url || !start.device_code) throw new Error('etunnel: login: empty start payload');
+        deviceCode = start.device_code;
+        const open = opts.openBrowser || defaultOpenBrowserDeno;
+        try { open(start.auth_url); } catch { /* headless: the URL is printed below */ }
+        console.error('etunnel: authorize in your browser: ' + start.auth_url);
+      } catch (e) { if (!settled) { clearTimeout(timer); try { srv.unref(); } catch { /* gone */ } reject(e); } }
+    })();
+  });
+
+  const r2 = await fetch(base + '/auth/cli/exchange', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode, code }),
+  });
+  if (!r2.ok) throw new Error('etunnel: login exchange: HTTP ' + r2.status + ' ' + (await r2.text()).slice(0, 200));
+  const creds = await r2.json() as Credentials;
+  if (!creds.api_token) throw new Error('etunnel: login: no api_token in exchange response');
+  return creds;
+}

@@ -453,3 +453,95 @@ the tunnel stays connected and keeps retrying for you.</div>
         }
     }
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   var creds = await EtunnelLogin.LoginAsync("https://t.etun.uk");
+// Binds a random 127.0.0.1 port, waits for the one-time code (10-minute
+// budget), exchanges it. Persist it; pass ApiToken as the token option.
+public sealed record LoginCredentials(string ApiToken, IReadOnlyList<string> Subdomains, string Plan);
+
+public static class EtunnelLogin
+{
+    public static async Task<LoginCredentials> LoginAsync(string server,
+        Func<string, Task>? openBrowser = null, CancellationToken ct = default)
+    {
+        var baseUri = server.TrimEnd('/');
+        if (baseUri.Length == 0) throw new ArgumentException("etunnel: login: server required");
+
+        // TcpListener claims an ephemeral port; HttpListener needs the fixed prefix.
+        int port;
+        using (var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+        }
+        var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/callback/");
+        listener.Start();
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var startJson = await PostJsonAsync(http, $"{baseUri}/auth/cli/start",
+                $"{{\"redirect_uri\":\"http://127.0.0.1:{port}/callback\"}}", ct);
+            using var start = System.Text.Json.JsonDocument.Parse(startJson);
+            var authUrl = start.RootElement.TryGetProperty("auth_url", out var au) ? au.GetString() : null;
+            var deviceCode = start.RootElement.TryGetProperty("device_code", out var dc) ? dc.GetString() : null;
+            if (string.IsNullOrEmpty(authUrl) || string.IsNullOrEmpty(deviceCode))
+                throw new InvalidOperationException("etunnel: login: empty start payload");
+
+            var opened = false;
+            if (openBrowser != null) { await openBrowser(authUrl!); opened = true; }
+            else
+            {
+                try
+                {
+                    using var _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(authUrl!) { UseShellExecute = true });
+                    opened = true;
+                }
+                catch { /* headless: URL printed below */ }
+            }
+            if (!opened) Console.Error.WriteLine($"etunnel: authorize in your browser: {authUrl}");
+
+            var code = await GetCodeAsync(listener, TimeSpan.FromMinutes(10), ct);
+            var credsJson = await PostJsonAsync(http, $"{baseUri}/auth/cli/exchange",
+                $"{{\"device_code\":\"{deviceCode}\",\"code\":\"{code}\"}}", ct);
+            using var doc = System.Text.Json.JsonDocument.Parse(credsJson);
+            var tok = doc.RootElement.TryGetProperty("api_token", out var t) ? t.GetString() : null;
+            if (string.IsNullOrEmpty(tok)) throw new InvalidOperationException("etunnel: login: no api_token in exchange response");
+            var subs = doc.RootElement.TryGetProperty("subdomains", out var sarr) && sarr.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? sarr.EnumerateArray().Select(x => x.ToString()).ToList()
+                : new List<string>();
+            var plan = doc.RootElement.TryGetProperty("plan", out var pl) ? pl.GetString() ?? "" : "";
+            return new LoginCredentials(tok!, subs, plan);
+        }
+        finally { listener.Stop(); listener.Close(); }
+    }
+
+    private static async Task<string> GetCodeAsync(System.Net.HttpListener listener, TimeSpan timeout, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        while (!cts.IsCancellationRequested)
+        {
+            var ctx = await listener.GetContextAsync().WaitAsync(cts.Token);
+            var code = ctx.Request.QueryString["code"];
+            var body = System.Text.Encoding.UTF8.GetBytes(
+                "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>");
+            ctx.Response.StatusCode = string.IsNullOrEmpty(code) ? 400 : 200;
+            ctx.Response.ContentType = "text/html; charset=utf-8";
+            ctx.Response.Close(body, false);
+            if (!string.IsNullOrEmpty(code)) return code;
+        }
+        throw new TimeoutException("etunnel: login timed out");
+    }
+
+    private static async Task<string> PostJsonAsync(HttpClient http, string url, string json, CancellationToken ct)
+    {
+        using var resp = await http.PostAsync(url, new StringContent(json, System.Text.Encoding.UTF8, "application/json"), ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"etunnel: login: HTTP {(int)resp.StatusCode} from {url}: {body.Substring(0, Math.Min(200, body.Length))}");
+        return body;
+    }
+}

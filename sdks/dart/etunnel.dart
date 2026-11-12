@@ -295,3 +295,92 @@ Future<void> main(List<String> args) async {
   }
   exit(0);
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   final creds = await etunnelLogin('https://t.etun.uk');  // opens the browser
+//   // -> LoginCredentials(apiToken, subdomains, plan). Persist it; pass
+//   //    apiToken as the token: option on future Etunnel.connect calls.
+class LoginCredentials {
+  final String apiToken;
+  final List<String> subdomains;
+  final String plan;
+  LoginCredentials(this.apiToken, this.subdomains, this.plan);
+}
+
+typedef BrowserOpener = Future<void> Function(String url);
+
+Future<LoginCredentials> etunnelLogin(String server,
+    {BrowserOpener? openBrowser, Duration timeout = const Duration(minutes: 10)}) async {
+  final base = server.replaceAll(RegExp(r'/+$'), '');
+  if (base.isEmpty) throw ArgumentError('etunnel: login: server required');
+  final srv = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  String? code;
+  try {
+    final port = srv.port;
+    final start = await _loginPost('$base/auth/cli/start',
+        '{"redirect_uri":"http://127.0.0.1:$port/callback"}');
+    final authUrl = start['auth_url'] as String?;
+    final deviceCode = start['device_code'] as String?;
+    if (authUrl == null || deviceCode == null) {
+      throw StateError('etunnel: login: empty start payload');
+    }
+    var opened = false;
+    final opener = openBrowser ?? defaultOpenBrowser;
+    try { await opener(authUrl); opened = true; } catch (_) {}
+    if (!opened) {
+      stderr.writeln('etunnel: authorize in your browser: $authUrl');
+    }
+    final deadline = DateTime.now().add(timeout);
+    await for (final req in srv) {
+      final u = req.uri;
+      if (u.path == '/callback' && (u.queryParameters['code'] ?? '').isNotEmpty) {
+        code = u.queryParameters['code'];
+        req.response.statusCode = 200;
+        req.response.headers.contentType = ContentType.html;
+        req.response.write('<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>');
+      } else {
+        req.response.statusCode = 404;
+      }
+      await req.response.close();
+      if (code != null) break;
+      if (DateTime.now().isAfter(deadline)) throw TimeoutException('etunnel: login timed out', timeout);
+    }
+    if (code == null) throw TimeoutException('etunnel: login timed out', timeout);
+    final creds = await _loginPost('$base/auth/cli/exchange',
+        '{"device_code":"$deviceCode","code":"$code"}');
+    final tok = creds['api_token'] as String?;
+    if (tok == null || tok.isEmpty) {
+      throw StateError('etunnel: login: no api_token in exchange response');
+    }
+    final subs = (creds['subdomains'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
+    return LoginCredentials(tok, subs, creds['plan']?.toString() ?? '');
+  } finally {
+    await srv.close();
+  }
+}
+
+Future<void> defaultOpenBrowser(String url) async {
+  final cmd = Platform.isMacOS ? 'open' : 'xdg-open';
+  try {
+    await Process.run(cmd, [url]);
+  } catch (_) {
+    // fallthrough: caller prints the URL
+  }
+}
+
+Future<Map<String, dynamic>> _loginPost(String url, String jsonBody) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+  try {
+    final req = await client.postUrl(Uri.parse(url));
+    req.headers.set('Content-Type', 'application/json');
+    req.write(jsonBody);
+    final resp = await req.close();
+    final body = await resp.transform(utf8.decoder).join();
+    if (resp.statusCode != 200) {
+      throw StateError('etunnel: login: HTTP ${resp.statusCode} from $url: ${body.length > 200 ? body.substring(0, 200) : body}');
+    }
+    return jsonDecode(body) as Map<String, dynamic>;
+  } finally {
+    client.close();
+  }
+}

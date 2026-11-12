@@ -259,3 +259,69 @@ the tunnel stays connected and keeps retrying for you.</div>
 <footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>
 </main></body></html>`;
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+// await login('https://t.etun.uk') -> { api_token, subdomains, plan, expires_at }
+// Binds a random 127.0.0.1 port, asks the server for an auth URL, opens the
+// browser (prints the URL when headless / opener missing), waits for the
+// one-time code on /callback (10-min budget), exchanges it. Persist the
+// result and pass api_token as opts.token on future connect() calls.
+// Returns the wire keys as-is for cross-SDK consistency.
+function defaultOpenBrowser(u) {
+  const { exec } = require('child_process');
+  const cmd = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'rundll32 url.dll,FileProtocolHandler'
+    : 'xdg-open';
+  exec(cmd + ' ' + JSON.stringify(u), () => {}); // fire-and-forget; URL also printed
+}
+
+async function login(server, opts = {}) {
+  const http = require('http');
+  const base = String(server || '').replace(/\/+$/, '');
+  if (!base) throw new Error('etunnel: login: server required');
+  const timeoutMs = opts.timeoutMs || 10 * 60 * 1000;
+  let deviceCode = '';
+
+  const code = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { try { srv.close(); } catch {} reject(new Error('etunnel: login timed out')); }, timeoutMs);
+    timer.unref();
+    const srv = http.createServer((req, res) => {
+      const u = new URL(req.url, 'http://127.0.0.1');
+      const c = u.searchParams.get('code');
+      if (u.pathname !== '/callback' || !c) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>');
+      clearTimeout(timer);
+      srv.close();
+      resolve(c);
+    });
+    srv.on('error', (e) => { clearTimeout(timer); reject(e); });
+    srv.listen(0, '127.0.0.1', async () => {
+      try {
+        const redirectUri = 'http://127.0.0.1:' + srv.address().port + '/callback';
+        const r = await fetch(base + '/auth/cli/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_uri: redirectUri }),
+        });
+        if (!r.ok) throw new Error('etunnel: login start: HTTP ' + r.status + ' ' + (await r.text()).slice(0, 200));
+        const start = await r.json();
+        if (!start.auth_url || !start.device_code) throw new Error('etunnel: login: empty start payload');
+        deviceCode = start.device_code;
+        const open = opts.openBrowser || defaultOpenBrowser;
+        try { open(start.auth_url); } catch { /* headless: the URL is printed below */ }
+        process.stderr.write('etunnel: authorize in your browser: ' + start.auth_url + '\n');
+      } catch (e) { clearTimeout(timer); try { srv.close(); } catch {} reject(e); }
+    });
+  });
+
+  const r2 = await fetch(base + '/auth/cli/exchange', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode, code }),
+  });
+  if (!r2.ok) throw new Error('etunnel: login exchange: HTTP ' + r2.status + ' ' + (await r2.text()).slice(0, 200));
+  const creds = await r2.json();
+  if (!creds.api_token) throw new Error('etunnel: login: no api_token in exchange response');
+  return creds;
+}
+
+module.exports = Object.assign(module.exports, { login });

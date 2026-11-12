@@ -615,3 +615,174 @@ int main(int argc, char **argv) {
     lws_context_destroy(ctx);
     return 0;
 }
+
+/* --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+ *   etunnel_credentials *creds = et_login("https://t.etun.uk", NULL, 600);
+ *   // creds->api_token / creds->subdomains[] / creds->plan — free with
+ *   // et_login_free(creds). Persist and pass api_token as the token arg of
+ *   // future et_connect calls.
+ * Uses libcurl (already a dependency) for the two POSTs, json-c for the
+ * exchange decode, and a plain socket for the one-shot loopback listener. */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+struct et_credentials {
+    char api_token[256];
+    char **subdomains;
+    size_t n_subdomains;
+    char plan[64];
+};
+
+void et_login_free(struct et_credentials *c) {
+    if (!c) return;
+    for (size_t i = 0; i < c->n_subdomains; i++) free(c->subdomains[i]);
+    free(c->subdomains);
+    free(c);
+}
+
+static size_t et_curl_write_cb(char *ptr, size_t sz, size_t nm, void *ud) {
+    size_t total = sz * nm;
+    strncat((char *)ud, ptr, total < 8191 ? total : 8191 - strlen((char *)ud) - 1);
+    return total;
+}
+
+static char *et_post_json(const char *url, const char *body) {
+    char *buf = calloc(1, 8192);
+    CURL *h = curl_easy_init();
+    if (!h) { free(buf); return NULL; }
+    struct curl_slist *hdrs = NULL;
+    hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+    curl_easy_setopt(h, CURLOPT_URL, url);
+    curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, et_curl_write_cb);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, buf);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    CURLcode rc = curl_easy_perform(h);
+    long code = 0;
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(h);
+    if (rc != CURLE_OK || code != 200) { free(buf); return NULL; }
+    return buf;
+}
+
+static char *et_json_get_str(json_object *j, const char *key) {
+    json_object *v = NULL;
+    if (!json_object_object_get_ex(j, key, &v) || !json_object_is_type(v, json_type_string))
+        return NULL;
+    return (char *)json_object_get_string(v);
+}
+
+struct et_credentials *et_login(const char *server, void (*open_browser)(const char *), long timeout_secs) {
+    if (!server || !*server) { fprintf(stderr, "etunnel: login: server required\n"); return NULL; }
+    char base[512];
+    snprintf(base, sizeof base, "%s", server);
+    for (char *p = base + strlen(base) - 1; p >= base && *p == '/'; *p-- = '\0') {}
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return NULL;
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = inet_addr("127.0.0.1");
+    a.sin_port = 0;
+    if (bind(fd, (struct sockaddr *)&a, sizeof a) < 0 || listen(fd, 1) < 0) { close(fd); return NULL; }
+    struct sockaddr_in bound = {0};
+    socklen_t bl = sizeof bound;
+    getsockname(fd, (struct sockaddr *)&bound, &bl);
+    int port = ntohs(bound.sin_port);
+
+    char url[768], body[8192], *resp = NULL;
+    snprintf(body, sizeof body, "{\"redirect_uri\":\"http://127.0.0.1:%d/callback\"}", port);
+    snprintf(url, sizeof url, "%s/auth/cli/start", base);
+    resp = et_post_json(url, body);
+    if (!resp) { close(fd); fprintf(stderr, "etunnel: login: start failed\n"); return NULL; }
+    json_object *jstart = json_tokener_parse(resp);
+    char *auth_url = et_json_get_str(jstart, "auth_url");
+    char *device_code = et_json_get_str(jstart, "device_code");
+    if (!auth_url || !device_code) { json_object_put(jstart); free(resp); close(fd); return NULL; }
+
+    int opened = 0;
+    if (open_browser) { open_browser(auth_url); opened = 1; }
+    if (!opened) {
+        char cmd[1600];
+        const char *opener = strchr(auth_url, '\0'), *bin = "/usr/bin/xdg-open";
+#ifdef __APPLE__
+        bin = "/usr/bin/open";
+#endif
+        snprintf(cmd, sizeof cmd, "%s '%s' >/dev/null 2>&1 &", bin, auth_url);
+        opened = (system(cmd) == 0);
+    }
+    if (!opened) fprintf(stderr, "etunnel: authorize in your browser: %s\n", auth_url);
+
+    char code[512] = "";
+    time_t deadline = time(NULL) + timeout_secs;
+    while (!*code) {
+        if (time(NULL) > deadline) { close(fd); fprintf(stderr, "etunnel: login timed out\n"); return NULL; }
+        struct sockaddr_in ca; socklen_t cl = sizeof ca;
+        struct timeval tv = {1, 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        int c = accept(fd, (struct sockaddr *)&ca, &cl);
+        if (c < 0) continue;
+        char req[4096] = "";
+        ssize_t n = recv(c, req, sizeof req - 1, 0);
+        (void) n;
+        char *q = strchr(req, ' ');
+        if (q) {
+            char *e = strchr(q + 1, ' ');
+            if (e) *e = '\0';
+            char *kv = strchr(q, '?');
+            if (kv) {
+                char *dup = strdup(kv + 1);
+                char *save = NULL;
+                for (char *tok = strtok_r(dup, "&", &save); tok; tok = strtok_r(NULL, "&", &save)) {
+                    if (strncmp(tok, "code=", 5) == 0) {
+                        snprintf(code, sizeof code, "%s", tok + 5);
+                        /* trivial percent-decode */
+                        for (char *s = code, *d = code; *s; s++, d++) {
+                            if (s[0] == '%' && s[1] && s[2]) {
+                                int hex; sscanf(s + 1, "%2x", &hex);
+                                *d = (char)hex; s += 2;
+                            } else *d = *s;
+                        }
+                    }
+                }
+                free(dup);
+            }
+        }
+        const char *page = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>";
+        dprintf(c, "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s", strlen(page), page);
+        close(c);
+    }
+    close(fd);
+    if (!*code) return NULL;
+
+    snprintf(body, sizeof body, "{\"device_code\":\"%s\",\"code\":\"%s\"}", device_code, code);
+    snprintf(url, sizeof url, "%s/auth/cli/exchange", base);
+    free(resp);
+    resp = et_post_json(url, body);
+    json_object_put(jstart);
+    if (!resp) { fprintf(stderr, "etunnel: login: exchange failed\n"); return NULL; }
+    json_object *jex = json_tokener_parse(resp);
+    char *tok = et_json_get_str(jex, "api_token");
+    if (!tok || !*tok) { json_object_put(jex); free(resp); return NULL; }
+
+    struct et_credentials *out = calloc(1, sizeof *out);
+    snprintf(out->api_token, sizeof out->api_token, "%s", tok);
+    snprintf(out->plan, sizeof out->plan, "%s", et_json_get_str(jex, "plan") ? et_json_get_str(jex, "plan") : "");
+    json_object *subs = NULL;
+    if (json_object_object_get_ex(jex, "subdomains", &subs) && json_object_is_type(subs, json_type_array)) {
+        size_t n = json_object_array_length(subs);
+        out->subdomains = calloc(n, sizeof(char *));
+        for (size_t i = 0; i < n; i++) {
+            json_object *el = json_object_array_get_idx(subs, i);
+            out->subdomains[i] = strdup(json_object_get_string(el));
+            out->n_subdomains++;
+        }
+    }
+    json_object_put(jex);
+    free(resp);
+    return out;
+}

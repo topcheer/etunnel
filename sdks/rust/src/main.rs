@@ -503,3 +503,123 @@ fn main() {
         thread::sleep(std::time::Duration::from_millis(delay));
     }
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   let creds = etunnel_login("https://t.etun.uk", None, 600).ok();
+// Binds a random 127.0.0.1 port, opens the browser (prints the URL when the
+// opener fails), waits for the one-time code (10-minute budget), exchanges
+// it. Persist creds and pass it as the token option on future connects.
+pub struct LoginCredentials {
+    pub api_token: String,
+    pub subdomains: Vec<String>,
+    pub plan: String,
+}
+
+pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
+    server: &str,
+    open_browser: Option<F>,
+    timeout_secs: u64,
+) -> Result<LoginCredentials, String> {
+    use std::io::{Read, Write};
+    let base = server.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("etunnel: login: server required".into());
+    }
+
+    let srv = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let port = srv.local_addr().map_err(|e| e.to_string())?.port();
+
+    let start_body = format!("{{\"redirect_uri\":\"http://127.0.0.1:{port}/callback\"}}");
+    let start = ureq::post(&format!("{base}/auth/cli/start"))
+        .set("Content-Type", "application/json")
+        .send_string(&start_body)
+        .map_err(|e| format!("etunnel: login start: {e}"))?
+        .into_string().map_err(|e| e.to_string())?;
+    let auth_url = json_field(&start, "auth_url").ok_or("etunnel: login: empty start payload")?;
+    let device_code = json_field(&start, "device_code").ok_or("etunnel: login: empty start payload")?;
+
+    let url = format!("{}/auth/cli/grant?{}", base, ""); // not used; auth_url already absolute
+    let _ = url;
+    let mut opened = false;
+    if let Some(opener) = &open_browser {
+        if opener(&auth_url).is_ok() { opened = true; }
+    }
+    if !opened {
+        let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        if std::process::Command::new(cmd).arg(&auth_url).spawn().is_ok() {
+            opened = true;
+        }
+    }
+    if !opened {
+        eprintln!("etunnel: authorize in your browser: {auth_url}");
+    }
+
+    srv.set_nonblocking(false).ok();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut code = String::new();
+    while code.is_empty() {
+        if std::time::Instant::now() > deadline {
+            return Err("etunnel: login timed out".into());
+        }
+        let (mut c, _) = match srv.accept() {
+            Ok(x) => x,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut req = String::new();
+        let _ = c.read_to_string(&mut req);
+        if let Some(q) = req.split(' ').nth(1) {
+            if let Some(kv) = q.split('?').nth(1) {
+                for pair in kv.split('&') {
+                    if let Some(v) = pair.strip_prefix("code=") {
+                        code = v.to_string();
+                    }
+                }
+            }
+        }
+        let body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>";
+        let _ = c.write_all(format!(
+            "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(), body).as_bytes());
+    }
+    drop(srv);
+
+    let ex_body = format!("{{\"device_code\":\"{device_code}\",\"code\":\"{code}\"}}");
+    let ex = ureq::post(&format!("{base}/auth/cli/exchange"))
+        .set("Content-Type", "application/json")
+        .send_string(&ex_body)
+        .map_err(|e| format!("etunnel: login exchange: {e}"))?
+        .into_string().map_err(|e| e.to_string())?;
+    let api_token = json_field(&ex, "api_token").filter(|t| !t.is_empty())
+        .ok_or("etunnel: login: no api_token in exchange response")?;
+    let subdomains = json_string_array(&ex, "subdomains").unwrap_or_default();
+    let plan = json_field(&ex, "plan").unwrap_or_default();
+    Ok(LoginCredentials { api_token, subdomains, plan })
+}
+
+// Minimal extractors for the flat exchange payload (no JSON crate needed).
+fn json_field(s: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\":\"");
+    let i = s.find(&pat)? + pat.len();
+    let rest = &s[i..];
+    let mut out = String::new();
+    let mut esc = false;
+    for ch in rest.chars() {
+        if esc { out.push(ch); esc = false; continue; }
+        match ch {
+            '\\' => esc = true,
+            '"' => return Some(out),
+            _ => out.push(ch),
+        }
+    }
+    None
+}
+
+fn json_string_array(s: &str, key: &str) -> Option<Vec<String>> {
+    let pat = format!("\"{key}\":[");
+    let i = s.find(&pat)? + pat.len();
+    let rest = &s[i..];
+    let end = rest.find(']')?;
+    let inner = &rest[..end];
+    Some(inner.split(',').map(|x| x.trim().trim_matches('"').to_string()).filter(|x| !x.is_empty()).collect())
+}

@@ -280,3 +280,94 @@ def _main() -> None:
 
 if __name__ == "__main__":
     _main()
+
+
+# ---------------------------------------------------------------------------
+# CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints).
+#
+#   creds = etunnel.login("https://t.etun.uk")   # opens the browser
+#   # -> {"api_token": ..., "subdomains": [...], "plan": ..., "expires_at": 0}
+#
+# Binds a random 127.0.0.1 port, asks the server for an auth URL, waits for
+# the one-time code on /callback (10-minute budget), exchanges it. Persist
+# the result and pass api_token as opts["token"] on future connect() calls.
+# ---------------------------------------------------------------------------
+def login(server: str, opts: Optional[dict] = None) -> dict:
+    import threading
+    import urllib.request
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    o = opts or {}
+    timeout = float(o.get("timeout", 10 * 60))
+    base = str(server or "").rstrip("/")
+    if not base:
+        raise ValueError("etunnel: login: server required")
+
+    got = {}
+
+    class _CB(BaseHTTPRequestHandler):
+        def log_message(self, *a):  # silence the default stderr chatter
+            pass
+
+        def do_GET(self):
+            from urllib.parse import urlparse, parse_qs
+            u = urlparse(self.path)
+            if u.path != "/callback":
+                self.send_response(404); self.end_headers(); return
+            code = (parse_qs(u.query).get("code") or [""])[0]
+            if code:
+                got["code"] = code
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<p>Authorized. You can close this tab and return to the terminal.</p>")
+            else:
+                self.send_response(400); self.end_headers()
+
+    srv = HTTPServer(("127.0.0.1", 0), _CB)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.handle_request, daemon=True).start()  # exactly one callback
+
+    def _post(path, payload):
+        req = urllib.request.Request(
+            base + path,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+
+    try:
+        start = _post("/auth/cli/start", {"redirect_uri": "http://127.0.0.1:%d/callback" % port})
+    except Exception as e:
+        srv.server_close()
+        raise RuntimeError("etunnel: login start failed: %s" % e) from e
+    if not start.get("auth_url") or not start.get("device_code"):
+        srv.server_close()
+        raise RuntimeError("etunnel: login: empty start payload")
+
+    open_browser = o.get("open_browser", webbrowser.open)
+    try:
+        opened = open_browser(start["auth_url"])
+    except Exception:
+        opened = False
+    if not opened:
+        sys.stderr.write("etunnel: authorize in your browser: %s\n" % start["auth_url"])
+
+    deadline = time.time() + timeout
+    while "code" not in got:
+        if time.time() > deadline:
+            srv.server_close()
+            raise TimeoutError("etunnel: login timed out")
+        time.sleep(0.1)
+    srv.server_close()
+
+    try:
+        creds = _post("/auth/cli/exchange", {"device_code": start["device_code"], "code": got["code"]})
+    except Exception as e:
+        raise RuntimeError("etunnel: login exchange failed: %s" % e) from e
+    if not creds.get("api_token"):
+        raise RuntimeError("etunnel: login: no api_token in exchange response")
+    return creds

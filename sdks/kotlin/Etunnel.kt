@@ -395,3 +395,59 @@ private fun nextDelay(delay: Long): Long = minOf(30000L, delay * 2)
 
 /** +/-20% jitter so many clients don't retry in lockstep. */
 private fun jitter(delay: Long): Long = (delay * (0.8 + Math.random() * 0.4)).toLong()
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   val creds = Etunnel.login("https://t.etun.uk")   // opens the browser
+// Persist creds.apiToken; pass it as the token option on future connects.
+data class LoginResult(val apiToken: String, val subdomains: List<String>, val plan: String)
+
+fun interface BrowserOpener { fun open(url: String) }
+
+@JvmOverloads
+fun login(server: String, opener: BrowserOpener? = null, timeoutSec: Long = 600): LoginResult {
+    val base = server.trimEnd('/')
+    require(base.isNotEmpty()) { "etunnel: login: server required" }
+    val srv = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+    val q = java.util.concurrent.ArrayBlockingQueue<String>(1)
+    val port = srv.address.port
+    srv.createContext("/") { ex ->
+        val code = ex.requestURI.query?.takeIf { ex.requestURI.path == "/callback" && it.startsWith("code=") }
+        val body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>".toByteArray()
+        ex.responseHeaders.set("Content-Type", "text/html; charset=utf-8")
+        ex.sendResponseHeaders(if (code != null) 200 else 404, body.size.toLong())
+        ex.responseBody.use { it.write(body) }
+        if (code != null) q.offer(java.net.URLDecoder.decode(code.substring(5), Charsets.UTF_8))
+    }
+    srv.start()
+    try {
+        val http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(30)).build()
+        val start = Json.read(etLoginPostJson(http, base + "/auth/cli/start",
+            "{\"redirect_uri\":\"http://127.0.0.1:$port/callback\"}"))
+        val authUrl = start["auth_url"] as? String ?: throw IllegalStateException("etunnel: login: empty start payload")
+        val deviceCode = start["device_code"] as? String ?: throw IllegalStateException("etunnel: login: empty start payload")
+        var opened = false
+        if (opener != null) { opener.open(authUrl); opened = true }
+        else if (!java.awt.GraphicsEnvironment.isHeadless()) {
+            try { java.awt.Desktop.getDesktop().browse(java.net.URI.create(authUrl)); opened = true } catch (_: Exception) {}
+        }
+        if (!opened) System.err.println("etunnel: authorize in your browser: $authUrl")
+        val code = q.poll(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
+            ?: throw IllegalStateException("etunnel: login timed out")
+        if (code.isEmpty()) throw IllegalStateException("etunnel: login timed out")
+        val creds = Json.read(etLoginPostJson(http, base + "/auth/cli/exchange",
+            "{\"device_code\":\"$deviceCode\",\"code\":\"$code\"}"))
+        val tok = creds["api_token"] as? String
+        if (tok.isNullOrEmpty()) throw IllegalStateException("etunnel: login: no api_token in exchange response")
+        val subs = (creds["subdomains"] as? List<*>)?.map { it.toString() } ?: emptyList()
+        return LoginResult(tok, subs, creds["plan"]?.toString() ?: "")
+    } finally { srv.stop(0) }
+}
+
+private fun etLoginPostJson(http: java.net.http.HttpClient, url: String, jsonBody: String): String {
+    val req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+        .header("Content-Type", "application/json")
+        .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build()
+    val resp = http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString())
+    check(resp.statusCode() == 200) { "etunnel: login: HTTP ${resp.statusCode()} from $url: ${resp.body().take(200)}" }
+    return resp.body()
+}
