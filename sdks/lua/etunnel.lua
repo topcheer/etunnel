@@ -420,3 +420,86 @@ while true do
   end
   backoff_ms = math.min(backoff_ms * 2, 30000)
 end
+
+-- --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+--   local creds = etunnel_login("https://t.etun.uk")   -- opens the browser
+--   -- -> { api_token=..., subdomains={...}, plan=..., expires_at=0 }
+-- Binds a random 127.0.0.1 port, waits for the one-time code on /callback
+-- (10-minute budget), exchanges it. Persist the result and pass api_token
+-- as the token option of future etunnel_connect calls. Uses LuaSocket plus
+-- the https helper already present in this file.
+function etunnel_login(server, open_browser, timeout)
+  open_browser = open_browser or function(u)
+    local cmd = (jit and jit.os == "OSX") and "open" or "xdg-open"
+    os.execute(cmd .. ' "' .. u:gsub('"', '') .. '"')
+    return true
+  end
+  timeout = timeout or 600
+  server = (server or ""):gsub("/+$", "")
+  assert(#server > 0, "etunnel: login: server required")
+
+  local socket = require("socket")
+  local srv = assert(socket.bind("127.0.0.1", 0))
+  srv:settimeout(timeout)
+  local port = srv:getsockname():match(":(%d+)$")
+
+  local start = et_login_post(server, "/auth/cli/start",
+    { redirect_uri = "http://127.0.0.1:" .. port .. "/callback" })
+  assert(start.auth_url and start.device_code, "etunnel: login: empty start payload")
+
+  local opened = false
+  if open_browser then
+    local ok = pcall(function() opened = open_browser(start.auth_url) end)
+  end
+  if not opened then
+    io.stderr:write("etunnel: authorize in your browser: " .. start.auth_url .. "\n")
+  end
+
+  local client = assert(srv:accept())
+  client:settimeout(10)
+  local req = client:receive("*l")
+  local path = req and req:match("GET%s+(%S+)") or ""
+  local code = path:match("[?&]code=([^&%s]+)") or ""
+  code = code:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+  local body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>"
+  client:send("HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "
+    .. #body .. "\r\nConnection: close\r\n\r\n" .. body)
+  client:close()
+  srv:close()
+  assert(#code > 0, "etunnel: login: callback without code")
+
+  local creds = et_login_post(server, "/auth/cli/exchange",
+    { device_code = start.device_code, code = code })
+  assert(creds.api_token, "etunnel: login: no api_token in exchange response")
+  return creds
+end
+
+-- Minimal JSON POST over the same ssl.https/plain-socket split the SDK uses.
+function et_login_post(base, path, tbl)
+  local ltn12 = require("ltn12")
+  local https = require("ssl.https")
+  local body = et_json_encode(tbl)
+  local out = {}
+  local url = base .. path
+  local ok, code = https.request {
+    url = url, method = "POST",
+    headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body) },
+    source = ltn12.source.string(body),
+    sink = ltn12.sink.table(out),
+  }
+  assert(ok and tonumber(code) == 200, "etunnel: login: " .. path .. " failed: " .. tostring(code))
+  local json = require("cjson.safe") or require("cjson")
+  local decoded = (json.decode or json)(table.concat(out))
+  assert(type(decoded) == "table", "etunnel: login: bad response from " .. path)
+  return decoded
+end
+
+-- Tiny encoder for the two flat request shapes we send (no nesting needed).
+function et_json_encode(tbl)
+  local parts = {}
+  for k, v in pairs(tbl) do
+    parts[#parts+1] = '"' .. tostring(k) .. '":"' .. tostring(v):gsub('[%c"\\]', function(c)
+      return string.format("\\u%04x", string.byte(c)) end) .. '"'
+  end
+  return "{" .. table.concat(parts, ",") .. "}"
+end

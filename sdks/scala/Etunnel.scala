@@ -317,6 +317,65 @@ the tunnel stays connected and keeps retrying for you.</div>
     if (h.err != null) throw new RuntimeException(s"etunnel: ${h.err}")
     Tunnel(h.info("url").toString, h.info.get("resumeToken").map(_.toString).getOrElse(""))
   }
+
+  // --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+  //   val creds = Etunnel.login("https://t.etun.uk")  // opens the browser
+  // Persist creds.apiToken; pass it as the token option on future connects.
+  final case class LoginResult(apiToken: String, subdomains: List[String], plan: String)
+
+  def login(server: String, opener: Option[String => Unit] = None, timeoutSec: Long = 600): LoginResult = {
+    val base = server.replaceAll("/+$", "")
+    require(base.nonEmpty, "etunnel: login: server required")
+    val srv = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+    val q = new java.util.concurrent.ArrayBlockingQueue[String](1)
+    val port = srv.getAddress.getPort
+    srv.createContext("/", ex => {
+      val code = Option(ex.getRequestURI.getQuery).filter(_ => ex.getRequestURI.getPath == "/callback").filter(_.startsWith("code="))
+      val body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>".getBytes("UTF-8")
+      ex.getResponseHeaders.set("Content-Type", "text/html; charset=utf-8")
+      ex.sendResponseHeaders(if (code.isDefined) 200 else 404, body.length)
+      val os = ex.getResponseBody; os.write(body); os.close()
+      code.foreach(c => q.offer(java.net.URLDecoder.decode(c.substring(5), "UTF-8")))
+    })
+    srv.start()
+    try {
+      val http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(30)).build()
+      val start = MiniJson.read(etLoginPostJson(http, base + "/auth/cli/start",
+        s"""{"redirect_uri":"http://127.0.0.1:$port/callback"}"""))
+      val authUrl = start.get("auth_url").map(_.toString).getOrElse(throw new IllegalStateException("etunnel: login: empty start payload"))
+      val deviceCode = start.get("device_code").map(_.toString).getOrElse(throw new IllegalStateException("etunnel: login: empty start payload"))
+      var opened = false
+      opener match {
+        case Some(f) => f(authUrl); opened = true
+        case None if !java.awt.GraphicsEnvironment.isHeadless() =>
+          try { java.awt.Desktop.getDesktop().browse(java.net.URI.create(authUrl)); opened = true }
+          catch { case _: Exception => }
+        case _ =>
+      }
+      if (!opened) System.err.println("etunnel: authorize in your browser: " + authUrl)
+      val code = Option(q.poll(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)).getOrElse(throw new IllegalStateException("etunnel: login timed out"))
+      if (code.isEmpty) throw new IllegalStateException("etunnel: login timed out")
+      val creds = MiniJson.read(etLoginPostJson(http, base + "/auth/cli/exchange",
+        s"""{"device_code":"$deviceCode","code":"$code"}"""))
+      val tok = creds.get("api_token").map(_.toString).getOrElse("")
+      if (tok.isEmpty) throw new IllegalStateException("etunnel: login: no api_token in exchange response")
+      val subs = creds.get("subdomains") match {
+        case Some(l: List[_]) => l.map(_.toString)
+        case Some(jl: java.util.List[_]) => scala.jdk.CollectionConverters.ListHasAsScala(jl).asScala.toList.map(_.toString)
+        case _ => Nil
+      }
+      LoginResult(tok, subs, creds.get("plan").map(_.toString).getOrElse(""))
+    } finally srv.stop(0)
+  }
+
+  private def etLoginPostJson(http: java.net.http.HttpClient, url: String, jsonBody: String): String = {
+    val req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+      .header("Content-Type", "application/json")
+      .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody)).build()
+    val resp = http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString())
+    if (resp.statusCode() != 200) throw new IllegalStateException(s"etunnel: login: HTTP ${resp.statusCode()} from $url: ${resp.body().take(200)}")
+    resp.body()
+  }
 }
 
 object Main {

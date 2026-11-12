@@ -9,10 +9,12 @@ use warnings;
 use threads;
 use threads::shared;
 use IO::Socket::SSL;
+use IO::Select;
 use IO::Socket::INET;
 use Digest::SHA qw(sha1_base64);
 use MIME::Base64;
 use JSON::PP;
+use URI;
 use Errno qw(EAGAIN EWOULDBLOCK);
 use Time::HiRes qw(time);
 
@@ -400,4 +402,87 @@ while (!$stopped) {
     last if $stopped;
     printf STDERR "etunnel: reconnecting in %.1fs\n", $delay;
     $nap->($delay);
+}
+
+# --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+#   my $creds = etunnel_login('https://t.etun.uk');   # opens the browser
+#   # -> { api_token => ..., subdomains => [...], plan => ..., expires_at => 0 }
+# Binds a random 127.0.0.1 port, waits for the one-time code on /callback
+# (10-minute budget), exchanges it. Persist the result and pass api_token
+# as the token argument of future etunnel_connect calls.
+sub etunnel_login {
+    my ($server, $open_cb, $timeout) = @_;
+    $timeout //= 600;
+    $server =~ s{/+\z}{};
+    croak("etunnel: login: server required") unless length $server;
+
+    my $srv = IO::Socket::INET->new(LocalAddr => '127.0.0.1', LocalPort => 0,
+                                    Proto => 'tcp', Listen => 1, ReuseAddr => 1)
+        or croak("etunnel: login: bind loopback failed: $!");
+    my $port = $srv->sockport;
+
+    my $start = et_login_post($server, '/auth/cli/start',
+        { redirect_uri => "http://127.0.0.1:$port/callback" });
+    croak("etunnel: login: empty start payload")
+        unless $start->{auth_url} && $start->{device_code};
+
+    my $opened = 0;
+    my $open = $open_cb || sub {
+        my ($u) = @_;
+        my $cmd = $^O eq 'darwin' ? 'open' : 'xdg-open';
+        return system($cmd, $u) == 0;
+    };
+    { local $@; eval { $opened = $open->($start->{auth_url}) ? 1 : 0; }; }
+    print STDERR "etunnel: authorize in your browser: $start->{auth_url}\n" unless $opened;
+
+    my $deadline = time() + $timeout;
+    my $code = '';
+    while (time() < $deadline) {
+        my $sel = IO::Select->new($srv);
+        last unless $sel->can_read(1.0);
+        my $c = $srv->accept() or next;
+        my $req = '';
+        while (defined(my $line = <$c>)) { $req .= $line; last if $line =~ /^\r?\n$/ && length($req) > 10; }
+        ($code) = $req =~ /[?&]code=([^&\s]+)/;
+        $code //= '';
+        $code =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+        my $body = '<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>';
+        print $c "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ",
+                 length($body), "\r\nConnection: close\r\n\r\n$body";
+        close $c;
+        last if $code ne '';
+    }
+    close $srv;
+    croak("etunnel: login timed out") if $code eq '';
+
+    my $creds = et_login_post($server, '/auth/cli/exchange',
+        { device_code => $start->{device_code}, code => $code });
+    croak("etunnel: login: no api_token in exchange response")
+        unless $creds->{api_token};
+    return $creds;
+}
+
+sub et_login_post {
+    my ($base, $path, $payload) = @_;
+    my $u = URI->new($base . $path);
+    my $json = JSON::PP->new->encode($payload);
+    my ($host, $port, $tls) = ($u->host, $u->port, ($u->scheme eq 'https' ? 1 : 0));
+    my $sock;
+    if ($tls) {
+        $sock = IO::Socket::SSL->new(PeerHost => $host, PeerPort => $port, Timeout => 30)
+            or croak("etunnel: login: connect $host:$port: $!");
+    } else {
+        $sock = IO::Socket::INET->new(PeerHost => $host, PeerPort => $port, Proto => 'tcp', Timeout => 30)
+            or croak("etunnel: login: connect $host:$port: $!");
+    }
+    my $req = "POST $path HTTP/1.0\r\nHost: $host\r\nContent-Type: application/json\r\nContent-Length: "
+            . length($json) . "\r\nConnection: close\r\n\r\n$json";
+    print $sock $req;
+    my $resp = '';
+    while (defined(my $line = <$sock>)) { $resp .= $line; }
+    close $sock;
+    my ($body) = $resp =~ /\r\n\r\n(.*)/s;
+    my $j = eval { JSON::PP->new->decode($body // '') };
+    croak("etunnel: login: bad response from $path: " . substr($resp, 0, 200)) unless $j;
+    return $j;
 }

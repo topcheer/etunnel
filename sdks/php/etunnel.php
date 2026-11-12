@@ -361,3 +361,68 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
         usleep((int) round($delay * 1_000_000));
     }
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   $creds = Etunnel::login('https://t.etun.uk');   // opens the browser
+//   // -> ['api_token'=>..., 'subdomains'=>[...], 'plan'=>..., 'expires_at'=>0]
+// Binds a random 127.0.0.1 port, waits for the one-time code on /callback
+// (10-minute budget), exchanges it. Persist the result and pass api_token
+// as the $token argument of future Etunnel::connect calls.
+final class EtunnelLogin {
+    public static function login(string $server, ?callable $openBrowser = null, int $timeout = 600): array {
+        $base = rtrim($server, '/');
+        if ($base === '') throw new RuntimeException('etunnel: login: server required');
+
+        $sock = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        if (!$sock) throw new RuntimeException("etunnel: login: bind loopback failed: $errstr");
+        $name = stream_socket_get_name($sock, false);
+        $port = (int)substr($name, strrpos($name, ':') + 1);
+
+        // Fire the browser side first, then block on the single callback.
+        $start = self::post($base . '/auth/cli/start', ['redirect_uri' => "http://127.0.0.1:{$port}/callback"]);
+        if (empty($start['auth_url']) || empty($start['device_code'])) {
+            fclose($sock);
+            throw new RuntimeException('etunnel: login: empty start payload');
+        }
+        $open = $openBrowser ?: function (string $u): bool {
+            $cmd = PHP_OS_FAMILY === 'Darwin' ? 'open' : (PHP_OS_FAMILY === 'Windows' ? 'start ""' : 'xdg-open');
+            return (PHP_OS_FAMILY === 'Windows') ? pclose(popen("start \"\" " . escapeshellarg($u), 'r')) === 0
+                                                 : (PHP_OS_FAMILY === 'Darwin' ? @system(escapeshellcmd('open') . ' ' . escapeshellarg($u) . ' >/dev/null 2>&1') !== false
+                                                 : @system('xdg-open ' . escapeshellarg($u) . ' >/dev/null 2>&1') !== false);
+        };
+        $opened = false;
+        try { $opened = (bool)$open($start['auth_url']); } catch (Throwable $t) { $opened = false; }
+        if (!$opened) fwrite(STDERR, "etunnel: authorize in your browser: {$start['auth_url']}\n");
+
+        $deadline = time() + $timeout;
+        $code = '';
+        while (time() < $deadline) {
+            $client = @stream_socket_accept($sock, 1.0);
+            if (!$client) continue;
+            $req = fread($client, 4096);
+            if (preg_match('#GET /callback\?[^\s]*[?&]code=([^&\s]+)#', $req, $m)) $code = urldecode($m[1]);
+            $body = '<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>';
+            fwrite($client, "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body);
+            fclose($client);
+            if ($code !== '') break;
+        }
+        fclose($sock);
+        if ($code === '') throw new RuntimeException('etunnel: login timed out');
+
+        $creds = self::post($base . '/auth/cli/exchange', ['device_code' => $start['device_code'], 'code' => $code]);
+        if (empty($creds['api_token'])) throw new RuntimeException('etunnel: login: no api_token in exchange response');
+        return $creds;
+    }
+
+    private static function post(string $url, array $payload): array {
+        $ctx = stream_context_create(['http' => [
+            'method' => 'POST', 'header' => "Content-Type: application/json\r\n",
+            'content' => json_encode($payload), 'timeout' => 30, 'ignore_errors' => true,
+        ]]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) throw new RuntimeException("etunnel: login: request to $url failed");
+        $j = json_decode($raw, true);
+        if (!is_array($j)) throw new RuntimeException("etunnel: login: bad response from $url: " . substr($raw, 0, 200));
+        return $j;
+    }
+}

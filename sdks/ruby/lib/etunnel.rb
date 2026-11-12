@@ -277,3 +277,55 @@ def Etunnel.main(argv = ARGV)
   end
 end
 Etunnel.main if $PROGRAM_NAME == __FILE__
+
+  # --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+  #   creds = Etunnel.login('https://t.etun.uk')  # opens the browser
+  #   # -> { 'api_token' => ..., 'subdomains' => [...], 'plan' => ..., 'expires_at' => 0 }
+  # Binds a random 127.0.0.1 port, waits for the one-time code on /callback
+  # (10-minute budget), exchanges it. Persist the result and pass api_token
+  # as token: on future Etunnel.connect calls.
+  def self.login(server, open_browser: nil, timeout: 600)
+    require 'socket'
+    require 'net/http'
+    require 'json'
+    require 'uri'
+    base = server.to_s.sub(%r{/+\z}, '')
+    raise ArgumentError, 'etunnel: login: server required' if base.empty?
+
+    server_sock = TCPServer.new('127.0.0.1', 0)
+    port = server_sock.addr[1]
+
+    th = Thread.new do
+      # Accept exactly one request: the browser's redirect to /callback?code=...
+      client = server_sock.accept
+      req = client.recv(4096)
+      path = req.split(' ')[1].to_s
+      code = path[/[?&]code=([^&\s]+)/, 1].to_s
+      body = '<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>'
+      client.write("HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
+      client.close
+      code
+    end
+
+    uri = URI(base + '/auth/cli/start')
+    start = JSON.parse(Net::HTTP.post(uri, { redirect_uri: "http://127.0.0.1:#{port}/callback" }.to_json, 'Content-Type' => 'application/json').body)
+    raise 'etunnel: login: empty start payload' if start['auth_url'].to_s.empty? || start['device_code'].to_s.empty?
+
+    opened = false
+    begin
+      opener = open_browser || ->(u) { system(RUBY_PLATFORM =~ /darwin/ ? 'open' : 'xdg-open', u) }
+      opened = opener.call(start['auth_url'])
+    rescue StandardError
+      opened = false
+    end
+    $stderr.puts "etunnel: authorize in your browser: #{start['auth_url']}" unless opened
+
+    code = th.value(timeout)
+    server_sock.close
+    raise 'etunnel: login: callback without code' if code.empty?
+
+    ex = URI(base + '/auth/cli/exchange')
+    creds = JSON.parse(Net::HTTP.post(ex, { device_code: start['device_code'], code: code }.to_json, 'Content-Type' => 'application/json').body)
+    raise 'etunnel: login: no api_token in exchange response' if creds['api_token'].to_s.empty?
+    creds
+  end

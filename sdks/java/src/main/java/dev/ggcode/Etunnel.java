@@ -468,4 +468,78 @@ public class Etunnel {
             delay = nextDelay(delay);
         }
     }
+    // --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+    //   Etunnel.LoginResult creds = Etunnel.login("https://t.etun.uk");
+    // Binds a random 127.0.0.1 port, opens the browser (prints the URL when
+    // headless), waits for the one-time code (10-minute budget), exchanges it.
+    // Persist the result; pass apiToken as Options.token on future connects.
+    public static class LoginResult {
+        public final String apiToken;
+        public final java.util.List<String> subdomains;
+        public final String plan;
+        public LoginResult(String apiToken, java.util.List<String> subdomains, String plan) {
+            this.apiToken = apiToken; this.subdomains = subdomains; this.plan = plan;
+        }
+    }
+
+    public interface BrowserOpener { void open(String url) throws Exception; }
+
+    public static LoginResult login(String server) throws Exception { return login(server, null, 600); }
+
+    public static LoginResult login(String server, BrowserOpener opener, long timeoutSec) throws Exception {
+        String base = server.replaceAll("/+$", "");
+        if (base.isEmpty()) throw new IllegalArgumentException("etunnel: login: server required");
+        com.sun.net.httpserver.HttpServer srv = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        java.util.concurrent.ArrayBlockingQueue<String> q = new java.util.concurrent.ArrayBlockingQueue<>(1);
+        int port = srv.getAddress().getPort();
+        srv.createContext("/", ex -> {
+            String code = null;
+            if ("/callback".equals(ex.getRequestURI().getPath())) code = ex.getRequestURI().getQuery();
+            byte[] body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            ex.sendResponseHeaders(code != null && code.startsWith("code=") ? 200 : 404, body.length);
+            try (var os = ex.getResponseBody()) { os.write(body); }
+            if (code != null && code.startsWith("code=")) {
+                q.offer(java.net.URLDecoder.decode(code.substring(5), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        });
+        srv.start();
+        try {
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build();
+            java.util.Map<String, Object> start = postJson(http, base + "/auth/cli/start",
+                    "{\"redirect_uri\":\"http://127.0.0.1:" + port + "/callback\"}");
+            String authUrl = (String) start.get("auth_url");
+            String deviceCode = (String) start.get("device_code");
+            if (authUrl == null || deviceCode == null) throw new IllegalStateException("etunnel: login: empty start payload");
+            boolean opened = false;
+            if (opener != null) { opener.open(authUrl); opened = true; }
+            else if (!java.awt.GraphicsEnvironment.isHeadless()) {
+                try { java.awt.Desktop.getDesktop().browse(java.net.URI.create(authUrl)); opened = true; }
+                catch (Exception ignore) { }
+            }
+            if (!opened) System.err.println("etunnel: authorize in your browser: " + authUrl);
+            String code = q.poll(timeoutSec, java.util.concurrent.TimeUnit.SECONDS);
+            if (code == null || code.isEmpty()) throw new IllegalStateException("etunnel: login timed out");
+            java.util.Map<String, Object> creds = postJson(http, base + "/auth/cli/exchange",
+                    "{\"device_code\":\"" + deviceCode + "\",\"code\":\"" + code + "\"}");
+            Object tok = creds.get("api_token");
+            if (tok == null || ((String) tok).isEmpty()) throw new IllegalStateException("etunnel: login: no api_token in exchange response");
+            java.util.List<String> subs = new ArrayList<>();
+            Object raw = creds.get("subdomains");
+            if (raw instanceof java.util.List<?> l) for (Object o : l) subs.add(String.valueOf(o));
+            return new LoginResult((String) tok, subs, String.valueOf(creds.getOrDefault("plan", "")));
+        } finally { srv.stop(0); }
+    }
+
+    private static java.util.Map<String, Object> postJson(HttpClient http, String url, String jsonBody) throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build();
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        if (resp.statusCode() != 200)
+            throw new IllegalStateException("etunnel: login: HTTP " + resp.statusCode() + " from " + url + ": " + resp.body().substring(0, Math.min(200, resp.body().length())));
+        return Json.read(resp.body());
+    }
+
 }

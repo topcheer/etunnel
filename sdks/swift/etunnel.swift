@@ -3,6 +3,9 @@
 //
 // Run: swift etunnel.swift 3000
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 let MAXP = 32768
 
@@ -270,4 +273,144 @@ final class Etunnel: @unchecked Sendable {
         // reconnect loop accumulated them (#53)
         session.invalidateAndCancel()
     }
+}
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   let creds = try etunnelLogin("https://t.etun.uk")   // opens the browser
+//   // -> LoginCredentials(apiToken, subdomains, plan). Persist it and pass
+//   //    apiToken as the token option on future Etunnel.connect calls.
+public struct LoginCredentials {
+    public let apiToken: String
+    public let subdomains: [String]
+    public let plan: String
+}
+
+public func etunnelLogin(_ server: String, openBrowser: ((String) -> Void)? = nil,
+                         timeout: TimeInterval = 600,
+                         queue: DispatchQueue = .global()) throws -> LoginCredentials {
+    let base = server.replacingOccurrences(of: "/", with: "", options: .backwards, range: server.range(of: "/+$", options: .regularExpression) ?? server.endIndex..<server.endIndex)
+    let baseClean = String(server.reversed().drop(while: { $0 == "/" }).reversed())
+    precondition(!baseClean.isEmpty, "etunnel: login: server required")
+
+    // 1) claim an ephemeral loopback port with a POSIX socket
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw NSError(domain: "etunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "etunnel: login: socket() failed"]) }
+    defer { close(fd) }
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    addr.sin_port = 0
+    var on: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+    guard bind(fd, sockaddr_cast(&addr), socklen_t(MemoryLayout<sockaddr_in>.size)) == 0,
+          listen(fd, 1) == 0 else {
+        throw NSError(domain: "etunnel", code: 2, userInfo: [NSLocalizedDescriptionKey: "etunnel: login: bind/listen failed"])
+    }
+    var bound = sockaddr_in()
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    getsockname(fd, sockaddr_cast(&bound), &len)
+    let port = Int(bound.sin_port.bigEndian)
+
+    // 2) start the device flow
+    let sem = DispatchSemaphore(value: 0)
+    var startPayload: [String: Any] = [:]
+    var startErr: Error?
+    postJson("\(baseClean)/auth/cli/start", ["redirect_uri": "http://127.0.0.1:\(port)/callback"]) { r in
+        switch r {
+        case .success(let d): startPayload = d
+        case .failure(let e): startErr = e
+        }
+        sem.signal()
+    }
+    sem.wait()
+    if let e = startErr { throw e }
+    guard let authUrl = startPayload["auth_url"] as? String,
+          let deviceCode = startPayload["device_code"] as? String else {
+        throw NSError(domain: "etunnel", code: 3, userInfo: [NSLocalizedDescriptionKey: "etunnel: login: empty start payload"])
+    }
+
+    // 3) open the browser (URL printed when headless)
+    var opened = false
+    if let opener = openBrowser {
+        opener(authUrl); opened = true
+    } else if let u = URL(string: authUrl) {
+        #if canImport(AppKit)
+        opened = NSWorkspace.shared.open(u) // macOS; on Linux the task below is the fallback
+        #endif
+    }
+    if !opened {
+        #if os(macOS)
+        #else
+        _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/xdg-open"), arguments: [authUrl])
+        #endif
+        FileHandle.standardError.write("etunnel: authorize in your browser: \(authUrl)\n".data(using: .utf8)!)
+    }
+
+    // 4) block on the single callback (poll the socket with a deadline)
+    let deadline = Date().addingTimeInterval(timeout)
+    var code = ""
+    while code.isEmpty {
+        if Date() > deadline {
+            throw NSError(domain: "etunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: "etunnel: login timed out"])
+        }
+        var fds = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        _ = poll(&fds, 1, 1000)
+        var client = sockaddr_in(); var clen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let cfd = accept(fd, sockaddr_cast(&client), &clen)
+        guard cfd >= 0 else { continue }
+        defer { close(cfd) }
+        var buf = [UInt8](repeating: 0, count: 4096)
+        let n = recv(cfd, &buf, buf.count, 0)
+        let req = String(bytes: buf[0..<max(0, n)], encoding: .utf8) ?? ""
+        if let q = req.split(separator: " ").dropFirst().first,
+           let kv = q.split(separator: "?").dropFirst().first {
+            for pair in kv.split(separator: "&") where pair.hasPrefix("code=") {
+                code = String(pair.dropFirst("code=".count)).removingPercentEncoding ?? String(pair.dropFirst("code=".count))
+            }
+        }
+        let body = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>"
+        let resp = "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        _ = resp.withCString { send(cfd, $0, strlen($0), 0) }
+    }
+
+    // 5) exchange
+    var exPayload: [String: Any] = [:]
+    var exErr: Error?
+    let sem2 = DispatchSemaphore(value: 0)
+    postJson("\(baseClean)/auth/cli/exchange", ["device_code": deviceCode, "code": code]) { r in
+        switch r {
+        case .success(let d): exPayload = d
+        case .failure(let e): exErr = e
+        }
+        sem2.signal()
+    }
+    sem2.wait()
+    if let e = exErr { throw e }
+    guard let token = exPayload["api_token"] as? String, !token.isEmpty else {
+        throw NSError(domain: "etunnel", code: 5, userInfo: [NSLocalizedDescriptionKey: "etunnel: login: no api_token in exchange response"])
+    }
+    let subs = (exPayload["subdomains"] as? [Any])?.map { String(describing: $0) } ?? []
+    return LoginCredentials(apiToken: token, subdomains: subs, plan: exPayload["plan"] as? String ?? "")
+}
+
+private func sockaddr_cast(_ p: UnsafeMutablePointer<sockaddr_in>) -> UnsafeMutablePointer<sockaddr> {
+    UnsafeMutableRawPointer(p).assumingMemoryBound(to: sockaddr.self)
+}
+
+private func postJson(_ url: String, _ body: [String: String], done: @escaping (Result<[String: Any], Error>) -> Void) {
+    var req = URLRequest(url: URL(string: url)!)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    let flat = body.map { "\"\($0.key)\":\"\($0.value)\"" }.joined(separator: ",")
+    req.httpBody = "{\(flat)}".data(using: .utf8)
+    URLSession.shared.dataTask(with: req) { data, resp, err in
+        if let err = err { return done(.failure(err)) }
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard let data = data, status == 200,
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            let snippet = String(data: data ?? Data(), encoding: .utf8)?.prefix(200) ?? ""
+            return done(.failure(NSError(domain: "etunnel", code: 6, userInfo: [NSLocalizedDescriptionKey: "etunnel: login: HTTP \(status): \(snippet)"])))
+        }
+        done(.success(obj))
+    }.resume()
 }

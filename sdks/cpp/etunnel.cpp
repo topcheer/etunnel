@@ -466,3 +466,151 @@ int main(int argc, char **argv) {
 
     return 0;
 }
+
+// --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+//   et_credentials creds = et_login("https://t.etun.uk");  // opens the browser
+//   // creds.api_token / creds.subdomains / creds.plan — persist and pass
+//   // api_token as the token arg of future et_connect calls.
+struct et_credentials {
+    std::string api_token;
+    std::vector<std::string> subdomains;
+    std::string plan;
+};
+
+static size_t et_curl_write(char *p, size_t sz, size_t n, void *ud) {
+    (static_cast<std::string *>(ud))->append(p, sz * n);
+    return sz * n;
+}
+
+static bool et_post_json(const std::string &url, const std::string &body, std::string &out) {
+    CURL *h = curl_easy_init();
+    if (!h) return false;
+    std::string buf;
+    curl_slist *hdrs = nullptr;
+    hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+    curl_easy_setopt(h, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(h, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, et_curl_write);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    CURLcode rc = curl_easy_perform(h);
+    long code = 0;
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(h);
+    if (rc != CURLE_OK || code != 200) {
+        std::cerr << "etunnel: login: HTTP " << code << " from " << url << ": "
+                  << buf.substr(0, 200) << "\n";
+        return false;
+    }
+    out = std::move(buf);
+    return true;
+}
+
+static std::vector<std::string> et_json_array(const std::string &j, const std::string &key) {
+    std::vector<std::string> out;
+    std::string pat = "\"" + key + "\":[";
+    size_t i = j.find(pat);
+    if (i == std::string::npos) return out;
+    size_t e = j.find(']', i + pat.size());
+    if (e == std::string::npos) return out;
+    std::string inner = j.substr(i + pat.size(), e - i - pat.size());
+    size_t pos = 0;
+    while (pos < inner.size()) {
+        size_t q1 = inner.find('"', pos);
+        if (q1 == std::string::npos) break;
+        size_t q2 = inner.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        out.push_back(inner.substr(q1 + 1, q2 - q1 - 1));
+        pos = q2 + 1;
+    }
+    return out;
+}
+
+et_credentials et_login(const std::string &server, std::function<void(const std::string &)> open_browser = {}, long timeout_secs = 600) {
+    std::string base = server;
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    if (base.empty()) throw std::runtime_error("etunnel: login: server required");
+
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) throw std::runtime_error("etunnel: login: socket() failed");
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = 0;
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+    if (::bind(fd, (sockaddr *)&a, sizeof a) < 0 || ::listen(fd, 1) < 0) {
+        ::close(fd);
+        throw std::runtime_error("etunnel: login: bind/listen failed");
+    }
+    sockaddr_in bound{};
+    socklen_t bl = sizeof bound;
+    getsockname(fd, (sockaddr *)&bound, &bl);
+    int port = ntohs(bound.sin_port);
+
+    std::string resp;
+    if (!et_post_json(base + "/auth/cli/start",
+            "{\"redirect_uri\":\"http://127.0.0.1:" + std::to_string(port) + "/callback\"}", resp))
+        { ::close(fd); throw std::runtime_error("etunnel: login: start failed"); }
+    std::string auth_url = json_str_field(resp, "auth_url");
+    std::string device_code = json_str_field(resp, "device_code");
+    if (auth_url.empty() || device_code.empty()) {
+        ::close(fd);
+        throw std::runtime_error("etunnel: login: empty start payload");
+    }
+
+    bool opened = false;
+    if (open_browser) { open_browser(auth_url); opened = true; }
+    if (!opened) {
+#ifdef __APPLE__
+        std::string cmd = "open '" + auth_url + "' >/dev/null 2>&1 &";
+#else
+        std::string cmd = "xdg-open '" + auth_url + "' >/dev/null 2>&1 &";
+#endif
+        opened = (system(cmd.c_str()) == 0);
+    }
+    if (!opened) std::cerr << "etunnel: authorize in your browser: " << auth_url << "\n";
+
+    std::string code;
+    time_t deadline = time(nullptr) + timeout_secs;
+    while (code.empty()) {
+        if (time(nullptr) > deadline) { ::close(fd); throw std::runtime_error("etunnel: login timed out"); }
+        timeval tv{1, 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        sockaddr_in ca{}; socklen_t cl = sizeof ca;
+        int c = ::accept(fd, (sockaddr *)&ca, &cl);
+        if (c < 0) continue;
+        std::string req(4096, '\0');
+        ssize_t n = recv(c, req.data(), req.size() - 1, 0);
+        (void) n;
+        size_t q = req.find(' ');
+        if (q != std::string::npos) {
+            size_t e = req.find(' ', q + 1);
+            std::string path = req.substr(q + 1, (e == std::string::npos ? req.size() : e) - q - 1);
+            size_t kv = path.find("code=");
+            if (kv != std::string::npos) {
+                size_t end = path.find('&', kv);
+                code = path.substr(kv + 5, (end == std::string::npos ? path.size() : end) - kv - 5);
+            }
+        }
+        std::string page = "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>";
+        std::string hdr = "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "
+                        + std::to_string(page.size()) + "\r\nConnection: close\r\n\r\n";
+        (void) ::send(c, (hdr + page).c_str(), hdr.size() + page.size(), 0);
+        ::close(c);
+    }
+    ::close(fd);
+
+    std::string ex;
+    if (!et_post_json(base + "/auth/cli/exchange",
+            "{\"device_code\":\"" + device_code + "\",\"code\":\"" + code + "\"}", ex))
+        throw std::runtime_error("etunnel: login: exchange failed");
+    et_credentials out;
+    out.api_token = json_str_field(ex, "api_token");
+    if (out.api_token.empty()) throw std::runtime_error("etunnel: login: no api_token in exchange response");
+    out.subdomains = et_json_array(ex, "subdomains");
+    out.plan = json_str_field(ex, "plan");
+    return out;
+}

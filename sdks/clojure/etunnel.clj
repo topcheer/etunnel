@@ -292,3 +292,67 @@ the tunnel stays connected and keeps retrying for you.</div>
                     (println "etunnel: disconnected, reconnecting"))
                   (Thread/sleep (jitter 500)) ; delay resets after a success
                   (recur 1000)))))))))))
+
+;; --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+;;   (def creds (etunnel-login! "https://t.etun.uk"))   ; opens the browser
+;;   ;; -> {:api_token ... :subdomains [...] :plan ...}. Persist it and pass
+;;   ;;    :api_token as the token key of future connect! calls.
+(defn login-post!
+  "POST body (map) as JSON to url; returns the decoded JSON map."
+  [^String url body]
+  (let [http (HttpClient/newHttpClient)
+        req  (-> (HttpRequest/newBuilder (URI. url))
+                 (.header "Content-Type" "application/json")
+                 (.POST (HttpRequest$BodyPublishers/ofString (json/generate-string body)))
+                 (.build))
+        resp (.send http req (HttpResponse$BodyHandlers/ofString))]
+    (when-not (= 200 (.statusCode resp))
+      (throw (ex-info "etunnel: login: HTTP error" {:url url :status (.statusCode resp) :body (subs (.body resp) 0 (min 200 (count (.body resp))))})))
+    (json/parse-string (.body resp) true)))
+
+(defn etunnel-login!
+  "CLI loopback login. Binds a random 127.0.0.1 port, opens the browser
+  (prints the URL when headless), waits for the one-time code (10-minute
+  budget), exchanges it. open-browser is an optional (fn [url])."
+  ([server] (etunnel-login! server nil (* 10 60)))
+  ([server open-browser timeout-secs]
+   (let [base (clojure.string/replace server #"/+$" "")
+         _ (assert (not (clojure.string/blank? base)) "etunnel: login: server required")
+         srv (com.sun.net.httpserver.HttpServer/create (java.net.InetSocketAddress. "127.0.0.1" 0) 0)
+         port (.getPort (.getAddress srv))
+         q (java.util.concurrent.ArrayBlockingQueue. 1)
+         done? (atom false)]
+     (.createContext srv "/" (reify com.sun.net.httpserver.HttpHandler
+                               (handle [_ ex]
+                                 (let [uri (.getRequestURI ex)
+                                       code (when (and (= "/callback" (.getPath uri))
+                                                       (.getQuery uri)
+                                                       (.startsWith ^String (.getQuery uri) "code="))
+                                              (java.net.URLDecoder/decode (subs (.getQuery uri) 5) "UTF-8"))
+                                       body (.getBytes "<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>" "UTF-8")]
+                                   (doto (.getResponseHeaders ex) (.set "Content-Type" "text/html; charset=utf-8"))
+                                   (.sendResponseHeaders ex (if code 200 404) (alength body))
+                                   (with-open [os (.getResponseBody ex)] (.write os body))
+                                   (when code (.offer q code))))))
+     (.start srv)
+     (try
+       (let [start (login-post! (str base "/auth/cli/start")
+                                {:redirect_uri (str "http://127.0.0.1:" port "/callback")})
+             _ (when-not (and (:auth_url start) (:device_code start))
+                 (throw (ex-info "etunnel: login: empty start payload" {})))
+             opened (if open-browser
+                      (do (open-browser (:auth_url start)) true)
+                      (try (.browse (java.awt.Desktop/getDesktop) (URI. (:auth_url start))) true
+                           (catch Throwable _ false)))]
+         (when-not opened
+           (binding [*out* *err*] (println "etunnel: authorize in your browser:" (:auth_url start))))
+         (let [code (or (.poll q (long timeout-secs) java.util.concurrent.TimeUnit/SECONDS)
+                        (throw (ex-info "etunnel: login timed out" {})))
+               creds (login-post! (str base "/auth/cli/exchange")
+                                  {:device_code (:device_code start) :code code})]
+           (when-not (and (:api_token creds) (not (clojure.string/blank? (str (:api_token creds)))))
+             (throw (ex-info "etunnel: login: no api_token in exchange response" {})))
+           {:api_token (:api_token creds)
+            :subdomains (vec (or (:subdomains creds) []))
+            :plan (or (:plan creds) "")}))
+       (finally (.stop srv 0))))))
