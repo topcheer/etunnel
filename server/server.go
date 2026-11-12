@@ -41,6 +41,8 @@ type Server struct {
 	ledger       *sessionLedger // session audit rows in PG (nil = journal-only, #69)
 	router       Router         // cluster routing (nil = single node)
 	draining     atomic.Bool
+	// cliUsed rejects replayed CLI authorization codes (auth_cli.go).
+	cliUsed cliUsedCodes
 }
 
 // logf emits a server log line (stdout + journald under systemd).
@@ -95,6 +97,9 @@ func New(cfg Config) (*Server, error) {
 		mux.HandleFunc("/auth/"+p+"/login", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthLogin(w, r, p) })
 		mux.HandleFunc("/auth/"+p+"/callback", func(w http.ResponseWriter, r *http.Request) { s.handleOAuthCallback(w, r, p) })
 	}
+	mux.HandleFunc("/auth/cli/start", s.handleCLIStart)
+	mux.HandleFunc("/auth/cli/grant", s.handleCLIGrant)
+	mux.HandleFunc("/auth/cli/exchange", s.handleCLIExchange)
 	mux.HandleFunc("/api/billing/checkout", s.handleBillingCheckout)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/paypal/return", s.handlePayPalReturn)
