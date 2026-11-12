@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name = 'etunnel'
-  s.version = '1.6.4'
+  s.version = '1.6.5'
   summary = 'Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.'
   s.summary = summary
   s.description = "#{summary} Buffer-based protocol client using faye-websocket."
