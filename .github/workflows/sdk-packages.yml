@@ -99,13 +99,17 @@ jobs:
           # which can never resolve - the "selectively dead DNS" theory was
           # an artifact of that bug (bare hostnames like github.com resolved
           # fine all along). Probe HOSTNAMES ONLY, map to paths separately.
+          # And probe HTTP, not DNS: a mirror whose DNS resolves but whose
+          # HTTP is dead (mirrors.edge.kernel.org on 2026-11-12 - two v1.6.4
+          # release runs died on exactly this) passes a getent-based check
+          # and then times out on every fetch.
           set -x
           pick=""
           for h in mirrors.edge.kernel.org mirror.rackspace.com azure.archive.ubuntu.com; do
-            if timeout 10 getent hosts "$h" >/dev/null 2>&1; then pick="$h"; break; fi
+            if timeout 12 curl -fsI "http://$h/ubuntu/dists/noble/InRelease" >/dev/null 2>&1; then pick="$h"; break; fi
           done
           if [ -z "$pick" ]; then
-            echo "no candidate mirror resolves - dumping diagnostics"
+            echo "no candidate mirror serves HTTP - dumping diagnostics"
             resolvectl status || true
             exit 1
           fi
