@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -148,9 +149,16 @@ func DecodeControl(b []byte) (any, error) {
 		err := json.Unmarshal(b, &m)
 		return &m, wrapTypeErr(err)
 	default:
-		return nil, fmt.Errorf("etunnel: unknown control message type %q", envelope.Type)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownControlType, envelope.Type)
 	}
 }
+
+// ErrUnknownControlType reports a well-formed control envelope whose `type`
+// is not part of this protocol version. Per PROTOCOL.md both ends IGNORE
+// unknown control types (forward compatibility: newer clients may probe
+// extensions); callers distinguish it from malformed known messages via
+// errors.Is.
+var ErrUnknownControlType = errors.New("etunnel: unknown control message type")
 
 func wrapTypeErr(err error) error {
 	if err != nil {
