@@ -29,9 +29,10 @@ type Options struct {
 	Server string
 	// LocalAddr is the local service address to expose ("127.0.0.1:8080").
 	LocalAddr string
-	// Subdomain requests a custom subdomain (requires a paid plan token).
+	// Subdomain requests a static subdomain (a free key may hold one;
+	// paid keys hold more).
 	Subdomain string
-	// Token is a paid plan API key.
+	// Token is an API key (free keys unlock one static subdomain).
 	Token string
 	// Client is a free-form client identification string.
 	Client string

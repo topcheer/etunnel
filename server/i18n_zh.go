@@ -99,7 +99,7 @@ var zhDict = map[string]string{
 	"me.plan.h":             "套餐",
 	"me.plan.hint":          "隧道时效、自定义子域名和带宽。",
 	"me.plan.maxdom":        "最多 {n} 个自定义子域名。",
-	"me.plan.random":        "仅限随机子域名。",
+	"me.plan.random":        "随机子域名（可在 /me 绑 1 个固定）。",
 	"me.plan.sub":           "订阅 / 更改套餐",
 	"me.sub":                "已登录为 <b>{email}</b>{via}{name}",
 	"me.title":              "账户 - etunnel",

@@ -125,7 +125,7 @@ var enDict = map[string]string{
 	"me.plan.hint":    "Tunnel lifetime, custom subdomains and bandwidth.",
 	"me.plan.expires": "renews/expires: {date}",
 	"me.plan.maxdom":  "Up to {n} custom subdomains.",
-	"me.plan.random":  "Random subdomain only.",
+	"me.plan.random":  "Random subdomain (or 1 static via /me).",
 	"me.plan.sub":     "Subscribe / change plan",
 	"me.plan.cancel":  "Cancel subscription",
 	"me.key.h":        "API key",

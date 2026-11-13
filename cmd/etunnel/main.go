@@ -19,8 +19,8 @@ func main() {
 	var (
 		server    = flag.String("server", os.Getenv("ETUNNEL_SERVER"), "tunnel server, e.g. wss://t.example.com/tunnel")
 		local     = flag.String("local", "", "local address to expose (default: 127.0.0.1:<port arg>)")
-		subdomain = flag.String("subdomain", "", "request a custom subdomain (paid plans)")
-		token     = flag.String("token", os.Getenv("ETUNNEL_TOKEN"), "paid plan API key")
+		subdomain = flag.String("subdomain", "", "request a static subdomain (free key: 1, paid: more)")
+		token     = flag.String("token", os.Getenv("ETUNNEL_TOKEN"), "API key (free key gets 1 static subdomain)")
 		reconnect = flag.Bool("reconnect", os.Getenv("ETUNNEL_RECONNECT") != "0", "reconnect automatically when the connection drops")
 	)
 	flag.Usage = func() {
