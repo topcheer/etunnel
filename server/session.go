@@ -597,6 +597,15 @@ func (s *Session) readLoop() {
 func (s *Session) handleControl(b []byte) error {
 	msg, err := protocol.DecodeControl(b)
 	if err != nil {
+		// PROTOCOL.md: unknown control types are ignored (forward
+		// compatibility - a newer client probing an extension must not lose
+		// its tunnel). Malformed KNOWN types stay fatal below.
+		if errors.Is(err, protocol.ErrUnknownControlType) {
+			if s.srv != nil {
+				s.srv.logf("session %s: ignoring unknown control message: %v", s.id, err)
+			}
+			return nil
+		}
 		return err
 	}
 	switch m := msg.(type) {
