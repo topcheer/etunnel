@@ -71,6 +71,9 @@ type Account struct {
 	// anonymous free account - their payment history and OAuth binding are
 	// worth keeping for support, refunds and re-subscription.
 	LapsedAt time.Time `json:"lapsedAt,omitempty"`
+	// Passkeys are the account's WebAuthn credentials (server/webauthn.go);
+	// empty means none registered.
+	Passkeys []Passkey `json:"passkeys,omitempty"`
 }
 
 // AccountStore persists accounts in a JSON file.

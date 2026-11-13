@@ -290,6 +290,17 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 		})
 	}
 	http.SetCookie(w, s.sessionCookie(acct.Email))
+	// Resume the pre-login hop (e.g. the CLI grant page) when the login
+	// page was entered with return_to: strictly same-site relative paths,
+	// so a crafted return_to can never bounce the user off this origin.
+	if c, err := r.Cookie("et_returnto"); err == nil && c.Value != "" {
+		v := c.Value
+		http.SetCookie(w, &http.Cookie{Name: "et_returnto", Value: "", Path: "/", MaxAge: -1})
+		if strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//") && !strings.Contains(v, "\r") && !strings.Contains(v, "\n") {
+			http.Redirect(w, r, v, http.StatusSeeOther)
+			return
+		}
+	}
 	http.Redirect(w, r, "/me", http.StatusSeeOther)
 }
 

@@ -87,6 +87,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ID, Label string
 		Icon      template.HTML
 	}
+	// Remember where to resume after the OAuth round-trip (the CLI grant
+	// page sets this). Validated on use in the callback; same-site paths only.
+	if rt := r.URL.Query().Get("return_to"); rt != "" {
+		http.SetCookie(w, &http.Cookie{Name: "et_returnto", Value: rt, Path: "/", MaxAge: 600, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: true})
+	}
 	var providers []prov
 	for _, p := range []string{"google", "gitlab", "github", "apple"} {
 		if s.oauthEnabled(p) {
@@ -123,6 +128,22 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;marg
 <h1>{{T "login.h1.pre"}}<span class="g">{{T "login.h1.em"}}</span></h1>
 <p class="sub">{{T "login.sub"}}</p>
 {{if .Providers}}{{range .Providers}}<a class="prov" href="/auth/{{.ID}}/login">{{.Icon}}<span>{{T "login.continue"}} {{.Label}}</span><span class="arrow">&#8594;</span></a>{{end}}{{else}}<p class="none">{{T "login.none"}}</p>{{end}}
+<button class="prov" id="pkBtn" onclick="pkLogin()" style="margin-top:.9rem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:19px;height:19px"><path d="M7 11V7a5 5 0 0 1 10 0v4"/><rect x="5" y="11" width="14" height="9" rx="2"/></svg><span>{{T "login.passkey"}}</span><span class="arrow">&#8594;</span></button>
+<p id="pkErr" class="none" style="display:none"></p>
+<script>
+function ab2b64(b){const u=new Uint8Array(b);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function pkUB64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+async function pkLogin(){
+  const btn=document.getElementById('pkBtn'),err=document.getElementById('pkErr');btn.disabled=true;err.style.display='none';
+  try{
+    const o=await(await fetch('/auth/passkey/login/begin')).json();
+    const a=await navigator.credentials.get({publicKey:{challenge:pkUB64(o.challenge),timeout:o.timeout,rpId:o.rpId,userVerification:o.userVerification||'preferred',allowCredentials:[]}});
+    const r=await fetch('/auth/passkey/login/finish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:a.id,rawId:ab2b64(a.rawId),type:a.type,clientExtensionResults:{},response:{authenticatorData:ab2b64(a.response.authenticatorData),clientDataJSON:ab2b64(a.response.clientDataJSON),signature:ab2b64(a.response.signature),userHandle:a.response.userHandle?ab2b64(a.response.userHandle):null}})});
+    if(!r.ok)throw new Error((await r.text()).slice(0,120)||('HTTP '+r.status));
+    location.href='/me';
+  }catch(e){err.textContent='Passkey: '+e.message;err.style.display='block';btn.disabled=false;}
+}
+</script>
 <p class="fine">{{T "login.fine"}}</p>
 </div>
 <div class="foot"><a href="/">&#8592; {{T "foot.home"}} etunnel</a><span>&middot;</span><a href="/pricing">{{T "nav.pricing"}}</a><span>&middot;</span><a href="https://github.com/topcheer/etunnel">{{T "nav.docs"}}</a><span>&middot;</span><a href="/terms">{{T "foot.terms"}}</a><span>&middot;</span><a href="/privacy">{{T "foot.privacy"}}</a></div>
@@ -239,6 +260,12 @@ body{padding-bottom:4rem}
     <div class="key"><input id="apikey" value="{{.Key}}" readonly><button class="btn ghost" onclick="copyKey(this)">{{T "me.key.copy"}}</button><button class="btn ghost" onclick="act('reset')">{{T "me.key.reset"}}</button></div>
   </section>
   <section class="card wide">
+    <h2>{{T "me.pk.h"}}</h2>
+    <p class="hint" style="margin-bottom:.9rem">{{T "me.pk.hint"}}</p>
+    <div id="pkList" class="chips" style="margin-bottom:.8rem"><span class="empty">...</span></div>
+    <div class="row"><button class="btn" onclick="pkAdd()">{{T "me.pk.add"}}</button></div>
+  </section>
+  <section class="card wide">
     <h2>{{T "me.dom.h"}}</h2>
     <p class="hint" style="margin-bottom:.9rem">{{T "me.dom.hint"}}</p>
     <div class="chips">{{range .DomainList}}<span class="chip">{{.}}</span>{{else}}<span class="empty">{{T "me.dom.none"}}</span>{{end}}</div>
@@ -324,6 +351,31 @@ function copyKey(btn){
   const done = ()=>{ btn.textContent='{{.MsgCopied}}'; setTimeout(()=>{btn.textContent='{{T "me.key.copy"}}';},1500); };
   if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, done); } else { done(); }
 }
+function pkB64(b){const u=new Uint8Array(b);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function pkUB64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+async function pkRender(){
+  const box=document.getElementById('pkList');if(!box)return;
+  try{
+    const list=await(await fetch('/auth/passkey/list')).json();
+    box.innerHTML=list.length?list.map(function(p){return '<span class="chip">'+p.name+' <small style="opacity:.55">'+p.created+'</small> <a href="#" onclick="pkRemove(\''+p.id+'\',this);return false" style="color:var(--red)">\u2715</a></span>';}).join(''):'<span class="empty">{{T "me.pk.none"}}</span>';
+  }catch(e){box.innerHTML='<span class="empty">-</span>';}
+}
+async function pkAdd(){
+  const name=(prompt('{{T "me.pk.name"}}')||'').trim();
+  try{
+    const o=await(await fetch('/auth/passkey/register/begin')).json();
+    const c=await navigator.credentials.create({publicKey:{challenge:pkUB64(o.challenge),rp:o.rp,user:{id:pkUB64(o.user.id),name:o.user.name,displayName:o.user.displayName},pubKeyCredParams:o.pubKeyCredParams,timeout:o.timeout,excludeCredentials:(o.excludeCredentials||[]).map(function(x){return {type:x.type,id:pkUB64(x.id)};}),authenticatorSelection:o.authenticatorSelection||{residentKey:'required',userVerification:'preferred'},attestation:'none'}});
+    const r=await fetch('/auth/passkey/register/finish?name='+encodeURIComponent(name||'passkey'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:c.id,rawId:pkB64(c.rawId),type:c.type,clientExtensionResults:{},response:{attestationObject:pkB64(c.response.attestationObject),clientDataJSON:pkB64(c.response.clientDataJSON)}})});
+    if(!r.ok)throw new Error((await r.text()).slice(0,120)||('HTTP '+r.status));
+    pkRender();
+  }catch(e){alert('Passkey: '+e.message);}
+}
+async function pkRemove(id,el){
+  if(!confirm('{{T "me.pk.confirm"}}'))return;
+  const r=await fetch('/auth/passkey/remove?id='+encodeURIComponent(id),{method:'POST'});
+  if(r.ok)pkRender();else alert(await r.text());
+}
+pkRender();
 </script>
 <div class="langrow">{{.LangSwitch}}</div>
 </body></html>`
