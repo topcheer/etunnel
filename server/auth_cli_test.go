@@ -60,15 +60,27 @@ func TestCLIFlowE2E(t *testing.T) {
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	s.serveCLI(rec, req)
+	var csrfCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == pkCsrfCookie {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil || !strings.Contains(rec.Body.String(), `name="csrf"`) {
+		t.Fatal("grant GET did not mint csrf cookie + form field")
+	}
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Authorize command-line access") {
 		t.Fatalf("grant GET: %d body=%q", rec.Code, rec.Body.String()[:min(200, rec.Body.Len())])
 	}
 
 	// grant POST: allow -> 303 to the loopback redirect_uri with the code
-	req = httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode, strings.NewReader("action=allow"))
+	req = httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode,
+		strings.NewReader("action=allow&csrf="+nonceOf(csrfCookie.Value)))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://"+s.cfg.Domain)
 	req.Host = s.cfg.Domain
 	req.AddCookie(cookie)
+	req.AddCookie(csrfCookie)
 	rec = httptest.NewRecorder()
 	s.serveCLI(rec, req)
 	loc := rec.Header().Get("Location")
@@ -101,13 +113,7 @@ func TestCLIExchangeCodeReplay(t *testing.T) {
 		DeviceCode string `json:"device_code"`
 	}](t, s, "/auth/cli/start", map[string]string{"redirect_uri": "http://127.0.0.1:1/callback"}, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode, strings.NewReader("action=allow"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Host = s.cfg.Domain
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	s.serveCLI(rec, req)
-	authCode := strings.TrimPrefix(rec.Header().Get("Location"), "http://127.0.0.1:1/callback?code=")
+	authCode := grantAllow(t, s, cookie, start.DeviceCode, "1")
 
 	body := map[string]string{"device_code": start.DeviceCode, "code": authCode}
 	if c, _ := cliPost[struct{}](t, s, "/auth/cli/exchange", body, nil); c != http.StatusOK {
@@ -129,13 +135,7 @@ func TestCLICrossFlowPairing(t *testing.T) {
 		DeviceCode string `json:"device_code"`
 	}](t, s, "/auth/cli/start", map[string]string{"redirect_uri": "http://127.0.0.1:2/callback"}, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+a.DeviceCode, strings.NewReader("action=allow"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Host = s.cfg.Domain
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	s.serveCLI(rec, req)
-	authCode := strings.TrimPrefix(rec.Header().Get("Location"), "http://127.0.0.1:1/callback?code=")
+	authCode := grantAllow(t, s, cookie, a.DeviceCode, "1")
 
 	// Redeem with B's device code: pairing must fail.
 	if c, _ := cliPost[struct{}](t, s, "/auth/cli/exchange", map[string]string{"device_code": b.DeviceCode, "code": authCode}, nil); c != http.StatusBadRequest {
@@ -203,13 +203,7 @@ func TestCLICredsPayloadFreeTier(t *testing.T) {
 	_, start := cliPost[struct {
 		DeviceCode string `json:"device_code"`
 	}](t, s, "/auth/cli/start", map[string]string{"redirect_uri": "http://127.0.0.1:1/callback"}, nil)
-	req := httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode, strings.NewReader("action=allow"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Host = s.cfg.Domain
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	s.serveCLI(rec, req)
-	authCode := strings.TrimPrefix(rec.Header().Get("Location"), "http://127.0.0.1:1/callback?code=")
+	authCode := grantAllow(t, s, cookie, start.DeviceCode, "1")
 
 	req2 := httptest.NewRequest(http.MethodPost, "/auth/cli/exchange", strings.NewReader(`{"device_code":"`+start.DeviceCode+`","code":"`+authCode+`"}`))
 	req2.Host = s.cfg.Domain
@@ -231,3 +225,96 @@ func TestCLICredsPayloadFreeTier(t *testing.T) {
 }
 
 func (s *Server) serveCLI(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }
+
+func nonceOf(v string) string { n, _, _ := strings.Cut(v, "."); return n }
+
+// grantAllow walks GET (csrf mint) + POST allow in one call and returns the
+// auth code from the redirect Location.
+func grantAllow(t *testing.T, s *Server, cookie *http.Cookie, dc, cbPort string) string {
+	t.Helper()
+	get := httptest.NewRequest(http.MethodGet, "/auth/cli/grant?dc="+dc, nil)
+	get.Host = s.cfg.Domain
+	get.AddCookie(cookie)
+	grec := httptest.NewRecorder()
+	s.serveCLI(grec, get)
+	var csrfCookie *http.Cookie
+	for _, c := range grec.Result().Cookies() {
+		if c.Name == pkCsrfCookie {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("grantAllow: GET did not mint csrf cookie")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+dc,
+		strings.NewReader("action=allow&csrf="+nonceOf(csrfCookie.Value)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = s.cfg.Domain
+	req.AddCookie(cookie)
+	req.AddCookie(csrfCookie)
+	rec := httptest.NewRecorder()
+	s.serveCLI(rec, req)
+	return strings.TrimPrefix(rec.Header().Get("Location"), "http://127.0.0.1:"+cbPort+"/callback?code=")
+}
+
+// TestCLIGrantCSRF pins #114: the Allow POST is rejected without the signed
+// cookie + form token pair, and with a cross-site Origin even when the pair
+// rides along (an attacker page can force the request but not forge same-site).
+func TestCLIGrantCSRF(t *testing.T) {
+	s, _, cookie := cliTestEnv(t)
+	_, start := cliPost[struct {
+		DeviceCode string `json:"device_code"`
+	}](t, s, "/auth/cli/start", map[string]string{"redirect_uri": "http://127.0.0.1:1/callback"}, nil)
+
+	// 1. No csrf at all (classic cross-site form post).
+	req := httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode, strings.NewReader("action=allow"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = s.cfg.Domain
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.serveCLI(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing csrf: %d, want 403", rec.Code)
+	}
+
+	// 2. Valid GET-minted pair, but forced cross-site: Origin betrays it.
+	get := httptest.NewRequest(http.MethodGet, "/auth/cli/grant?dc="+start.DeviceCode, nil)
+	get.Host = s.cfg.Domain
+	get.AddCookie(cookie)
+	grec := httptest.NewRecorder()
+	s.serveCLI(grec, get)
+	var csrfCookie *http.Cookie
+	for _, c := range grec.Result().Cookies() {
+		if c.Name == pkCsrfCookie {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("GET did not mint csrf cookie")
+	}
+	req = httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode,
+		strings.NewReader("action=allow&csrf="+nonceOf(csrfCookie.Value)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	req.Host = s.cfg.Domain
+	req.AddCookie(cookie)
+	req.AddCookie(csrfCookie)
+	rec = httptest.NewRecorder()
+	s.serveCLI(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site origin: %d, want 403", rec.Code)
+	}
+
+	// 3. Forged token (invalid signature) rejected even same-origin.
+	req = httptest.NewRequest(http.MethodPost, "/auth/cli/grant?dc="+start.DeviceCode, strings.NewReader("action=allow&csrf=forged"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://"+s.cfg.Domain)
+	req.Host = s.cfg.Domain
+	req.AddCookie(cookie)
+	req.AddCookie(&http.Cookie{Name: pkCsrfCookie, Value: "forged.deadbeef"})
+	rec = httptest.NewRecorder()
+	s.serveCLI(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forged token: %d, want 403", rec.Code)
+	}
+}
