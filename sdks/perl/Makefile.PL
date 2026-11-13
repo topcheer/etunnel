@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME         => 'etunnel',
-    VERSION      => '1.6.8',
+    VERSION      => '1.6.9',
     ABSTRACT     => 'Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.',
     AUTHOR       => 'etunnel authors <etunnel@example.com>',
     LICENSE      => 'mit',
