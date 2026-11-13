@@ -101,7 +101,7 @@ func TestMeshOwnershipGossipAndForward(t *testing.T) {
 // #120: Close must release the claim-broadcast goroutine (stopCh closed,
 // Once-guarded) and a second Close must not panic.
 func TestMeshCloseStopsClaimBroadcast(t *testing.T) {
-	r, err := newMeshRouter("127.0.0.1:0", "", "close-test")
+	r, err := newMeshRouter(fmt.Sprintf("127.0.0.1:%d", freePort(t)), "", "close-test")
 	if err != nil {
 		t.Fatalf("mesh: %v", err)
 	}
