@@ -97,3 +97,23 @@ func TestMeshOwnershipGossipAndForward(t *testing.T) {
 		t.Fatal("loop guard failed")
 	}
 }
+
+// #120: Close must release the claim-broadcast goroutine (stopCh closed,
+// Once-guarded) and a second Close must not panic.
+func TestMeshCloseStopsClaimBroadcast(t *testing.T) {
+	r, err := newMeshRouter("127.0.0.1:0", "", "close-test")
+	if err != nil {
+		t.Fatalf("mesh: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case <-r.stopCh:
+	default:
+		t.Fatal("stopCh not closed after Close - claim goroutine would leak")
+	}
+	if err := r.Close(); err != nil { // second Close: sync.Once must absorb it
+		t.Fatalf("second close panicked or failed: %v", err)
+	}
+}
