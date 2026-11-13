@@ -26,7 +26,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q listening "$OUT" && break; sleep 1; do
 ADDR=$(grep listening "$OUT" | awk '{print $2}')
 [ -n "$ADDR" ] || { echo "FAIL: fixture did not start"; exit 1; }
 
-RESULT=$(FX_ADDR=$ADDR timeout 60 scala -cp /tmp/lcs LoginCheckS 2>&1) || RESULT="ERR:$RESULT"
+# Scala 3.10's runtime stdlib is the merged org.scala-lang:scala-library jar
+# (contains both the 2.13 compat layer and Scala 3 runtime classes).
+SCALA_LIB=$(find /opt/homebrew/Cellar/scala -path '*org/scala-lang/scala-library/*' -name 'scala-library-*.jar' 2>/dev/null | grep -v sources | head -1)
+[ -n "$SCALA_LIB" ] || { echo "FAIL: scala library jar not found"; exit 1; }
+CP="/tmp/lcs:$SCALA_LIB"
+RESULT=$(FX_ADDR=$ADDR timeout 60 java -cp "$CP" LoginCheckS 2>&1) || RESULT="ERR:$RESULT"
 case "$RESULT" in
   "CRED:tok-123:List(my-sub):pro") echo "PASS: loopback login start->grant->exchange" ;;
   *) echo "FAIL: $RESULT"; exit 1 ;;

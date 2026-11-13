@@ -178,7 +178,7 @@ object Etunnel {
         resp.headers().map.forEach { (k: String, vs: java.util.List[String]) =>
           val lk = k.toLowerCase
           if (!HOP(lk) && lk != "content-length") {
-            vs.forEach { v: String =>
+            vs.forEach { (v: String) =>
               if (!first) sb.append(',')
               first = false
               sb.append('"').append(MiniJson.esc(k)).append("\":[\"")
