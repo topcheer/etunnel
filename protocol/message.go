@@ -36,7 +36,6 @@ const (
 	ErrCodePingTimeout    = "ping_timeout"
 	ErrCodeServerShutdown = "server_shutdown"
 	ErrCodeTooManyTunnels = "too_many_tunnels"
-	ErrCodeTooManyStreams = "too_many_streams"
 )
 
 // Hello is the first message, client -> server.

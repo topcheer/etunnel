@@ -232,7 +232,7 @@ migration (static wildcard cert from the ACME directory, not renewed).
 | `/setlang` | UI language switch (sets the `et_lang` cookie, redirects back) |
 | `GET /me/domain-check?d=<sub>` | subdomain availability probe for the `/me` page (session); custom subdomains are 1-63 chars, cross-account duplicates rejected |
 | `POST /api/billing/checkout` | tier checkout, or premium short subdomains (`tier: "short-domain-1/2/3"`, one-time $3/$2/$1 per 30-day period; crypto floors at $2; Free accounts may buy) |
-| `/webhooks/stripe`, `/webhooks/paypal` | payment provider callbacks |
+| `/webhooks/stripe`, `/webhooks/paypal`, `/webhooks/nowpayments` | payment provider callbacks (crypto IPN) |
 | `127.0.0.1:9090/stats` | live tunnels, uptime, byte counters, billing status |
 | `127.0.0.1:9090/admin/accounts` | account management (`X-Admin-Token`) |
 
