@@ -115,16 +115,12 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 	s.metrics.requestsTotal.Add(1)
 
 	upstreamUpgrade := hasUpgrade(r.Header)
-
-	// Forward header set.
-	headers := forwardRequestHeaders(r, upstreamUpgrade)
-
 	if err := sess.sendJSON(&protocol.Req{
 		Type:     protocol.MsgReq,
 		StreamID: st.id,
 		Method:   r.Method,
 		Path:     r.URL.RequestURI(),
-		Headers:  headers,
+		Headers:  forwardRequestHeaders(r, upstreamUpgrade),
 	}); err != nil {
 		// Proxy failures must leave a trace: accessLog only covers the base
 		// domain (#42/#46), which made exactly this class of incident - tunnel
@@ -151,14 +147,7 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 
 	res, err := st.waitRes(s.cfg.HeaderWaitTimeout)
 	if err != nil {
-		if errors.Is(err, errStreamReset) {
-			s.logf("proxy: %s %s%s: stream reset", r.Method, r.Host, r.URL.RequestURI())
-			s.badGateway(w, r.Host, "tunnel disconnected")
-		} else {
-			s.logf("proxy: %s %s%s: no client response within %s (client stalled or gone)",
-				r.Method, r.Host, r.URL.RequestURI(), s.cfg.HeaderWaitTimeout)
-			http.Error(w, "tunnel did not answer in time", http.StatusGatewayTimeout)
-		}
+		s.serveTunnelResErr(w, r, err)
 		return
 	}
 	select {
@@ -172,7 +161,26 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 
-	// Regular response: copy headers, stream body.
+	s.writeTunnelResponseHeaders(w, r, res, st)
+	s.streamTunnelBody(w, r, sess, st)
+}
+
+// serveTunnelResErr maps a waitRes failure to the visitor response. Reset
+// means the tunnel vanished (502); a timeout is the client's stall (504).
+func (s *Server) serveTunnelResErr(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errStreamReset) {
+		s.logf("proxy: %s %s%s: stream reset", r.Method, r.Host, r.URL.RequestURI())
+		s.badGateway(w, r.Host, "tunnel disconnected")
+		return
+	}
+	s.logf("proxy: %s %s%s: no client response within %s (client stalled or gone)",
+		r.Method, r.Host, r.URL.RequestURI(), s.cfg.HeaderWaitTimeout)
+	http.Error(w, "tunnel did not answer in time", http.StatusGatewayTimeout)
+}
+
+// writeTunnelResponseHeaders copies the client's response headers through,
+// minus hop-by-hop and any connection tokens, then commits the status.
+func (s *Server) writeTunnelResponseHeaders(w http.ResponseWriter, r *http.Request, res *protocol.Res, st *Stream) {
 	respHdr := w.Header()
 	tokens := connectionTokensFromMap(res.Headers)
 	for k, vs := range res.Headers {
@@ -186,9 +194,14 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 	w.WriteHeader(res.Status)
 	if r.Method == http.MethodHead {
 		st.finish()
-		return
 	}
+}
 
+// streamTunnelBody relays the stream body to the visitor under the account
+// bandwidth limiter. A mid-body failure after headers forces the connection
+// closed (panic ErrAbortHandler) so the client sees a truncated - not
+// silently valid - body; EOF finishes the stream cleanly.
+func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *Session, st *Stream) {
 	rc := http.NewResponseController(w)
 	buf := make([]byte, protocol.MaxPayload)
 	for {
@@ -211,8 +224,6 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 			if errors.Is(rerr, io.EOF) {
 				return
 			}
-			// Mid-body failure after headers were sent: force the connection
-			// closed so the client sees a truncated, not silently valid body.
 			panic(http.ErrAbortHandler)
 		}
 	}
