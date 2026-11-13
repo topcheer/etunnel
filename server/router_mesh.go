@@ -36,6 +36,11 @@ type meshRouter struct {
 	ml     *memberlist.Memberlist
 	hc     *http.Client // for Forward
 	fwdHdr string       // header marking an already-forwarded request
+	// stopCh releases the claim-broadcast goroutine in Close; stopOnce
+	// guards it against a double Close panic (agent teardown can race the
+	// embedder's explicit Close).
+	stopCh   chan struct{}
+	stopOnce sync.Once
 
 	mu    sync.RWMutex
 	owner map[string]string // subdomain -> advertise addr ("" = us)
@@ -89,12 +94,18 @@ func newMeshRouter(advertise, join, nodeID string) (*meshRouter, error) {
 	// Re-broadcast our ownership every 10s: SendReliable is best-effort and
 	// NodeMeta rides periodic probes, so a periodic refresh guarantees
 	// convergence without waiting for push/pull.
+	r.stopCh = make(chan struct{})
 	go func() {
 		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
-		for range t.C {
-			if subs := r.ourSubs(); len(subs) > 0 {
-				r.broadcast(meshEvent{Kind: "claim", From: r.self, Subs: subs})
+		for {
+			select {
+			case <-t.C:
+				if subs := r.ourSubs(); len(subs) > 0 {
+					r.broadcast(meshEvent{Kind: "claim", From: r.self, Subs: subs})
+				}
+			case <-r.stopCh:
+				return
 			}
 		}
 	}()
@@ -305,6 +316,7 @@ func (r *meshRouter) sendSnapshotTo(name string) {
 
 // Close releases everything and leaves the cluster.
 func (r *meshRouter) Close() error {
+	r.stopOnce.Do(func() { close(r.stopCh) })
 	subs := r.ourSubs()
 	if len(subs) > 0 {
 		r.broadcast(meshEvent{Kind: "release", From: r.self, Subs: subs})
