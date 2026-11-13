@@ -341,9 +341,25 @@ export interface LoginOptions {
   timeoutMs?: number;
 }
 
-function defaultOpenBrowserDeno(u: string): void {
-  const cmd = Deno.build.os === 'darwin' ? 'open' : Deno.build.os === 'windows' ? 'rundll32 url.dll,FileProtocolHandler' : 'xdg-open';
-  new Deno.Command(cmd, { args: [u], stdout: 'null', stderr: 'null' }).spawn(); // fire-and-forget
+/** Open the authorization URL in the system browser across runtimes: Deno native, Node/Bun via node:child_process, headless fallback prints the URL. */
+function defaultOpenBrowser(u: string): void {
+  const g = globalThis as { Deno?: { build: { os: string }; Command: new (cmd: string, opts: { args: string[]; stdout: string; stderr: string }) => { spawn(): void } }; process?: { platform: string; versions?: Record<string, string> } };
+  if (g.Deno?.build) {
+    const cmd = g.Deno.build.os === 'darwin' ? 'open' : g.Deno.build.os === 'windows' ? 'rundll32 url.dll,FileProtocolHandler' : 'xdg-open';
+    new g.Deno.Command(cmd, { args: [u], stdout: 'null', stderr: 'null' }).spawn(); // fire-and-forget
+    return;
+  }
+  if (g.process?.versions) {
+    import('node:child_process')
+      .then((cp) => {
+        const plat = g.process!.platform;
+        const cmd = plat === 'darwin' ? 'open' : plat === 'win32' ? 'rundll32 url.dll,FileProtocolHandler' : 'xdg-open';
+        cp.spawn(cmd, [u], { stdio: 'ignore', detached: true }).unref();
+      })
+      .catch(() => console.log('etunnel: authorize in your browser: ' + u));
+    return;
+  }
+  console.log('etunnel: authorize in your browser: ' + u);
 }
 
 /**
@@ -391,7 +407,7 @@ export async function login(server: string, opts: LoginOptions = {}): Promise<Cr
         const start = await r.json() as { auth_url?: string; device_code?: string };
         if (!start.auth_url || !start.device_code) throw new Error('etunnel: login: empty start payload');
         deviceCode = start.device_code;
-        const open = opts.openBrowser || defaultOpenBrowserDeno;
+        const open = opts.openBrowser || defaultOpenBrowser;
         try { open(start.auth_url); } catch { /* headless: the URL is printed below */ }
         console.error('etunnel: authorize in your browser: ' + start.auth_url);
       } catch (e) { if (!settled) { clearTimeout(timer); try { srv.unref(); } catch { /* gone */ } reject(e); } }
