@@ -38,6 +38,9 @@ check-versions:
 	python3 scripts/bump-release.py --check
 
 verify: check-versions
+	# Guard the v1.6.10 failure mode: a renamed-but-unstaged rockspec.
+	@if [ -n "$$(git status --porcelain -- sdks/lua/ 2>/dev/null)" ]; then \
+		echo "verify: sdks/lua has unstaged/untracked changes (rockspec rename not committed?)"; exit 1; fi
 	go build ./... && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
