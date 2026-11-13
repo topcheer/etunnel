@@ -10,6 +10,7 @@
 [![Hex](https://img.shields.io/hexpm/v/etunnel?label=Hex%20etunnel)](https://hex.pm/packages/etunnel)
 [![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)
 [![pub.dev](https://img.shields.io/pub/v/etunnel?label=pub.dev%20etunnel)](https://pub.dev/packages/etunnel)
+[![C/C++ · GitHub Releases](https://img.shields.io/github/v/release/topcheer/etunnel?label=C%2FC%2B%2B%20%C2%B7%20GitHub%20Releases)](https://github.com/topcheer/etunnel/releases)
 [![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)
 [![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel--clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)
 [![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)
