@@ -41,7 +41,7 @@ verify: check-versions
 	go build ./... && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
-	cd $(Sdks)/java && javac -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
+	cd $(Sdks)/java && javac --release 11 -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
 ifeq ($(UNAME_S),Darwin)
 	# Swift gate is a full swift build (compile-level), not a parse check:
 	# swiftc -parse misses type/symbol errors (e.g. #108's NSWorkspace/poll

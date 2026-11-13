@@ -527,7 +527,7 @@ public class Etunnel {
             if (tok == null || ((String) tok).isEmpty()) throw new IllegalStateException("etunnel: login: no api_token in exchange response");
             java.util.List<String> subs = new ArrayList<>();
             Object raw = creds.get("subdomains");
-            if (raw instanceof java.util.List<?> l) for (Object o : l) subs.add(String.valueOf(o));
+            if (raw instanceof java.util.List) for (Object o : (java.util.List<?>) raw) subs.add(String.valueOf(o));
             return new LoginResult((String) tok, subs, String.valueOf(creds.getOrDefault("plan", "")));
         } finally { srv.stop(0); }
     }
