@@ -14,8 +14,8 @@ WriteMakefile(
     },
     META_MERGE   => {
         resources => {
-            repository => 'https://github.com/ggcode/etunnel',
-            homepage   => 'https://github.com/ggcode/etunnel',
+            repository => 'https://github.com/topcheer/etunnel',
+            homepage   => 'https://github.com/topcheer/etunnel',
         },
         keywords => [qw(tunnel reverse-proxy webhook localhost)],
     },
