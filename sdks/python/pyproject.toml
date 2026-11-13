@@ -23,8 +23,8 @@ classifiers = [
 dependencies = ["websocket-client>=1.6"]
 
 [project.urls]
-Homepage = "https://github.com/ggcode/etunnel"
-Repository = "https://github.com/ggcode/etunnel"
+Homepage = "https://github.com/topcheer/etunnel"
+Repository = "https://github.com/topcheer/etunnel"
 
 [project.scripts]
 etunnel = "etunnel:_main"
