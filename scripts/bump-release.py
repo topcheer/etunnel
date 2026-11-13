@@ -82,12 +82,21 @@ def bump(v):
             cur = rocks[0]
             body = cur.read_text()
             body = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}-1"', body, count=1)
-            newp = cur.with_name(cur.name.replace(cur.name.split("-")[1], v))
             # ggcode.etunnel-<ver>-1.rockspec
             new_name = f"ggcode.etunnel-{v}-1.rockspec"
             newp = cur.with_name(new_name)
             newp.write_text(body)
-            if newp != cur: cur.unlink()
+            if newp != cur:
+                cur.unlink()
+                # Stage the rename ourselves: a plain `git add -u` (or `-A`
+                # from a release script) only records the deletion of the
+                # old path; the new file stays untracked and CI checks out
+                # a tree with zero rockspecs (v1.6.10 burned a version on
+                # exactly this). Self-contained beats docs.
+                import subprocess
+                r = subprocess.run(["git", "add", "--", str(newp), str(cur)], cwd=ROOT)
+                if r.returncode != 0:
+                    errors.append(f"lua: rockspec staged failed (git add)")
             lua_done = True
             print(f"  lua: {new_name}")
             continue
