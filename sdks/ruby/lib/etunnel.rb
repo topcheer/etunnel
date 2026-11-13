@@ -276,15 +276,14 @@ def Etunnel.main(argv = ARGV)
     nap.call(delay)
   end
 end
-Etunnel.main if $PROGRAM_NAME == __FILE__
 
-  # --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
+# --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
   #   creds = Etunnel.login('https://t.etun.uk')  # opens the browser
   #   # -> { 'api_token' => ..., 'subdomains' => [...], 'plan' => ..., 'expires_at' => 0 }
   # Binds a random 127.0.0.1 port, waits for the one-time code on /callback
   # (10-minute budget), exchanges it. Persist the result and pass api_token
   # as token: on future Etunnel.connect calls.
-  def self.login(server, open_browser: nil, timeout: 600)
+def Etunnel.login(server, open_browser: nil, timeout: 600)
     require 'socket'
     require 'net/http'
     require 'json'
@@ -320,7 +319,9 @@ Etunnel.main if $PROGRAM_NAME == __FILE__
     end
     $stderr.puts "etunnel: authorize in your browser: #{start['auth_url']}" unless opened
 
-    code = th.value(timeout)
+    th.join(timeout)
+    raise 'etunnel: login timed out' if th.alive?
+    code = th.value
     server_sock.close
     raise 'etunnel: login: callback without code' if code.empty?
 
@@ -329,3 +330,6 @@ Etunnel.main if $PROGRAM_NAME == __FILE__
     raise 'etunnel: login: no api_token in exchange response' if creds['api_token'].to_s.empty?
     creds
   end
+
+Etunnel.main if $PROGRAM_NAME == __FILE__
+

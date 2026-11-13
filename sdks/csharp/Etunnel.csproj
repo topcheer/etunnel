@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
+    <StartupObject>Cli</StartupObject>
     <PackageId>etunnel</PackageId>
     <Version>1.6.8</Version>
     <Authors>etunnel authors</Authors>

@@ -537,9 +537,6 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
         .into_string().map_err(|e| e.to_string())?;
     let auth_url = json_field(&start, "auth_url").ok_or("etunnel: login: empty start payload")?;
     let device_code = json_field(&start, "device_code").ok_or("etunnel: login: empty start payload")?;
-
-    let url = format!("{}/auth/cli/grant?{}", base, ""); // not used; auth_url already absolute
-    let _ = url;
     let mut opened = false;
     if let Some(opener) = &open_browser {
         if opener(&auth_url).is_ok() { opened = true; }
@@ -554,7 +551,7 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
         eprintln!("etunnel: authorize in your browser: {auth_url}");
     }
 
-    srv.set_nonblocking(false).ok();
+    srv.set_nonblocking(true).ok();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let mut code = String::new();
     while code.is_empty() {
@@ -563,7 +560,10 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
         }
         let (mut c, _) = match srv.accept() {
             Ok(x) => x,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
             Err(e) => return Err(e.to_string()),
         };
         let mut req = String::new();
@@ -622,4 +622,25 @@ fn json_string_array(s: &str, key: &str) -> Option<Vec<String>> {
     let end = rest.find(']')?;
     let inner = &rest[..end];
     Some(inner.split(',').map(|x| x.trim().trim_matches('"').to_string()).filter(|x| !x.is_empty()).collect())
+}
+
+#[cfg(test)]
+mod login_e2e {
+    use super::*;
+    // E2E against sdks/testtools/loginserver (run via tests/test_login.sh,
+    // which exports FX_ADDR). Skipped when the fixture is not up.
+    #[test]
+    fn loopback_login_start_grant_exchange() {
+        let addr = match std::env::var("FX_ADDR") {
+            Ok(a) if !a.is_empty() => a,
+            _ => { eprintln!("SKIP: FX_ADDR not set"); return; }
+        };
+        let creds = etunnel_login(&format!("http://{addr}"), Some(|u: &str| {
+            std::process::Command::new("curl").args(["-s", "-o", "/dev/null", u]).spawn().map(|_| ()).map_err(|e| e).ok();
+            Ok(())
+        }), 30).expect("login flow failed");
+        assert_eq!(creds.api_token, "tok-123");
+        assert_eq!(creds.subdomains, vec!["my-sub"]);
+        assert_eq!(creds.plan, "pro");
+    }
 }

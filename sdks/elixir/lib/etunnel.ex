@@ -342,7 +342,7 @@ defmodule Etunnel do
     base = String.trim_trailing(server || "", "/")
     if base == "", do: raise(ArgumentError, message: "etunnel: login: server required")
 
-    {:ok, srv} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, listen_on: ~c"127.0.0.1", reuseaddr: true])
+    {:ok, srv} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
     {:ok, port} = :inet.port(srv)
 
     start = login_post(base, "/auth/cli/start", %{redirect_uri: "http://127.0.0.1:#{port}/callback"})
