@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
             if (!sub.empty()) hello += ",\"subdomain\":\"" + json_escape(sub) + "\"";
             if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
             if (!g_resume.empty()) hello += ",\"resume\":\"" + json_escape(g_resume) + "\"";
-            hello += ",\"client\":\"etunnel-cpp/1.4.0\"}";
+            hello += ",\"client\":\"etunnel-cpp/1.6.11\"}";
             client->send(hdl, hello, websocketpp::frame::opcode::text, ec);
         });
         // the supervisor's only view of the connection lifecycle

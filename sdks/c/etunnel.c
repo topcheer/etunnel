@@ -367,7 +367,7 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
         char *res_e = g_resume[0] ? json_escape_dup(g_resume) : NULL;
         char hello[2048];
         snprintf(hello, sizeof(hello),
-            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.4.0\"}",
+            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.6.11\"}",
             sub_e ? ",\"subdomain\":\"" : "", sub_e ? sub_e : "", sub_e ? "\"" : "",
             tok_e ? ",\"token\":\"" : "", tok_e ? tok_e : "", tok_e ? "\"" : "",
             res_e ? ",\"resume\":\"" : "", res_e ? res_e : "");

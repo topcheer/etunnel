@@ -403,7 +403,7 @@ defmodule Etunnel do
     :application.ensure_all_started(:ssl)
     url = base <> path
     req = {to_charlist(url), [], ~c"application/json", Jason.encode!(body)}
-    case :httpc.request(:post, req, [{:timeout, 30_000}], body_format: :binary) do
+    case :httpc.request(:post, req, [{:timeout, 30_000}, {:proxy, {:undefined, []}}], body_format: :binary) do
       {:ok, {{_, 200, _}, _, resp}} -> Jason.decode!(resp)
       {:ok, {{_, status, _}, _, resp}} ->
         raise RuntimeError, message: "etunnel: login: HTTP #{status} from #{path}: #{String.slice(to_string(resp), 0, 200)}"
