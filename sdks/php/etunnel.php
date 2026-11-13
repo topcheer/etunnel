@@ -152,8 +152,11 @@ final class Etunnel
             $opts['http']['content'] = $body;
         }
         $ctx = stream_context_create($opts);
+        // PHP 8.4 deprecates the implicit magic local $http_response_header:
+        // declare it first so file_get_contents assigns an existing variable.
+        $http_response_header = null;
         $raw = @file_get_contents("http://{$local}{$path}", false, $ctx);
-        if ($raw === false || !isset($http_response_header)) {
+        if ($raw === false || $http_response_header === null) {
             self::sendText($sock, json_encode(['type' => 'res', 'streamId' => $sid, 'status' => 502,
                 'headers' => ['Content-Type' => ['text/html; charset=utf-8']]]));
             self::sendBinary($sock, self::frame(0x01, $sid, self::localErrorPage('request failed')));

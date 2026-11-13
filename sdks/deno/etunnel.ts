@@ -25,6 +25,8 @@ export interface Options {
   /** Server-signed token from a previous session: reclaim the same subdomain. */
   resume?: string;
   onClose?: (reason: string) => void;
+  /** Injected WebSocket constructor (the CLI supervisor captures the session socket this way) instead of patching the global, which is unsafe when several connects race on shared event loops. */
+  wsFactory?: (url: string) => WebSocket;
 }
 
 export interface Tunnel {
@@ -46,7 +48,7 @@ function pickHostPort(local: string | number): { host: string; port: number } {
 
 export async function connect(server: string, local: string | number, opts: Options = {}): Promise<Tunnel> {
   const { host, port } = pickHostPort(local);
-  const ws = new WebSocket(server, 'etunnel-v1');
+  const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
   ws.binaryType = 'arraybuffer'; // default is "blob" in Deno
 
   await new Promise<void>((res, rej) => {
@@ -54,7 +56,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.onerror = () => rej(new Error('ws: connect failed'));
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-deno/1.0', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-deno/1.6.11', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
     const to = setTimeout(() => rej(new Error('welcome timeout')), 15000);
