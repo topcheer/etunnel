@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "etunnel"
-version = "1.6.8"
+version = "1.6.12"
 dependencies = [
  "tungstenite",
  "ureq",
