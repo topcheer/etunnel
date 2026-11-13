@@ -78,6 +78,24 @@ Client → server:
   old client that never sends it is unaffected. This is what makes a
   reconnect — including after a server restart — keep the hostname that was
   already shared with other people.
+- `policy` (optional object) declares per-tunnel edge protection. The server
+  evaluates it on every visitor request **before** opening a stream:
+  - `basicAuth: "user:pass"` — HTTP Basic; wrong/missing credentials get
+    `401` + `WWW-Authenticate` at the edge.
+  - `allowIPs: ["1.2.3.4", "10.0.0.0/8"]` — source allowlist (plain IPs are
+    treated as /32 or /128); outside gets `403`. Behind a reverse proxy the
+    visitor IP resolves from `CF-Connecting-IP` → `X-Real-IP` → first
+    `X-Forwarded-For` hop; strip those headers at your edge if untrusted.
+  - `webhooks: [{provider, secret}]` with `provider` ∈ `stripe | github |
+    gitlab`: requests carrying a known provider signature header are
+    verified against the raw body (Stripe `t=…,v1=…` with 5-minute
+    tolerance, GitHub `X-Hub-Signature-256`, GitLab `X-Gitlab-Token`);
+    mismatch gets `401`, verified requests reach the local service with
+    `X-Etunnel-Webhook: verified: <provider>`. Requests without any known
+    signature header fall through to the other layers.
+  A malformed policy fails the handshake (protocol error). An omitted
+  policy is exactly the legacy behavior. Secrets ride the WSS hello and
+  live in server memory only — they are never persisted.
 
 Server → client (success):
 

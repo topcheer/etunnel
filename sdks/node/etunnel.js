@@ -52,7 +52,7 @@ async function connect(server, local, opts = {}) {
     ws.onclose = (ev) => { if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } }); };
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.4.0', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.6.12', resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('welcome timeout')), 15000);

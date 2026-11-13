@@ -107,6 +107,24 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 // serveTunnelRequest forwards one external HTTP exchange over a session
 // stream.
 func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess *Session) {
+	// Edge policy gate (feature-gap #1/#3): evaluated before any stream is
+	// opened, so rejected visitors never reach the tunnel. Webhook rules
+	// need the raw body: buffer (bounded), verify, then replay into the
+	// normal forwarding path - other policies stay fully streaming.
+	var verifyBody []byte
+	if sess.policy != nil {
+		if sess.policy.needsBody() && r.Body != nil && !hasUpgrade(r.Header) {
+			var err error
+			verifyBody, err = readBodyForVerify(r, 2<<20)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+		}
+		if !sess.policy.apply(w, r, verifyBody) {
+			return
+		}
+	}
 	st := sess.OpenStream()
 	if st == nil {
 		http.Error(w, "tunnel is at its concurrency limit", http.StatusTooManyRequests)
