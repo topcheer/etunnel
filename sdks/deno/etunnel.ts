@@ -18,24 +18,41 @@ function frame(kind: number, id: number, payload: Uint8Array): Uint8Array {
 
 const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
+/**
+ * Options for {@linkcode connect}.
+ */
 export interface Options {
+  /** API key from {@linkcode login} or /api/register; unlocks paid features. */
   token?: string;
+  /** Request a specific subdomain (requires a paid plan token). */
   subdomain?: string;
+  /** Client identification string sent in the hello message. */
   client?: string;
   /** Server-signed token from a previous session: reclaim the same subdomain. */
+  /** Resume token from a previous tunnel; reclaims its subdomain. */
   resume?: string;
+  /** Called with the close reason when the tunnel drops. */
   onClose?: (reason: string) => void;
   /** Injected WebSocket constructor (the CLI supervisor captures the session socket this way) instead of patching the global, which is unsafe when several connects race on shared event loops. */
   wsFactory?: (url: string) => WebSocket;
 }
 
+/**
+ * A live tunnel: one WebSocket connection multiplexing HTTP streams to the
+ * exposed local service.
+ */
 export interface Tunnel {
+  /** Public HTTPS URL of the tunnel. */
   url: string;
+  /** Hostname the tunnel is served under. */
   hostname: string;
+  /** Subdomain the tunnel is served under. */
   subdomain: string;
   /** Server-signed token: pass back as opts.resume to reclaim the subdomain. */
   resumeToken?: string;
+  /** Plan name, e.g. "Free". */
   plan: string;
+  /** Tears the tunnel down (and stops auto-reconnect, if any). */
   close(reason?: string): void;
 }
 
@@ -46,6 +63,20 @@ function pickHostPort(local: string | number): { host: string; port: number } {
   return { host: String(local), port: 80 };
 }
 
+/**
+ * Expose a local service through an etunnel server and get a public HTTPS URL.
+ *
+ * ```ts
+ * import { connect } from "jsr:@ggcode/etunnel";
+ * const t = await connect("wss://t.etun.uk/tunnel", 3000);
+ * console.log(t.url); // https://<random>.t.etun.uk
+ * ```
+ *
+ * @param server  Tunnel server WebSocket URL, e.g. `wss://t.etun.uk/tunnel`.
+ * @param local   Local address to expose: a port number or `host:port`.
+ * @param opts    Optional token/subdomain/reconnect settings.
+ * @returns The live tunnel; {@linkcode Tunnel.close} tears it down.
+ */
 export async function connect(server: string, local: string | number, opts: Options = {}): Promise<Tunnel> {
   const { host, port } = pickHostPort(local);
   const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
@@ -285,15 +316,28 @@ the tunnel stays connected and keeps retrying for you.</div>
 // --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
 // await login('https://t.etun.uk') -> { api_token, subdomains, plan, expires_at }
 // Persist the result; pass api_token as opts.token on future connect() calls.
+/**
+ * Result of {@linkcode login}: the account's API key and entitlements.
+ * Persist it; pass `api_token` as {@linkcode Options.token} on later connects.
+ */
 export interface Credentials {
+  /** The account API key (prefix et_). */
   api_token: string;
+  /** Custom subdomains the account owns, or null. */
   subdomains: string[] | null;
+  /** Account plan tier, e.g. "free". */
   plan: string;
+  /** When the key lapses; 0 = never (no refresh needed). */
   expires_at: number;
 }
 
+/**
+ * Options for {@linkcode login}.
+ */
 export interface LoginOptions {
+  /** Override how the authorization URL is opened. */
   openBrowser?: (url: string) => void;
+  /** How long to wait for browser approval (default 5 min). */
   timeoutMs?: number;
 }
 
@@ -302,6 +346,19 @@ function defaultOpenBrowserDeno(u: string): void {
   new Deno.Command(cmd, { args: [u], stdout: 'null', stderr: 'null' }).spawn(); // fire-and-forget
 }
 
+/**
+ * Interactive CLI login (RFC 8252 loopback style): opens the browser for
+ * approval and returns the account's API key - no key copying.
+ *
+ * ```ts
+ * import { login, connect } from "jsr:@ggcode/etunnel";
+ * const creds = await login("https://t.etun.uk");
+ * const t = await connect("wss://t.etun.uk/tunnel", 3000, { token: creds.api_token });
+ * ```
+ *
+ * @param server  Server origin, e.g. `https://t.etun.uk`.
+ * @param opts    Timeout and browser-open customization.
+ */
 export async function login(server: string, opts: LoginOptions = {}): Promise<Credentials> {
   const base = String(server || '').replace(/\/+$/, '');
   if (!base) throw new Error('etunnel: login: server required');
