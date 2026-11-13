@@ -410,7 +410,7 @@ local etunnel = dofile('etunnel.lua')   -- executes the CLI when run directly
     {
         "dir": "clojure",
         "name": "Clojure",
-        "badges": "[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)\n[![JDK](https://img.shields.io/badge/JDK-11%2B-orange)](https://clojars.org/dev.ggcode/etunnel-clj)",
+        "badges": "[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel--clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)\n[![JDK](https://img.shields.io/badge/JDK-11%2B-orange)](https://clojars.org/dev.ggcode/etunnel-clj)",
         "blurb": "deps.edn library around the JDK WebSocket client; `connect!` returns a deref-able state map with `:url`.",
         "lang": "clojure",
         "install": f"""\

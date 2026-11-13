@@ -10,11 +10,11 @@
 [![LuaRocks](https://img.shields.io/badge/LuaRocks-ggcode.etunnel-8b4bb8?logo=lua)](https://luarocks.org/modules/topcheer/ggcode.etunnel)
 [![pub.dev](https://img.shields.io/pub/v/etunnel?label=pub.dev%20etunnel)](https://pub.dev/packages/etunnel)
 [![Packagist](https://img.shields.io/packagist/v/ggcode/etunnel)](https://packagist.org/packages/ggcode/etunnel)
-[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel-clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)
+[![Clojars](https://img.shields.io/badge/Clojars-dev.ggcode%2Fetunnel--clj-5881d8?logo=clojure)](https://clojars.org/dev.ggcode/etunnel-clj)
 [![JSR](https://img.shields.io/badge/JSR-@ggcode%2Fetunnel-f7df1e?logo=deno)](https://jsr.io/@ggcode/etunnel)
 [![Go](https://img.shields.io/github/go-mod/go-version/topcheer/etunnel?label=Go%20module)](https://pkg.go.dev/github.com/topcheer/etunnel)
 [![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
-[![tests](https://img.shields.io/badge/tests-go%20test%20-race-brightgreen)](integration_test.go)
+[![tests](https://img.shields.io/badge/tests-go%20test%20--race-brightgreen)](integration_test.go)
 
 **Your localhost, on the internet.** etunnel gives a service running on your
 machine a public HTTPS URL by opening one outbound WebSocket - no inbound port,
