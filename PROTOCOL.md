@@ -69,7 +69,7 @@ Client → server:
 
 - `proto` must be `1`
 - `subdomain` requires a paid plan; free tunnels get a random
-  `adjective-noun-nn` name
+  `word-word-<6-char>` name (base32, visually-unambiguous alphabet)
 - `token` is the API key from `/api/register`
 - `resume` is the `resumeToken` from a **previous** `welcome`. When valid the
   server hands back the **same subdomain** the client had before the
@@ -82,8 +82,8 @@ Client → server:
 Server → client (success):
 
 ```json
-{"type":"welcome","proto":1,"hostname":"quick-fox-42.t.example.com",
- "subdomain":"quick-fox-42","url":"https://quick-fox-42.t.example.com",
+{"type":"welcome","proto":1,"hostname":"quick-fox-k3f9qz.t.example.com",
+ "subdomain":"quick-fox-k3f9qz","url":"https://quick-fox-42.t.example.com",
  "expiresAt":1762548000,"plan":"Free","resumeToken":"eyJzdWIiOi..."}
 ```
 
@@ -208,9 +208,9 @@ upgrade forwarding.)
 
 | Limit | Value | Behaviour on violation |
 |---|---|---|
-| Control message size (text frame) | 64 KiB | Server reads with a 64 KiB bound; oversize trailing bytes surface as a JSON decode error. Keep control frames under the bound. |
+| Control message size (text frame) | 64 KiB | Server reads with a 64 KiB bound; an oversize control frame closes the tunnel with close code 1009 and reason "control message too large (limit 64 KiB)". Keep control frames under the bound. |
 | WebSocket read limit | 128 KiB | `SetReadLimit` on both sides; a larger frame fails the connection. |
 | Hello timeout | 15 s | The server closes the connection if the first `hello` has not arrived. |
-| Concurrent streams | 256 per tunnel | The 4th `too_many_streams`-adjacent open is refused; `new_stream` with no free id fails (see error codes). |
+| Concurrent streams | 256 per tunnel | When the limit is reached the server refuses the *visitor* side with HTTP 429; the client side is simply not opened (no error control message is sent). |
 | Unknown control `type` | ignore | Both ends ignore unknown control types and unknown error codes (SDK clients always did; the server's read loop lands them in an ignore branch). Malformed *known* types remain fatal. |
 | `welcome.proto` / `hello.proto` | `1` | Both sides reject a strictly newer protocol version. An omitted `proto` field (JSON zero value) is accepted as v1 by lenient peers; the reference server always sends `1`. |

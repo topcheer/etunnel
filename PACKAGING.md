@@ -8,8 +8,8 @@
 > artifact count and SDK count are independent.
 
 All 20 SDKs have publish-ready manifests (`make pack-all` builds every artifact
-locally into `dist/packages/`) and are published: the current release is
-`v1.2.4` (`VERSION`), live on every registry listed below. This document records
+locally into `dist/packages/`) and are published: whatever `VERSION` says is live
+on every registry listed below (keep this document version-free). This document records
 per registry what the publish needs (account / token / approvals) and the exact
 command, so a release can be reproduced or handed over.
 
@@ -43,16 +43,17 @@ Go proxy, SPM, Packagist and deno.land/x). Cut a release with
 | 19 | C | GitHub Releases (+ vcpkg/conan optional) | none for releases | GH token for release API | `gh release create v<version> dist/packages/etunnel-c-<version>.tar.gz` | no central C registry; Homebrew tap optional |
 | 20 | C++ | GitHub Releases (+ conan optional) | none for releases | GH token | `gh release create v<version> dist/packages/etunnel-cpp-<version>.tar.gz` | build needs Boost <= 1.86 or standalone asio <= 1.14 (websocketpp upstream is dormant); CI pins ubuntu-22.04 |
 
-`<version>` below always means `cat VERSION` (currently `1.2.4`).
+`<version>` below always means `cat VERSION` (single source of truth).
 
 ## Release flow
 
 ```sh
-python3 scripts/bump-release.py 1.2.5      # stamps VERSION + every manifest
+V=$(cat VERSION)
+python3 scripts/bump-release.py "$V"       # stamps VERSION + every manifest
 make verify && make pack-all               # compile check + local artifacts
-git commit -am "release: v1.2.5" && git tag v1.2.5
+git commit -am "release: v$V" && git tag "v$V"
 git push origin main --tags                 # Go proxy, SPM, Packagist, deno.land/x go live
-gh release create v1.2.5 dist/packages/*    # C/C++ artifacts
+gh release create "v$V" dist/packages/*    # C/C++ artifacts
 ```
 
 Tag-driven registries (Go proxy, SPM, Packagist, deno.land/x) need nothing else.

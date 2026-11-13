@@ -48,7 +48,7 @@ Commands as actually used by Makefile and CI
     stream ID, uint32 length; DATA/FIN/RST; `MaxPayload` = 32 KiB).
   - `message.go`: JSON text control messages
     (hello/welcome/req/res/ping/pong/bye/error).
-  - `name.go`: random `word-word-NN` subdomains + normalization.
+  - `name.go`: random `word-word-<6-char base32>` subdomains + normalization.
   - `PROTOCOL.md` (repo root) is the normative spec — update it whenever the
     wire protocol changes.
 - `sdk/` — the canonical Go SDK (`Connect`, `Options`, `Tunnel`,
