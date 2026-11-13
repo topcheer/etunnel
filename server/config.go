@@ -129,9 +129,12 @@ type TLSConfig struct {
 func DefaultTiers() map[string]*Tier {
 	return map[string]*Tier{
 		"free": {
-			Name:          "Free",
-			TTL:           4 * time.Hour,
-			CustomDomains: 0,
+			Name: "Free",
+			TTL:  4 * time.Hour,
+			// One static subdomain on the free tier (feature-gap #2, the
+			// ngrok-2023 acquisition play): a registered key can keep the
+			// same public URL across restarts; anonymous tunnels stay random.
+			CustomDomains: 1,
 			Bandwidth:     1 * 1000 * 1000, // 1 Mbps
 			MaxTunnels:    2,
 		},

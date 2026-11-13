@@ -35,6 +35,9 @@ type Options struct {
 	Token string
 	// Client is a free-form client identification string.
 	Client string
+	// Policy declares per-tunnel edge protection enforced by the server
+	// before any visitor request reaches the local service. Nil = legacy.
+	Policy *TunnelPolicy
 	// OnLog, when set, receives lifecycle log lines.
 	OnLog func(format string, args ...any)
 	// ReconnectMinBackoff / ReconnectMaxBackoff bound the exponential backoff
@@ -187,6 +190,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		Token:     opts.Token,
 		Client:    opts.Client,
 		Resume:    opts.resume,
+		Policy:    policyJSON(opts.Policy),
 	})
 	wctx, wcancel := context.WithTimeout(tctx, 10*time.Second)
 	err = ws.Write(wctx, websocket.MessageText, hello)

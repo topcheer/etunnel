@@ -50,6 +50,11 @@ type Hello struct {
 	// clients replay it to reclaim the same subdomain; it is self-validating
 	// (HMAC + expiry) so it survives a server restart.
 	Resume string `json:"resume,omitempty"`
+	// Policy declares per-tunnel edge protection (basic auth, IP allowlist,
+	// webhook verification). Omitted = legacy behavior (no protection).
+	// Opaque to the protocol package: the server parses and validates it;
+	// SDKs pass it through as a raw JSON object.
+	Policy json.RawMessage `json:"policy,omitempty"`
 }
 
 // Welcome is the server reply to a successful Hello.

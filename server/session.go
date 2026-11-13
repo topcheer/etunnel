@@ -41,6 +41,8 @@ type wsOut struct {
 // Session is one live tunnel: a single WebSocket connection from an SDK
 // client, owning a set of multiplexed HTTP streams.
 type Session struct {
+	// policy is the per-tunnel edge protection from hello.policy (nil = none).
+	policy *TunnelPolicy
 	srv    *Server
 	ws     *websocket.Conn
 	ip     string
@@ -198,6 +200,22 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		s.wsErrorClose(ws, protocol.ErrCodeBadMessage, "expected hello")
 		return
 	}
+	// Per-tunnel edge protection (feature-gap #1/#3). Invalid policy fails
+	// the handshake loudly rather than silently serving unprotected.
+	var pol *TunnelPolicy
+	if len(hello.Policy) > 0 {
+		var raw rawPolicy
+		if err := json.Unmarshal(hello.Policy, &raw); err != nil {
+			s.wsErrorClose(ws, protocol.ErrCodeBadMessage, "policy: "+err.Error())
+			return
+		}
+		tp, err := parseTunnelPolicy(&raw)
+		if err != nil {
+			s.wsErrorClose(ws, protocol.ErrCodeBadMessage, err.Error())
+			return
+		}
+		pol = tp
+	}
 	if hello.Proto != protocol.ProtoVersion {
 		s.wsErrorClose(ws, protocol.ErrCodeProtoVersion,
 			fmt.Sprintf("server speaks proto %d, client sent %d", protocol.ProtoVersion, hello.Proto))
@@ -276,6 +294,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	_, _ = rand.Read(sid)
 	ctx, cancel := context.WithCancel(r.Context())
 	sess := &Session{
+		policy:  pol,
 		srv:     s,
 		ws:      ws,
 		ip:      ip,
@@ -318,7 +337,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			cancel()
 			releaseIPSlot()
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainPlan,
-				"custom subdomains require a paid plan")
+				"a static subdomain needs a (free) API key - register at /me to claim one")
 			return
 		}
 		if used := s.reg.countCustomForAccount(acct); used >= tier.CustomDomains {
