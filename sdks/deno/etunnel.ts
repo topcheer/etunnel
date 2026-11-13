@@ -100,12 +100,15 @@ export async function connect(server: string, local: string | number, opts: Opti
       resp = await fetch(`http://${host}:${port}${st.req.path}`, {
         method: st.req.method,
         headers,
-        body: ['GET', 'HEAD'].includes(st.req.method) ? undefined : body,
+        // Copy into a Uint8Array<ArrayBuffer>: newer Deno lib.dom types only
+        // accept that as BodyInit, while concat() returns the looser
+        // Uint8Array<ArrayBufferLike>.
+        body: ['GET', 'HEAD'].includes(st.req.method) ? undefined : new Uint8Array(body),
       });
     } catch (e) {
       ws.send(JSON.stringify({ type: 'res', streamId: id, status: 502, headers: { 'Content-Type': ['text/html; charset=utf-8'] } }));
       ws.send(frame(0x01, id, new TextEncoder().encode(localErrorPage((e as Error).message))));
-      ws.send(frame(0x02, id));
+      ws.send(frame(0x02, id, new Uint8Array(0)));
       return;
     }
     const rh: Record<string, string[]> = {};
@@ -113,7 +116,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.send(JSON.stringify({ type: 'res', streamId: id, status: resp.status, headers: rh }));
     const buf = new Uint8Array(await resp.arrayBuffer());
     for (let i = 0; i < buf.length; i += MAXP) ws.send(frame(0x01, id, buf.subarray(i, Math.min(i + MAXP, buf.length))));
-    ws.send(frame(0x02, id));
+    ws.send(frame(0x02, id, new Uint8Array(0)));
   }
 
   function concat(parts: Uint8Array[]): Uint8Array {
