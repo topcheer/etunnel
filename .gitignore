@@ -86,3 +86,6 @@ sdks/lua/*.rock
 /sdks/scala/.scala-build/
 etunnel-pentest-report.md
 pentest_probe/
+
+# Erlang VM crash artifacts from elixir gate runs
+sdks/elixir/erl_crash.dump
