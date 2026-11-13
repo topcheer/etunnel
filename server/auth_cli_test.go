@@ -192,8 +192,8 @@ func TestCLIGrantRequiresSession(t *testing.T) {
 	req.Host = s.cfg.Domain
 	rec := httptest.NewRecorder()
 	s.serveCLI(rec, req)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("unauthenticated grant should redirect to /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/login?return_to=") {
+		t.Fatalf("unauthenticated grant should redirect to /login with return_to, got %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

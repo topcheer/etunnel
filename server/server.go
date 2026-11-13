@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/topcheer/etunnel/protocol"
 )
 
@@ -37,10 +39,15 @@ type Server struct {
 	billing      BillingConfig
 	tg           telegramConfig
 	auth         oauthConfig
-	counter      Counter        // per-IP / per-account tunnel limits (mem or redis)
-	ledger       *sessionLedger // session audit rows in PG (nil = journal-only, #69)
-	router       Router         // cluster routing (nil = single node)
-	draining     atomic.Bool
+	// WebAuthn (passkey) support: lazily-created relying party and the
+	// in-flight ceremony sessions shared by its handlers.
+	waOnce   sync.Once
+	waInst   *webauthn.WebAuthn
+	waFlow   *waSessions
+	counter  Counter        // per-IP / per-account tunnel limits (mem or redis)
+	ledger   *sessionLedger // session audit rows in PG (nil = journal-only, #69)
+	router   Router         // cluster routing (nil = single node)
+	draining atomic.Bool
 	// cliUsed rejects replayed CLI authorization codes (auth_cli.go).
 	cliUsed cliUsedCodes
 }
@@ -63,6 +70,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
+		waFlow:     newWaSessions(),
 		cfg:        cfg,
 		reg:        newRegistry(),
 		accounts:   accounts,
@@ -100,6 +108,14 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/auth/cli/start", s.handleCLIStart)
 	mux.HandleFunc("/auth/cli/grant", s.handleCLIGrant)
 	mux.HandleFunc("/auth/cli/exchange", s.handleCLIExchange)
+	// Passkey (WebAuthn): registration is session-guarded, login is
+	// discoverable (username-less), list/remove manage credentials from /me.
+	mux.HandleFunc("/auth/passkey/register/begin", s.handlePasskeyRegisterBegin)
+	mux.HandleFunc("/auth/passkey/register/finish", s.handlePasskeyRegisterFinish)
+	mux.HandleFunc("/auth/passkey/login/begin", s.handlePasskeyLoginBegin)
+	mux.HandleFunc("/auth/passkey/login/finish", s.handlePasskeyLoginFinish)
+	mux.HandleFunc("/auth/passkey/list", s.handlePasskeyList)
+	mux.HandleFunc("/auth/passkey/remove", s.handlePasskeyRemove)
 	mux.HandleFunc("/api/billing/checkout", s.handleBillingCheckout)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/paypal/return", s.handlePayPalReturn)

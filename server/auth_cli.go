@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/url"
@@ -182,24 +183,52 @@ func (s *Server) handleCLIGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	email := s.sessionEmail(r)
 	if email == "" {
-		// Not logged in: through the portal login, then revisit this URL
-		// (the device code lives 10 minutes; the SDK's own wait outlasts a
-		// normal login). A return_to parameter is not honoured by the portal
-		// login yet - when it is, this hop can adopt it unchanged.
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		// Not logged in: send the user through the portal login and back.
+		// The login handler stores return_to in a short-lived cookie and the
+		// OAuth callback honours it, so this hop resumes at the consent page
+		// automatically (the device code lives 10 minutes; the SDK's own wait
+		// outlasts a normal login).
+		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>CLI authorization</title>
-<style>body{font-family:system-ui,sans-serif;max-width:28rem;margin:4rem auto;padding:0 1rem}h1{font-size:1.2rem}code{background:#f3f3f3;padding:.1rem .3rem;border-radius:3px}</style>
-</head><body>
+		// Same design system as the portal (portalCSS + logoMark) so the
+		// consent page reads as part of the site, not a bolted-on form.
+		// Rendered via Replacer rather than Fprintf: the template embeds
+		// portalCSS whose % bytes would corrupt a format string, and this
+		// HTML-escapes the email for free (review issue #113).
+		tpl := `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>CLI authorization - etunnel</title>
+<link rel="icon" href="` + portalFavicon + `">
+<style>` + portalCSS + `
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem 1rem;position:relative}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 0%,rgba(63,185,80,.13),transparent 55%),repeating-linear-gradient(90deg,transparent 0 79px,rgba(230,237,243,.03) 79px 80px)}
+.auth{position:relative;width:100%;max-width:26rem}
+.auth .card{padding:2.2rem 1.8rem;box-shadow:0 26px 70px rgba(0,0,0,.5)}
+.brand{display:flex;align-items:center;gap:.65rem;font-weight:800;font-size:1.02rem;margin-bottom:1.4rem}
+h1{font-size:1.3rem;font-weight:800;letter-spacing:-.02em;line-height:1.3;margin-bottom:.6rem}
+.sub{color:var(--dim);font-size:.85rem;line-height:1.65;margin-bottom:1.5rem}
+.sub code{background:rgba(230,237,243,.09);padding:.12rem .4rem;border-radius:5px;color:var(--fg)}
+.actions{display:flex;align-items:center;gap:.8rem}
+.foot{color:var(--dim);font-size:.72rem;text-align:center;margin-top:1.5rem;padding-top:1.2rem;border-top:1px solid var(--line)}
+</style></head><body>
+<div class="auth">
+<div class="card">
+<div class="brand">` + logoMark + ` etunnel</div>
 <h1>Authorize command-line access?</h1>
-<p>An application on <b>this machine</b> is asking for an API key for the account <code>%s</code>. It will be able to create tunnels and use this account's domains until you reset the key.</p>
-<form method="post"><input type="hidden" name="dc" value="%s">
-<button type="submit" name="action" value="allow">Allow</button>
-<a href="/">Cancel</a>
-</form></body></html>`, email, dc)
+<p class="sub">An application is asking for an API key for the account <code>{{EMAIL}}</code>.<br>It will be able to create tunnels and use this account's domains until you reset the key.</p>
+<form method="post" class="actions"><input type="hidden" name="dc" value="{{DC}}">
+<button type="submit" name="action" value="allow" class="btn">Allow</button>
+<a href="/" class="btn ghost">Cancel</a>
+</form>
+<div class="foot">Only approve if you started this login yourself.</div>
+</div>
+</div>
+</body></html>`
+		_, _ = w.Write([]byte(strings.NewReplacer("{{EMAIL}}", html.EscapeString(email), "{{DC}}", dc).Replace(tpl)))
 		return
 	}
 	if r.FormValue("action") != "allow" {

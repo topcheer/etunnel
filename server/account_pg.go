@@ -28,6 +28,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -99,13 +100,19 @@ CREATE TABLE IF NOT EXISTS accounts (
   domains    TEXT[] NOT NULL DEFAULT '{}',
   expires_at TIMESTAMPTZ,
   lapsed_at  TIMESTAMPTZ,
-  last_seen  TIMESTAMPTZ
+  last_seen  TIMESTAMPTZ,
+  passkeys   JSONB NOT NULL DEFAULT '[]'
 )`)
+	if err != nil {
+		return err
+	}
+	// Existing deployments predate the passkeys column.
+	_, err = s.pool.Exec(ctx, `ALTER TABLE accounts ADD COLUMN IF NOT EXISTS passkeys JSONB NOT NULL DEFAULT '[]'`)
 	return err
 }
 
 func (s *pgAccountStore) loadAll(ctx context.Context) error {
-	rows, err := s.pool.Query(ctx, `SELECT api_key, email, tier, created, provider, subject, name, domains, expires_at, lapsed_at FROM accounts ORDER BY created`)
+	rows, err := s.pool.Query(ctx, `SELECT api_key, email, tier, created, provider, subject, name, domains, expires_at, lapsed_at, COALESCE(passkeys, '[]') FROM accounts ORDER BY created`)
 	if err != nil {
 		return err
 	}
@@ -115,7 +122,8 @@ func (s *pgAccountStore) loadAll(ctx context.Context) error {
 	for rows.Next() {
 		a := &Account{Domains: []string{}}
 		var exp, lap *time.Time
-		if err := rows.Scan(&a.APIKey, &a.Email, &a.Tier, &a.Created, &a.Provider, &a.Subject, &a.Name, &a.Domains, &exp, &lap); err != nil {
+		var pkJSON []byte
+		if err := rows.Scan(&a.APIKey, &a.Email, &a.Tier, &a.Created, &a.Provider, &a.Subject, &a.Name, &a.Domains, &exp, &lap, &pkJSON); err != nil {
 			return err
 		}
 		if exp != nil {
@@ -123,6 +131,9 @@ func (s *pgAccountStore) loadAll(ctx context.Context) error {
 		}
 		if lap != nil {
 			a.LapsedAt = *lap
+		}
+		if len(pkJSON) > 0 {
+			_ = json.Unmarshal(pkJSON, &a.Passkeys)
 		}
 		byKey[a.APIKey] = a
 		byMail[a.Email] = a
@@ -155,14 +166,19 @@ func (s *pgAccountStore) upsert(ctx context.Context, a *Account) error {
 	if !a.LapsedAt.IsZero() {
 		lap = a.LapsedAt
 	}
-	_, err := s.pool.Exec(ctx, `
-INSERT INTO accounts (api_key, email, tier, created, provider, subject, name, domains, expires_at, lapsed_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	pk, err := json.Marshal(a.Passkeys)
+	if err != nil || a.Passkeys == nil {
+		pk = []byte("[]")
+	}
+	_, err = s.pool.Exec(ctx, `
+INSERT INTO accounts (api_key, email, tier, created, provider, subject, name, domains, expires_at, lapsed_at, passkeys)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (api_key) DO UPDATE SET
   email=EXCLUDED.email, tier=EXCLUDED.tier, provider=EXCLUDED.provider,
   subject=EXCLUDED.subject, name=EXCLUDED.name, domains=EXCLUDED.domains,
-  expires_at=EXCLUDED.expires_at, lapsed_at=EXCLUDED.lapsed_at`,
-		a.APIKey, a.Email, a.Tier, a.Created, a.Provider, a.Subject, a.Name, a.Domains, exp, lap)
+  expires_at=EXCLUDED.expires_at, lapsed_at=EXCLUDED.lapsed_at,
+  passkeys=EXCLUDED.passkeys`,
+		a.APIKey, a.Email, a.Tier, a.Created, a.Provider, a.Subject, a.Name, a.Domains, exp, lap, pk)
 	return err
 }
 
