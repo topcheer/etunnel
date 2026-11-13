@@ -198,6 +198,7 @@ func (s *Server) handleCLIGrant(w http.ResponseWriter, r *http.Request) {
 		// Rendered via Replacer rather than Fprintf: the template embeds
 		// portalCSS whose % bytes would corrupt a format string, and this
 		// HTML-escapes the email for free (review issue #113).
+		csrf := s.csrfMint(w)
 		tpl := `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
@@ -220,7 +221,7 @@ h1{font-size:1.3rem;font-weight:800;letter-spacing:-.02em;line-height:1.3;margin
 <div class="brand">` + logoMark + ` etunnel</div>
 <h1>Authorize command-line access?</h1>
 <p class="sub">An application is asking for an API key for the account <code>{{EMAIL}}</code>.<br>It will be able to create tunnels and use this account's domains until you reset the key.</p>
-<form method="post" class="actions"><input type="hidden" name="dc" value="{{DC}}">
+<form method="post" class="actions"><input type="hidden" name="dc" value="{{DC}}"><input type="hidden" name="csrf" value="{{CSRF}}">
 <button type="submit" name="action" value="allow" class="btn">Allow</button>
 <a href="/" class="btn ghost">Cancel</a>
 </form>
@@ -228,7 +229,15 @@ h1{font-size:1.3rem;font-weight:800;letter-spacing:-.02em;line-height:1.3;margin
 </div>
 </div>
 </body></html>`
-		_, _ = w.Write([]byte(strings.NewReplacer("{{EMAIL}}", html.EscapeString(email), "{{DC}}", dc).Replace(tpl)))
+		_, _ = w.Write([]byte(strings.NewReplacer("{{EMAIL}}", html.EscapeString(email), "{{DC}}", dc, "{{CSRF}}", csrf).Replace(tpl)))
+		return
+	}
+	// CSRF: the Allow POST mints API keys, so it gets the full triple check
+	// (#114). Attacker pages cannot read our cookie (HttpOnly, signed) nor
+	// cross-site POST with a matching Origin.
+	if !s.csrfValid(r, r.FormValue("csrf")) || !s.sameOrigin(r) {
+		s.logf("auth: cli grant rejected for %s: csrf/origin check failed", r.RemoteAddr)
+		http.Error(w, "authorization could not be verified - reload the page and try again", http.StatusForbidden)
 		return
 	}
 	if r.FormValue("action") != "allow" {
@@ -306,4 +315,59 @@ func (s *Server) handleCLIExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// --- CSRF (double-submit with a server-signed cookie) for #114 ---
+//
+// The consent form's Allow POST is protected by a triple layer:
+//  1. et_pkcsrf cookie "nonce.signature" (HMAC with the session key - a
+//     cookie minted by another origin cannot carry a valid signature);
+//  2. the form's hidden csrf field must equal that nonce;
+//  3. any Origin/Referer header present must be same-site (strict when
+//     sent - modern browsers always send Origin on cross-site POSTs).
+// No server-side ceremony state is required, so this works unchanged on a
+// single node and on a mesh (the HMAC key is SESSION_SECRET).
+
+const pkCsrfCookie = "et_pkcsrf"
+
+func (s *Server) csrfMint(w http.ResponseWriter) string {
+	nonce := cliRand()
+	mac := hmacStr(s.sessionKey(), "csrf|"+nonce)
+	http.SetCookie(w, &http.Cookie{Name: pkCsrfCookie, Value: nonce + "." + mac, Path: "/auth/cli/grant", MaxAge: 600, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.TLS.Mode != TLSModeHTTP})
+	return nonce
+}
+
+// csrfValid checks the signed cookie against the submitted form token.
+func (s *Server) csrfValid(r *http.Request, formToken string) bool {
+	if formToken == "" {
+		return false
+	}
+	c, err := r.Cookie(pkCsrfCookie)
+	if err != nil {
+		return false
+	}
+	nonce, mac, ok := strings.Cut(c.Value, ".")
+	if !ok || nonce == "" || nonce != formToken {
+		return false
+	}
+	return hmacEqual(hmacStr(s.sessionKey(), "csrf|"+nonce), mac)
+}
+
+// sameOrigin: when the browser supplies Origin or Referer it must be ours.
+// Absent headers (very old clients) fall through to the token check.
+func (s *Server) sameOrigin(r *http.Request) bool {
+	for _, h := range []string{"Origin", "Referer"} {
+		v := r.Header.Get(h)
+		if v == "" {
+			continue
+		}
+		u, err := url.Parse(v)
+		if err != nil {
+			return false
+		}
+		if !strings.EqualFold(u.Host, s.cfg.Domain) {
+			return false
+		}
+	}
+	return true
 }
