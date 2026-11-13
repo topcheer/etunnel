@@ -400,7 +400,7 @@ final class EtunnelLogin {
             $client = @stream_socket_accept($sock, 1.0);
             if (!$client) continue;
             $req = fread($client, 4096);
-            if (preg_match('#GET /callback\?[^\s]*[?&]code=([^&\s]+)#', $req, $m)) $code = urldecode($m[1]);
+            if (preg_match('#GET /callback\?[^\s]*code=([^&\s]+)#', $req, $m)) $code = urldecode($m[1]);
             $body = '<!doctype html><p>Authorized. You can close this tab and return to the terminal.</p>';
             fwrite($client, "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " . strlen($body) . "\r\nConnection: close\r\n\r\n" . $body);
             fclose($client);

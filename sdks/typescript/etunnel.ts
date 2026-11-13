@@ -298,7 +298,7 @@ function defaultOpenBrowserTS(u: string): void {
 }
 
 export async function login(server: string, opts: LoginOptions = {}): Promise<Credentials> {
-  const http = require('http') as typeof import('http');
+  const http = await import('node:http');
   const base = String(server || '').replace(/\/+$/, '');
   if (!base) throw new Error('etunnel: login: server required');
   const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;

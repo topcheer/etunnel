@@ -7,6 +7,11 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
+// CLI entrypoint. Wrapped in an explicit Main (instead of top-level
+// statements) so embedders can compile this file into their own exe without
+// the CLI supervisor running on load; Etunnel.csproj pins StartupObject=Cli.
+internal static class Cli {
+    public static async Task Main(string[] args) {
 var server = Environment.GetEnvironmentVariable("ETUNNEL_SERVER") ?? "wss://t.etun.uk/tunnel";
 var local = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("ETUNNEL_LOCAL") ?? "3000";
 var token = Environment.GetEnvironmentVariable("ETUNNEL_TOKEN");
@@ -80,6 +85,8 @@ static long BackoffMs(int attempt)
     var baseMs = Math.Min(30_000L, 500L << Math.Min(attempt, 6));
     return (long)Math.Round(baseMs * (0.8 + Random.Shared.NextDouble() * 0.4));
 }
+    } // CLI supervisor loop end
+} // end internal static class Cli
 
 public sealed class Etunnel
 {

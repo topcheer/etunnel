@@ -17,7 +17,12 @@ let package = Package(
         .executableTarget(
             name: "etunnel",
             path: ".",
-            exclude: ["example", "README.md", "tests"]
+            exclude: ["example", "README.md", "tests", "Tests"]
+        ),
+        .testTarget(
+            name: "EtunnelTests",
+            dependencies: ["etunnel"],
+            path: "Tests/EtunnelTests"
         )
     ]
 )

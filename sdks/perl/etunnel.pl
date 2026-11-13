@@ -6,6 +6,7 @@
 # Run: perl etunnel.pl 3000
 use strict;
 use warnings;
+use Carp qw(croak);
 use threads;
 use threads::shared;
 use IO::Socket::SSL;
@@ -345,6 +346,9 @@ sub etunnel_connect {
 }
 
 # --- main ----------------------------------------------------------------------
+# Runs only when executed directly (perl etunnel.pl 3000); skipped when the
+# file is loaded via require/do so embedders can call etunnel_connect etc.
+unless (caller) {
 $| = 1; # unbuffered stdout
 
 my $server = $ENV{ETUNNEL_SERVER} || 'wss://t.etun.uk/tunnel';
@@ -403,6 +407,7 @@ while (!$stopped) {
     printf STDERR "etunnel: reconnecting in %.1fs\n", $delay;
     $nap->($delay);
 }
+} # end unless (caller)
 
 # --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
 #   my $creds = etunnel_login('https://t.etun.uk');   # opens the browser
@@ -475,7 +480,7 @@ sub et_login_post {
         $sock = IO::Socket::INET->new(PeerHost => $host, PeerPort => $port, Proto => 'tcp', Timeout => 30)
             or croak("etunnel: login: connect $host:$port: $!");
     }
-    my $req = "POST $path HTTP/1.0\r\nHost: $host\r\nContent-Type: application/json\r\nContent-Length: "
+    my $req = "POST $path HTTP/1.0\r\nHost: $host:$port\r\nContent-Type: application/json\r\nContent-Length: "
             . length($json) . "\r\nConnection: close\r\n\r\n$json";
     print $sock $req;
     my $resp = '';

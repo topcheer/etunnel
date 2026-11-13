@@ -369,6 +369,9 @@ local function connect(server, local_port, token, subdomain, resume)
 end
 
 -- -------- main ----------------------------------------------------------------
+-- Runs only when executed as a script (lua etunnel.lua 3000); dofile/require
+-- loaders skip it so embedders can call etunnel_connect / etunnel_login.
+if arg and arg[0] and arg[0]:match("etunnel%.lua$") then
 
 local server = os.getenv("ETUNNEL_SERVER") or "wss://t.etun.uk/tunnel"
 local local_port = tonumber(arg and arg[1] or os.getenv("ETUNNEL_LOCAL") or "3000")
@@ -420,6 +423,7 @@ while true do
   end
   backoff_ms = math.min(backoff_ms * 2, 30000)
 end
+end -- end CLI main guard
 
 -- --- CLI loopback login (RFC 8252 style; server /auth/cli/* endpoints) ---
 --   local creds = etunnel_login("https://t.etun.uk")   -- opens the browser
@@ -441,7 +445,7 @@ function etunnel_login(server, open_browser, timeout)
   local socket = require("socket")
   local srv = assert(socket.bind("127.0.0.1", 0))
   srv:settimeout(timeout)
-  local port = srv:getsockname():match(":(%d+)$")
+  local _ip, port = srv:getsockname()
 
   local start = et_login_post(server, "/auth/cli/start",
     { redirect_uri = "http://127.0.0.1:" .. port .. "/callback" })
@@ -474,24 +478,49 @@ function etunnel_login(server, open_browser, timeout)
   return creds
 end
 
--- Minimal JSON POST over the same ssl.https/plain-socket split the SDK uses.
+-- Minimal JSON POST over plain http or https (scheme-picked), LuaSocket based.
 function et_login_post(base, path, tbl)
   local ltn12 = require("ltn12")
-  local https = require("ssl.https")
+  local scheme = base:match("^(%w+)://")
+  local request = (scheme == "https") and require("ssl.https").request
+                                       or  require("socket.http").request
   local body = et_json_encode(tbl)
   local out = {}
   local url = base .. path
-  local ok, code = https.request {
+  local ok, code = request {
     url = url, method = "POST",
     headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body) },
     source = ltn12.source.string(body),
     sink = ltn12.sink.table(out),
   }
   assert(ok and tonumber(code) == 200, "etunnel: login: " .. path .. " failed: " .. tostring(code))
-  local json = require("cjson.safe") or require("cjson")
-  local decoded = (json.decode or json)(table.concat(out))
+  local raw = table.concat(out)
+  local decoded
+  local okjson, cjson = pcall(require, "cjson.safe")
+  if okjson then decoded = cjson.decode(raw)
+  else
+    local okc, cj = pcall(require, "cjson")
+    if okc then decoded = cj.decode(raw)
+    else decoded = et_json_decode(raw) end -- zero-dep fallback below
+  end
   assert(type(decoded) == "table", "etunnel: login: bad response from " .. path)
   return decoded
+end
+
+-- Flat-object fallback decoder for /auth/cli/exchange (string fields plus one
+-- string array) used when no cjson module is available.
+function et_json_decode(s)
+  local out = {}
+  for k, v in s:gmatch('"([^"]+)"%s*:%s*"([^"]*)"') do out[k] = v end
+  local arr = s:match('"subdomains"%s*:%s*%[(.-)%]')
+  if arr then
+    local subs = {}
+    for item in arr:gmatch('"([^"]*)"') do subs[#subs+1] = item end
+    out.subdomains = subs
+  end
+  local num = s:match('"expires_at"%s*:%s*(%d+)')
+  if num then out.expires_at = tonumber(num) end
+  return out
 end
 
 -- Tiny encoder for the two flat request shapes we send (no nesting needed).
