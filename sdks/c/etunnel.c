@@ -70,6 +70,97 @@ static char g_resume[512]; /* server-signed token: reclaim the subdomain on reco
 static int g_local_port = 3000;
 static volatile sig_atomic_t g_stop = 0;
 
+/* ---- multi-target local routing (PROTOCOL.md §2) ------------------------- */
+/* ETUNNEL_ROUTES="PREFIX=ADDR[,strip];..." (same shape as the Go CLI -route
+ * flag, e.g. "/api=127.0.0.1:8080,strip;/=3000"). Longest prefix wins;
+ * matching on segment boundaries; no match = local 404. */
+#define MAX_ROUTES 32
+typedef struct { char prefix[256]; char addr[128]; int strip; } route_t;
+static route_t g_routes[MAX_ROUTES];
+static int g_nroutes;
+
+static void route_die(int i, const char *what) {
+    fprintf(stderr, "etunnel: route[%d]: %s\n", i, what);
+    exit(1);
+}
+
+static void parse_routes(const char *env) {
+    if (!env) return;
+    char spec[2048];
+    if (snprintf(spec, sizeof(spec), "%s", env) >= (int) sizeof(spec)) route_die(0, "spec too long");
+    char *save = NULL;
+    int i = 0;
+    for (char *item = strtok_r(spec, ";", &save); item; item = strtok_r(NULL, ";", &save), i++) {
+        if (i >= MAX_ROUTES) route_die(i, "too many routes");
+        route_t r;
+        memset(&r, 0, sizeof(r));
+        char *eq = strchr(item, '=');
+        if (!eq) route_die(i, "want PREFIX=ADDR[,strip]");
+        *eq = 0;
+        char *addr = eq + 1;
+        size_t alen = strlen(addr);
+        if (alen > 6 && !strcmp(addr + alen - 6, ",strip")) { r.strip = 1; addr[alen - 6] = 0; }
+        if (!item[0]) route_die(i, "prefix is required (use \"/\" for the fallback route)");
+        if (!addr[0]) route_die(i, "addr is required");
+        if (item[0] != '/') route_die(i, "prefix must start with '/'");
+        if (snprintf(r.prefix, sizeof(r.prefix), "%s", item) >= (int) sizeof(r.prefix)) route_die(i, "prefix too long");
+        if (snprintf(r.addr, sizeof(r.addr), "%s", addr) >= (int) sizeof(r.addr)) route_die(i, "addr too long");
+        size_t pl = strlen(r.prefix);
+        while (pl > 1 && r.prefix[pl - 1] == '/') r.prefix[--pl] = 0;
+        for (int k = 0; k < g_nroutes; k++)
+            if (!strcmp(g_routes[k].prefix, r.prefix)) route_die(i, "duplicate prefix");
+        g_routes[g_nroutes++] = r;
+    }
+    /* longest prefix first (insertion sort, stable for equal lengths) */
+    for (int a2 = 1; a2 < g_nroutes; a2++) {
+        route_t key = g_routes[a2];
+        int b = a2 - 1;
+        while (b >= 0 && strlen(g_routes[b].prefix) < strlen(key.prefix)) { g_routes[b + 1] = g_routes[b]; b--; }
+        g_routes[b + 1] = key;
+    }
+}
+
+/* 1 = hit (addr/path filled), 0 = no route matches. */
+static int route_for(const char *pq, char *addr, size_t addr_sz, char *path, size_t path_sz) {
+    const char *q = strchr(pq, '?');
+    size_t plen = q ? (size_t) (q - pq) : strlen(pq);
+    const char *query = q ? q : "";
+    for (int i = 0; i < g_nroutes; i++) {
+        route_t *r = &g_routes[i];
+        size_t l = strlen(r->prefix);
+        int match = (l == 1 && r->prefix[0] == '/')
+                    || (plen == l && !strncmp(pq, r->prefix, l))
+                    || (plen > l && !strncmp(pq, r->prefix, l) && pq[l] == '/');
+        if (!match) continue;
+        const char *seg = pq;
+        size_t seglen = plen;
+        if (r->strip && l > 1) {
+            if (plen == l) { seg = "/"; seglen = 1; }
+            else { seg = pq + l; seglen = plen - l; }
+        }
+        if (snprintf(path, path_sz, "%.*s%s", (int) seglen, seg, query) >= (int) path_sz) continue;
+        snprintf(addr, addr_sz, "%s", r->addr);
+        return 1;
+    }
+    return 0;
+}
+
+/* both defined below: queue-only sends, safe from serve threads */
+static int send_text(const char *json);
+static int send_frame(unsigned char kind, uint32_t sid,
+                      const unsigned char *payload, size_t n);
+
+static void send_404(uint32_t sid) {
+    char head[160];
+    snprintf(head, sizeof(head),
+        "{\"type\":\"res\",\"streamId\":%u,\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}",
+        (unsigned) sid);
+    send_text(head);
+    static const char body[] = "404 page not found (no route matches this path)\n";
+    send_frame(0x01, sid, (const unsigned char *) body, sizeof(body) - 1);
+    send_frame(0x02, sid, NULL, 0);
+}
+
 /* JSON string escaper mirroring the C++ SDK: quotes, backslash and C0
  * controls. Raw interpolation of token/subdomain/resume into hello was an
  * injection: a token containing '"' broke the frame (#48 MED). */
@@ -273,7 +364,19 @@ static void *serve_thread(void *arg) {
     long status = 502;
 
     char url[2300];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d%s", a->local_port, a->path);
+    if (g_nroutes > 0) {
+        char raddr[160], rpath[2048];
+        if (!route_for(a->path, raddr, sizeof(raddr), rpath, sizeof(rpath))) {
+            /* no route matched: 404 at the SDK edge, nothing dialed */
+            send_404(a->sid);
+            curl_easy_cleanup(curl);
+            free(hdr.data); free(body.data); free(a->body); free(a);
+            return NULL;
+        }
+        snprintf(url, sizeof(url), "http://%s%s", raddr, rpath);
+    } else {
+        snprintf(url, sizeof(url), "http://127.0.0.1:%d%s", a->local_port, a->path);
+    }
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, a->method);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
@@ -527,6 +630,8 @@ int main(int argc, char **argv) {
     signal(SIGTERM, on_sigint);
     if (argc > 1) g_local_port = atoi(argv[1]);
     else if (getenv("ETUNNEL_LOCAL")) g_local_port = atoi(getenv("ETUNNEL_LOCAL"));
+    /* with ETUNNEL_ROUTES set, argv[1]/ETUNNEL_LOCAL may stay absent (unused) */
+    parse_routes(getenv("ETUNNEL_ROUTES"));
     #ifndef ETUNNEL_DEFAULT_SERVER
 #define ETUNNEL_DEFAULT_SERVER "wss://t.etun.uk/tunnel"
 #endif

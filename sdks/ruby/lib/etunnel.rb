@@ -35,8 +35,46 @@ module Etunnel
     [kind].pack('C') + [sid].pack('N') + [payload.bytesize].pack('N') + payload
   end
 
-  def self.connect(server, local, token: nil, subdomain: nil, resume: nil)
-    local = "127.0.0.1:#{local}" unless local.to_s.include?(':')
+  # --- multi-target local routing (PROTOCOL.md §2) ---------------------------
+  Route = Struct.new(:prefix, :addr, :strip)
+
+  # Validate + compile a route table: trims trailing slashes ("/" stays),
+  # rejects duplicates and malformed prefixes, sorts longest-first.
+  def self.normalize_routes(routes)
+    out = []
+    seen = {}
+    routes.each_with_index do |r, i|
+      pfx = r.prefix.to_s
+      raise ArgumentError, "etunnel: route[#{i}]: prefix is required (use \"/\" for the fallback route)" if pfx.empty?
+      raise ArgumentError, "etunnel: route[#{i}]: addr is required" if r.addr.to_s.empty?
+      raise ArgumentError, "etunnel: route[#{i}]: prefix \"#{pfx}\" must start with '/'" unless pfx.start_with?('/')
+      pfx = pfx[0..-2] while pfx.length > 1 && pfx.end_with?('/')
+      raise ArgumentError, "etunnel: route[#{i}]: duplicate prefix \"#{pfx}\"" if seen.key?(pfx)
+      seen[pfx] = true
+      out << Route.new(pfx, r.addr, r.strip ? true : false)
+    end
+    out.sort_by { |r| -r.prefix.length }
+  end
+
+  # Resolve "path?query": [addr, path] on hit, nil when nothing matches.
+  def self.route_for(routes, path_and_query)
+    qi = path_and_query.index('?')
+    path = qi ? path_and_query[0...qi] : path_and_query
+    query = qi ? path_and_query[qi..] : ''
+    routes.each do |r|
+      next unless r.prefix == '/' || path == r.prefix || path.start_with?("#{r.prefix}/")
+
+      p = path
+      p = (path == r.prefix ? '/' : path[r.prefix.length..] || '') if r.strip && r.prefix != '/'
+      return [r.addr, p + query]
+    end
+    nil
+  end
+
+  def self.connect(server, local, token: nil, subdomain: nil, resume: nil, routes: nil)
+    routes = normalize_routes(routes) if routes
+    raise ArgumentError, 'etunnel: routes must not be empty' if routes && routes.empty?
+    local = "127.0.0.1:#{local}" unless local.nil? || local.to_s.include?(':')
     ws = Faye::WebSocket::Client.new(server, ['etunnel-v1'])
 
     queue = Queue.new
@@ -113,7 +151,7 @@ module Etunnel
             # local app must not block this reader loop, or server pings go
             # unanswered while a request is in flight and the tunnel gets kicked.
             Thread.new do
-              serve(ws, st[:req], st[:body], sid, local)
+              serve(ws, st[:req], st[:body], sid, local, routes)
             rescue StandardError => e
               warn "etunnel: request worker failed: #{e}"
             end
@@ -177,7 +215,25 @@ module Etunnel
     HTML
   end
 
-  def self.serve(ws, req, body, sid, local)
+  def self.serve(ws, req, body, sid, local, routes = nil)
+    if routes
+      hit = route_for(routes, req['path'] || '/')
+      unless hit
+        ws.send(JSON.generate({ type: 'res', streamId: sid, status: 404,
+                                headers: { 'Content-Type' => ['text/plain; charset=utf-8'] } }))
+        ws.send(frame(0x01, sid, "404 page not found (no route matches this path)\n"))
+        ws.send(frame(0x02, sid, ''))
+        return
+      end
+      addr, = hit
+      local = if addr =~ /\A\d+\z/
+                "127.0.0.1:#{addr}"
+              elsif (m = addr.match(/\A(\[[^\]]+\]|[^:]+):(\d+)\z/))
+                "#{m[1]}:#{m[2]}"
+              else
+                "#{addr}:80"
+              end
+    end
     host, port = local.split(':')
     method = req['method'] || 'GET'
     path = req['path'] || '/'

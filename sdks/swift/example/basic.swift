@@ -51,4 +51,6 @@ let url = try await tunnel.connect(
     subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"])
 print("public URL: \(url)")
 
-RunLoop.main.run()
+// Swift 6 top-level async: RunLoop.main.run() never spins here; park the
+// main thread instead so the tunnel's tasks stay scheduled.
+dispatchMain()

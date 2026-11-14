@@ -272,7 +272,51 @@ local function local_error_page(msg)
   return ERR_PAGE_A .. esc .. ERR_PAGE_B
 end
 
-local function connect(server, local_port, token, subdomain, resume)
+-- ---- multi-target local routing (PROTOCOL.md §2) ------------------------
+-- Route table: { prefix = "/api", addr = "127.0.0.1:8080", strip = true }.
+-- Longest prefix wins; segment boundaries; strip keeps the query; no
+-- match = 404 at the SDK edge. Global so embedders/tests can call them.
+function etunnel_normalize_routes(routes)
+  local out, seen = {}, {}
+  for i, r in ipairs(routes) do
+    local p = r and r.prefix
+    if type(p) ~= "string" or p == "" then
+      error(('etunnel: route[%d]: prefix is required (use "/" for the fallback route)'):format(i - 1))
+    end
+    if not r.addr or r.addr == "" then error(('etunnel: route[%d]: addr is required'):format(i - 1)) end
+    if p:sub(1, 1) ~= "/" then
+      error(('etunnel: route[%d]: prefix "%s" must start with "/"'):format(i - 1, p))
+    end
+    while #p > 1 and p:sub(-1) == "/" do p = p:sub(1, -2) end
+    if seen[p] then error(('etunnel: route[%d]: duplicate prefix "%s"'):format(i - 1, p)) end
+    seen[p] = true
+    out[#out + 1] = { prefix = p, addr = r.addr, strip = r.strip and true or false }
+  end
+  table.sort(out, function(a, b) return #a.prefix > #b.prefix end)
+  return out
+end
+
+-- returns addr, path on hit; nil when nothing matches
+function etunnel_route_for(routes, path_and_query)
+  local qi = path_and_query:find("?", 1, true)
+  local path = qi and path_and_query:sub(1, qi - 1) or path_and_query
+  local query = qi and path_and_query:sub(qi) or ""
+  for _, r in ipairs(routes) do
+    local l = #r.prefix
+    if r.prefix == "/" or path == r.prefix or path:sub(1, l + 1) == r.prefix .. "/" then
+      local p = path
+      if r.strip and r.prefix ~= "/" then p = (path == r.prefix) and "/" or path:sub(l + 1) end
+      return r.addr, p .. query
+    end
+  end
+  return nil
+end
+
+local function connect(server, local_port, token, subdomain, resume, routes)
+  if routes ~= nil then
+    routes = etunnel_normalize_routes(routes)
+    if #routes == 0 then error("etunnel: routes must not be empty") end
+  end
   local ws = Ws.connect(server)
   local hello = '{"type":"hello","proto":1'
   if subdomain then hello = hello .. ',"subdomain":"' .. json_escape(subdomain) .. '"' end
@@ -298,8 +342,23 @@ local function connect(server, local_port, token, subdomain, resume)
 
   local streams = {}
   local function serve(st, sid)
-    local ok, status, head, out = pcall(local_request, "127.0.0.1", local_port,
-      st.method or "GET", st.path or "/", st.body)
+    local host, port, path = "127.0.0.1", local_port, st.path or "/"
+    if routes then
+      local addr, p = etunnel_route_for(routes, path)
+      if not addr then
+        ws:send_text(("{\"type\":\"res\",\"streamId\":%d,\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}"):format(sid))
+        ws:send_binary(frame(0x01, sid, "404 page not found (no route matches this path)\n"))
+        ws:send_binary(frame(0x02, sid, ""))
+        return
+      end
+      local h, pt = addr:match("^(.*):(%d+)$")
+      if h then host, port = h, tonumber(pt)
+      elseif addr:match("^%d+$") then port = tonumber(addr)
+      else host, port = addr, 80 end
+      path = p
+    end
+    local ok, status, head, out = pcall(local_request, host, port,
+      st.method or "GET", path, st.body)
     if not ok then
       ws:send_text(('{"type":"res","streamId":%d,"status":502,"headers":{"Content-Type":["text/html; charset=utf-8"]}}'):format(sid))
       ws:send_binary(frame(0x01, sid, local_error_page(tostring(status))))

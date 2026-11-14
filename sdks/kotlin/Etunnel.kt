@@ -17,6 +17,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Local route (PROTOCOL.md §2): path prefix -> local addr ("host:port"). */
+data class Route(val prefix: String, val addr: String, val strip: Boolean = false)
+
 object Json {
     // minimal JSON reader for flat control messages
     fun read(s: String): Map<String, Any?> = parse(s, IntArray(1)) as Map<String, Any?>
@@ -109,7 +112,7 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
         // Handle of the last established socket, so the CLI can watch for a disconnect.
         @Volatile var lastWs: WebSocket? = null
 
-        class Handler(val http: HttpClient, val port: Int) : WebSocket.Listener {
+        class Handler(val http: HttpClient, val port: Int, val routes: List<Route>? = null) : WebSocket.Listener {
             val welcome = CountDownLatch(1)
             @Volatile var info: Map<String, Any?>? = null
             @Volatile var error: String? = null
@@ -175,8 +178,15 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
             fun serve(req: Map<String, Any?>, body: ByteArray, sid: Int) {
                 try {
                     val method = req["method"] as String
+                    var path = req["path"] as? String ?: "/"
+                    var target = "http://127.0.0.1:$port"
+                    if (routes != null) {
+                        val hit = routeFor(routes, path) ?: run { notFound(sid); return }
+                        target = "http://${hit.first}"
+                        path = hit.second
+                    }
                     val rb = HttpRequest.newBuilder()
-                        .uri(URI.create("http://127.0.0.1:$port${req["path"]}"))
+                        .uri(URI.create("$target$path"))
                         .timeout(Duration.ofSeconds(120))
                     (req["headers"] as? Map<String, List<String>>)?.forEach { (k, vs) ->
                         val lk = k.lowercase()
@@ -224,6 +234,18 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
             fun localError(sid: Int, msg: String?) {
                 ws.sendText("{\"type\":\"res\",\"streamId\":$sid,\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}", true).join()
                 val body = localErrorPage(msg ?: "error").toByteArray()
+                val f = ByteArray(9 + body.size)
+                f[0] = 0x01
+                putSid(f, sid); putLen(f, body.size)
+                System.arraycopy(body, 0, f, 9, body.size)
+                ws.sendBinary(ByteBuffer.wrap(f), true).join()
+                ctl(0x02, sid)
+            }
+
+            /** No route matched: answer 404 at the SDK edge (PROTOCOL.md §2). */
+            fun notFound(sid: Int) {
+                ws.sendText("{\"type\":\"res\",\"streamId\":$sid,\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}", true).join()
+                val body = "404 page not found (no route matches this path)\n".toByteArray()
                 val f = ByteArray(9 + body.size)
                 f[0] = 0x01
                 putSid(f, sid); putLen(f, body.size)
@@ -292,10 +314,44 @@ the tunnel stays connected and keeps retrying for you.</div>
             }
         }
 
+        /** Validate + compile a route table: trims trailing slashes ("/" stays),
+         *  rejects duplicates and malformed prefixes, sorts longest-first. */
+        fun normalizeRoutes(routes: List<Route>): List<Route> {
+            val out = ArrayList<Route>()
+            val seen = HashSet<String>()
+            routes.forEachIndexed { i, r ->
+                require(r.prefix.isNotEmpty()) { "etunnel: route[$i]: prefix is required (use \"/\" for the fallback route)" }
+                require(r.addr.isNotEmpty()) { "etunnel: route[$i]: addr is required" }
+                require(r.prefix.startsWith("/")) { "etunnel: route[$i]: prefix \"${r.prefix}\" must start with '/'" }
+                var p = r.prefix
+                while (p.length > 1 && p.endsWith("/")) p = p.dropLast(1)
+                require(seen.add(p)) { "etunnel: route[$i]: duplicate prefix \"$p\"" }
+                out.add(Route(p, r.addr, r.strip))
+            }
+            return out.sortedByDescending { it.prefix.length }
+        }
+
+        /** Resolve "path?query" (segment boundaries; strip keeps the query
+         *  byte-for-byte). null when nothing matches. */
+        fun routeFor(routes: List<Route>, pathAndQuery: String): Pair<String, String>? {
+            val qi = pathAndQuery.indexOf('?')
+            val path = if (qi >= 0) pathAndQuery.substring(0, qi) else pathAndQuery
+            val query = if (qi >= 0) pathAndQuery.substring(qi) else ""
+            for (r in routes) {
+                if (!(r.prefix == "/" || path == r.prefix || path.startsWith(r.prefix + "/"))) continue
+                var p = path
+                if (r.strip && r.prefix != "/") p = if (path == r.prefix) "/" else path.substring(r.prefix.length)
+                return r.addr to p + query
+            }
+            return null
+        }
+
         fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null,
-                    resume: String? = null): Etunnel {
+                    resume: String? = null, routes: List<Route>? = null): Etunnel {
             val http = LOCAL_HTTP
-            val h = Handler(http, localPort)
+            val norm = routes?.let { normalizeRoutes(it) }
+            if (norm != null && norm.isEmpty()) throw IllegalArgumentException("etunnel: routes must not be empty")
+            val h = Handler(http, localPort, norm)
             val ws = WS_HTTP
                 .newWebSocketBuilder()
                 .subprotocols("etunnel-v1")

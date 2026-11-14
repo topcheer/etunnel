@@ -25,15 +25,23 @@ const HOP = {'connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate
   'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade',
   'content-length', 'host'};
 
+/// Local route (PROTOCOL.md §2): path prefix -> local addr ("host:port").
+class Route {
+  final String prefix, addr;
+  final bool strip;
+  const Route(this.prefix, this.addr, {this.strip = false});
+}
+
 class Etunnel {
   final WebSocket ws;
   final HttpClient http = HttpClient();
-  final String host;
+  final String? host; // null when routes are used exclusively
   final int port;
+  final List<Route>? routes;
   final _streams = <int, _StreamBuf>{};
   final _url = Completer<String>();
 
-  Etunnel._(this.ws, this.host, this.port) {
+  Etunnel._(this.ws, this.host, this.port, this.routes) {
     // onError: a decode/desync failure used to surface as an unhandled async
     // error and kill the isolate; log it and drop the connection instead
     // (#53 LOW).
@@ -45,11 +53,54 @@ class Etunnel {
     });
   }
 
-  static Future<Etunnel> connect(String server, String local,
-      {String? token, String? subdomain, String? resume}) async {
-    var (host, port) = _parseLocal(local);
+  /// Validate + compile a route table: trims trailing slashes ("/" stays),
+  /// rejects duplicates and malformed prefixes, sorts longest-first.
+  static List<Route> normalizeRoutes(List<Route> routes) {
+    final out = <Route>[];
+    final seen = <String>{};
+    for (var i = 0; i < routes.length; i++) {
+      final r = routes[i];
+      if (r.prefix.isEmpty) {
+        throw ArgumentError('etunnel: route[$i]: prefix is required (use "/" for the fallback route)');
+      }
+      if (r.addr.isEmpty) throw ArgumentError('etunnel: route[$i]: addr is required');
+      if (!r.prefix.startsWith('/')) {
+        throw ArgumentError("etunnel: route[$i]: prefix \"${r.prefix}\" must start with '/'");
+      }
+      var p = r.prefix;
+      while (p.length > 1 && p.endsWith('/')) p = p.substring(0, p.length - 1);
+      if (seen.contains(p)) throw ArgumentError('etunnel: route[$i]: duplicate prefix "$p"');
+      seen.add(p);
+      out.add(Route(p, r.addr, strip: r.strip));
+    }
+    out.sort((a, b) => b.prefix.length - a.prefix.length);
+    return out;
+  }
+
+  /// Resolve "path?query" (segment boundaries; strip keeps the query
+  /// byte-for-byte). null when nothing matches.
+  static ({String addr, String path})? routeFor(List<Route> routes, String pathAndQuery) {
+    final qi = pathAndQuery.indexOf('?');
+    final path = qi >= 0 ? pathAndQuery.substring(0, qi) : pathAndQuery;
+    final query = qi >= 0 ? pathAndQuery.substring(qi) : '';
+    for (final r in routes) {
+      if (!(r.prefix == '/' || path == r.prefix || path.startsWith('${r.prefix}/'))) continue;
+      var p = path;
+      if (r.strip && r.prefix != '/') p = path == r.prefix ? '/' : path.substring(r.prefix.length);
+      return (addr: r.addr, path: p + query);
+    }
+    return null;
+  }
+
+  static Future<Etunnel> connect(String server, String? local,
+      {String? token, String? subdomain, String? resume, List<Route>? routes}) async {
+    final norm = routes != null ? normalizeRoutes(routes) : null;
+    if (norm != null && norm.isEmpty) {
+      throw ArgumentError('etunnel: routes must not be empty');
+    }
+    final (host, port) = local != null ? _parseLocal(local) : (null, 0);
     final ws = await WebSocket.connect(server, protocols: ['etunnel-v1']);
-    final et = Etunnel._(ws, host, port);
+    final et = Etunnel._(ws, host, port, norm);
     ws.add(jsonEncode({
       'type': 'hello', 'proto': 1,
       if (subdomain != null) 'subdomain': subdomain,
@@ -126,9 +177,22 @@ class Etunnel {
   Future<void> _serve(_StreamBuf st, int sid) async {
     final req = st.req;
     final method = req['method'] as String? ?? 'GET';
-    final path = req['path'] as String? ?? '/';
+    var path = req['path'] as String? ?? '/';
     try {
-      final rq = await http.openUrl(method, Uri.http('$host:$port', path));
+      var authority = '$host:$port';
+      if (routes != null) {
+        final hit = routeFor(routes!, path);
+        if (hit == null) {
+          _send(jsonEncode({'type': 'res', 'streamId': sid, 'status': 404,
+            'headers': {'Content-Type': ['text/plain; charset=utf-8']}}));
+          _send(frame(0x01, sid, utf8.encode('404 page not found (no route matches this path)\n')));
+          _send(frame(0x02, sid, []));
+          return;
+        }
+        authority = hit.addr;
+        path = hit.path;
+      }
+      final rq = await http.openUrl(method, Uri.http(authority, path));
       (req['headers'] as Map<String, dynamic>? ?? {}).forEach((k, vs) {
         if (HOP.contains(k.toLowerCase())) return;
         for (final v in vs) rq.headers.add(k, v.toString());

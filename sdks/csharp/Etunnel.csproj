@@ -17,4 +17,9 @@
     <Packable>true</Packable>
     <PackAsTool>false</PackAsTool>
   </PropertyGroup>
+  <!-- keep the nested route-test console app out of the SDK compile/pack -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <None Remove="tests/**" />
+  </ItemGroup>
 </Project>

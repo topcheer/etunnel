@@ -18,5 +18,5 @@ end
 puts "local http://127.0.0.1:#{port}"
 
 t = Etunnel.connect('wss://t.etun.uk/tunnel', port)
-puts "public URL: #{t[:url]}"
+puts "public URL: #{t.url}"
 sleep

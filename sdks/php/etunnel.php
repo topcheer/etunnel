@@ -27,10 +27,63 @@ final class Etunnel
         $this->url = $url;
     }
 
-    public static function connect(string $server, $local, ?string $token = null, ?string $subdomain = null, ?callable $onUrl = null, ?string $resume = null): self
+    /** Local route (PROTOCOL.md §2): path prefix -> local addr ("host:port"). */
+    public static function normalizeRoutes(array $routes): array
+    {
+        $out = [];
+        $seen = [];
+        foreach ($routes as $i => $r) {
+            $p = $r['prefix'] ?? '';
+            if (!is_string($p) || $p === '') {
+                throw new InvalidArgumentException("etunnel: route[$i]: prefix is required (use \"/\" for the fallback route)");
+            }
+            if (($r['addr'] ?? '') === '') {
+                throw new InvalidArgumentException("etunnel: route[$i]: addr is required");
+            }
+            if ($p[0] !== '/') {
+                throw new InvalidArgumentException("etunnel: route[$i]: prefix \"$p\" must start with '/'");
+            }
+            while (strlen($p) > 1 && substr($p, -1) === '/') {
+                $p = substr($p, 0, -1);
+            }
+            if (isset($seen[$p])) {
+                throw new InvalidArgumentException("etunnel: route[$i]: duplicate prefix \"$p\"");
+            }
+            $seen[$p] = true;
+            $out[] = ['prefix' => $p, 'addr' => $r['addr'], 'strip' => !empty($r['strip'])];
+        }
+        usort($out, fn($a, $b) => strlen($b['prefix']) <=> strlen($a['prefix']));
+        return $out;
+    }
+
+    /** Resolve "path?query": ['addr'=>..,'path'=>..] on hit, null otherwise. */
+    public static function routeFor(array $routes, string $pathAndQuery): ?array
+    {
+        $qi = strpos($pathAndQuery, '?');
+        $path = $qi === false ? $pathAndQuery : substr($pathAndQuery, 0, $qi);
+        $query = $qi === false ? '' : substr($pathAndQuery, $qi);
+        foreach ($routes as $r) {
+            $p = $r['prefix'];
+            if (!($p === '/' || $path === $p || str_starts_with($path, $p . '/'))) {
+                continue;
+            }
+            $np = $path;
+            if ($r['strip'] && $p !== '/') {
+                $np = $path === $p ? '/' : substr($path, strlen($p));
+            }
+            return ['addr' => $r['addr'], 'path' => $np . $query];
+        }
+        return null;
+    }
+
+    public static function connect(string $server, $local, ?string $token = null, ?string $subdomain = null, ?callable $onUrl = null, ?string $resume = null, ?array $routes = null): self
     {
         if (is_numeric($local)) {
             $local = '127.0.0.1:' . $local;
+        }
+        $routes = $routes !== null ? self::normalizeRoutes($routes) : null;
+        if ($routes !== null && $routes === []) {
+            throw new InvalidArgumentException('etunnel: routes must not be empty');
         }
         $p = parse_url($server);
         $tls = ($p['scheme'] ?? '') === 'wss';
@@ -119,7 +172,7 @@ final class Etunnel
                 } elseif ($kind === 0x02) {
                     $st = $streams[$sid];
                     unset($streams[$sid]);
-                    self::serve($sock, $st['req'], $st['body'], $sid, $local);
+                    self::serve($sock, $st['req'], $st['body'], $sid, $local, $routes);
                 } elseif ($kind === 0x03) {
                     unset($streams[$sid]);
                 }
@@ -128,10 +181,23 @@ final class Etunnel
         return $t;
     }
 
-    private static function serve($sock, array $req, string $body, int $sid, string $local): void
+    private static function serve($sock, array $req, string $body, int $sid, string $local, ?array $routes = null): void
     {
         $method = $req['method'] ?? 'GET';
         $path = $req['path'] ?? '/';
+        $target = $local;
+        if ($routes !== null) {
+            $hit = self::routeFor($routes, $path);
+            if ($hit === null) {
+                self::sendText($sock, json_encode(['type' => 'res', 'streamId' => $sid, 'status' => 404,
+                    'headers' => ['Content-Type' => ['text/plain; charset=utf-8']]]));
+                self::sendBinary($sock, self::frame(0x01, $sid, "404 page not found (no route matches this path)\n"));
+                self::sendBinary($sock, self::frame(0x02, $sid, ''));
+                return;
+            }
+            $target = $hit['addr'];
+            $path = $hit['path'];
+        }
         $headers = '';
         foreach (($req['headers'] ?? []) as $k => $vs) {
             if (in_array(strtolower($k), ['connection', 'transfer-encoding', 'keep-alive', 'upgrade',
@@ -155,7 +221,7 @@ final class Etunnel
         // PHP 8.4 deprecates the implicit magic local $http_response_header:
         // declare it first so file_get_contents assigns an existing variable.
         $http_response_header = null;
-        $raw = @file_get_contents("http://{$local}{$path}", false, $ctx);
+        $raw = @file_get_contents("http://{$target}{$path}", false, $ctx);
         if ($raw === false || $http_response_header === null) {
             self::sendText($sock, json_encode(['type' => 'res', 'streamId' => $sid, 'status' => 502,
                 'headers' => ['Content-Type' => ['text/html; charset=utf-8']]]));

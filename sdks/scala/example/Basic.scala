@@ -18,6 +18,6 @@ object Basic {
     println(s"local http://127.0.0.1:$port")
     val t = Etunnel.connect("wss://t.etun.uk/tunnel", port)
     println(s"public URL: ${t.url}")
-    t.await()
+    Thread.currentThread().join() // the tunnel runs on its own thread(s)
   }
 }

@@ -44,6 +44,61 @@ public class Etunnel {
 
     public static class Options {
         public String token, subdomain, resume;
+        /** Multi-target routes (PROTOCOL.md §2); when set, localPort may be 0. */
+        public Route[] routes;
+    }
+
+    /** Local route: path prefix -> local addr ("host:port"). */
+    public static class Route {
+        public String prefix, addr;
+        public boolean strip;
+    }
+
+    /** Resolved route target: dial addr with the rewritten path. */
+    static class RouteTarget {
+        final String addr, path;
+        RouteTarget(String addr, String path) { this.addr = addr; this.path = path; }
+    }
+
+    /** Validate + compile a route table: trims trailing slashes ("/" stays),
+     *  rejects duplicates and malformed prefixes, sorts longest-first. */
+    public static Route[] normalizeRoutes(Route[] routes) {
+        java.util.ArrayList<Route> out = new java.util.ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < routes.length; i++) {
+            Route r = routes[i];
+            if (r == null || r.prefix == null || r.prefix.isEmpty())
+                throw new IllegalArgumentException("etunnel: route[" + i + "]: prefix is required (use \"/\" for the fallback route)");
+            if (r.addr == null || r.addr.isEmpty())
+                throw new IllegalArgumentException("etunnel: route[" + i + "]: addr is required");
+            String p = r.prefix;
+            if (p.charAt(0) != '/')
+                throw new IllegalArgumentException("etunnel: route[" + i + "]: prefix \"" + p + "\" must start with '/'");
+            while (p.length() > 1 && p.endsWith("/")) p = p.substring(0, p.length() - 1);
+            if (!seen.add(p))
+                throw new IllegalArgumentException("etunnel: route[" + i + "]: duplicate prefix \"" + p + "\"");
+            Route nr = new Route();
+            nr.prefix = p; nr.addr = r.addr; nr.strip = r.strip;
+            out.add(nr);
+        }
+        out.sort((a, b) -> b.prefix.length() - a.prefix.length());
+        return out.toArray(new Route[0]);
+    }
+
+    /** Resolve "path?query" against the table (segment boundaries; strip keeps
+     *  the query byte-for-byte). Returns null when nothing matches. */
+    public static RouteTarget routeFor(Route[] routes, String pathAndQuery) {
+        int qi = pathAndQuery.indexOf('?');
+        String path = qi >= 0 ? pathAndQuery.substring(0, qi) : pathAndQuery;
+        String query = qi >= 0 ? pathAndQuery.substring(qi) : "";
+        for (Route r : routes) {
+            if (!(r.prefix.equals("/") || path.equals(r.prefix) || path.startsWith(r.prefix + "/"))) continue;
+            String p = path;
+            if (r.strip && !r.prefix.equals("/"))
+                p = path.equals(r.prefix) ? "/" : path.substring(r.prefix.length());
+            return new RouteTarget(r.addr, p + query);
+        }
+        return null;
     }
 
     public static class Tunnel {
@@ -66,7 +121,10 @@ public class Etunnel {
     @SuppressWarnings("unchecked")
     public static Tunnel connect(String server, int localPort, Options opts) throws Exception {
         if (opts == null) opts = new Options();
-        Handler h = new Handler(LOCAL_HTTP, localPort);
+        Route[] routes = opts.routes != null ? normalizeRoutes(opts.routes) : null;
+        if (routes != null && routes.length == 0)
+            throw new IllegalArgumentException("etunnel: routes must not be empty");
+        Handler h = new Handler(LOCAL_HTTP, localPort, routes);
 
         WebSocket ws = WS_HTTP
             .newWebSocketBuilder()
@@ -149,7 +207,8 @@ public class Etunnel {
         final StringBuilder textBuf = new StringBuilder();
         volatile WebSocket ws;
 
-        Handler(HttpClient http, int port) { this.http = http; this.port = port; }
+        final Route[] routes; // null = single-target (pre-routes behaviour)
+        Handler(HttpClient http, int port, Route[] routes) { this.http = http; this.port = port; this.routes = routes; }
 
         @Override public void onOpen(WebSocket ws) { ws.request(1); }
 
@@ -224,8 +283,16 @@ public class Etunnel {
                 String path = str(req.get("path"));
                 byte[] body = st.body.toByteArray();
 
+                String target = "http://127.0.0.1:" + port;
+                if (routes != null) {
+                    RouteTarget hit = routeFor(routes, path);
+                    if (hit == null) { notFound(sid); return; }
+                    target = "http://" + hit.addr;
+                    path = hit.path;
+                }
+
                 HttpRequest.Builder rb = HttpRequest.newBuilder()
-                    .uri(URI.create("http://127.0.0.1:" + port + path))
+                    .uri(URI.create(target + path))
                     .timeout(Duration.ofSeconds(120));
                 Map<String, List<String>> headers = (Map<String, List<String>>) req.get("headers");
                 if (headers != null) {
@@ -278,6 +345,21 @@ public class Etunnel {
             ws.sendText("{\"type\":\"res\",\"streamId\":" + sid
                 + ",\"status\":502,\"headers\":{\"Content-Type\":[\"text/html; charset=utf-8\"]}}", true).join();
             byte[] body = localErrorPage(msg == null ? "error" : msg)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] f = new byte[9 + body.length];
+            f[0] = 0x01;
+            f[1] = (byte) (sid >>> 24); f[2] = (byte) (sid >>> 16); f[3] = (byte) (sid >>> 8); f[4] = (byte) sid;
+            f[5] = (byte) (body.length >>> 24); f[6] = (byte) (body.length >>> 16); f[7] = (byte) (body.length >>> 8); f[8] = (byte) body.length;
+            System.arraycopy(body, 0, f, 9, body.length);
+            ws.sendBinary(ByteBuffer.wrap(f), true).join();
+            sendCtlFrame((byte) 0x02, sid);
+        }
+
+        /** No route matched: answer 404 at the SDK edge (PROTOCOL.md §2). */
+        void notFound(int sid) {
+            ws.sendText("{\"type\":\"res\",\"streamId\":" + sid
+                + ",\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}", true).join();
+            byte[] body = "404 page not found (no route matches this path)\n"
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
             byte[] f = new byte[9 + body.length];
             f[0] = 0x01;

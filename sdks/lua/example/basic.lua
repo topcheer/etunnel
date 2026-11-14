@@ -9,5 +9,5 @@ print("public URL: " .. (t.url or "?"))
 
 -- keep the tunnel alive
 while true do
-  etunnel.pump and etunnel.pump(t) or os.execute("sleep 1")
+  if etunnel.pump then etunnel.pump(t) else os.execute("sleep 1") end
 end

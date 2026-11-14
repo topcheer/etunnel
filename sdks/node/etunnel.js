@@ -21,6 +21,7 @@ function frame(kind, id, payload) {
   return b;
 }
 
+const { normalizeRoutes, routeFor } = require('./route');
 const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
 function pickHostPort(local) {
@@ -31,7 +32,11 @@ function pickHostPort(local) {
 }
 
 async function connect(server, local, opts = {}) {
-  const { host, port } = pickHostPort(local);
+  const routes = opts.routes ? normalizeRoutes(opts.routes) : null;
+  if (routes && !routes.length) throw new Error('etunnel: routes must not be empty');
+  if (!routes && local === undefined) throw new Error('etunnel: local address is required');
+  const single = pickHostPort(local || '127.0.0.1:80');
+  const { host, port } = single;
   // The WebSocket constructor comes from opts.wsFactory when injected (the CLI
   // supervisor captures the session socket that way) instead of patching the
   // global, which is unsafe when several connects race on shared event loops.
@@ -101,9 +106,22 @@ async function connect(server, local, opts = {}) {
       if (HOP.has(lk)) { if (lk === 'connection' && /upgrade/i.test(String(vs))) isHop = true; continue; }
       headers[k] = vs.join(', ');
     }
+    let target = `http://${host}:${port}`;
+    let path = st.req.path;
+    if (routes) {
+      const hit = routeFor(routes, path);
+      if (!hit) {
+        send(JSON.stringify({ type: 'res', streamId: id, status: 404, headers: { 'Content-Type': ['text/plain; charset=utf-8'] } }));
+        sendBin(frame(0x01, id, Buffer.from('404 page not found (no route matches this path)\n')));
+        sendBin(frame(0x02, id, Buffer.alloc(0)));
+        return;
+      }
+      target = `http://${hit.addr}`;
+      path = hit.path;
+    }
     let resp;
     try {
-      resp = await fetch(`http://${host}:${port}${st.req.path}`, {
+      resp = await fetch(`${target}${path}`, {
         method: st.req.method,
         headers,
         body: ['GET', 'HEAD'].includes(st.req.method) ? undefined : body,
@@ -140,7 +158,7 @@ async function connect(server, local, opts = {}) {
   };
 }
 
-module.exports = { connect };
+module.exports = { connect, normalizeRoutes, routeFor };
 
 // CLI supervisor: keep the tunnel up across drops (ETUNNEL_RECONNECT=0 opts out).
 const RETRY_MIN = 500;

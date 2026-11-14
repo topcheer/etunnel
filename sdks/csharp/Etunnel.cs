@@ -148,9 +148,62 @@ public sealed class Etunnel
                 WebSocketMessageType.Binary, true, CancellationToken.None);
     }
 
-    public static async Task<Tunnel> Connect(string server, string local,
-        string? token = null, string? subdomain = null, string? resume = null)
+        /// <summary>Local route (PROTOCOL.md §2): path prefix -> local addr ("host:port").</summary>
+        public sealed class Route
+        {
+            public string Prefix = "";
+            public string Addr = "";
+            public bool Strip;
+        }
+
+        /// <summary>Validate + compile a route table: trims trailing slashes ("/" stays),
+        /// rejects duplicates and malformed prefixes, sorts longest-first.</summary>
+        public static Route[] NormalizeRoutes(Route[] routes)
+        {
+            var list = new List<Route>(routes.Length);
+            var seen = new HashSet<string>();
+            for (int i = 0; i < routes.Length; i++)
+            {
+                var r = routes[i];
+                if (r == null || string.IsNullOrEmpty(r.Prefix))
+                    throw new ArgumentException($"etunnel: route[{i}]: prefix is required (use \"/\" for the fallback route)");
+                if (string.IsNullOrEmpty(r.Addr))
+                    throw new ArgumentException($"etunnel: route[{i}]: addr is required");
+                if (r.Prefix[0] != '/')
+                    throw new ArgumentException($"etunnel: route[{i}]: prefix \"{r.Prefix}\" must start with '/'");
+                var p = r.Prefix;
+                while (p.Length > 1 && p.EndsWith('/')) p = p[..^1];
+                if (!seen.Add(p))
+                    throw new ArgumentException($"etunnel: route[{i}]: duplicate prefix \"{p}\"");
+                list.Add(new Route { Prefix = p, Addr = r.Addr, Strip = r.Strip });
+            }
+            list.Sort((a, b) => b.Prefix.Length - a.Prefix.Length);
+            return list.ToArray();
+        }
+
+        /// <summary>Resolve "path?query" (segment boundaries; strip keeps the query
+        /// byte-for-byte). null when nothing matches.</summary>
+        public static (string Addr, string Path)? RouteFor(Route[] routes, string pathAndQuery)
+        {
+            int qi = pathAndQuery.IndexOf('?');
+            string path = qi >= 0 ? pathAndQuery[..qi] : pathAndQuery;
+            string query = qi >= 0 ? pathAndQuery[qi..] : "";
+            foreach (var r in routes)
+            {
+                if (!(r.Prefix == "/" || path == r.Prefix || path.StartsWith(r.Prefix + "/"))) continue;
+                var p = path;
+                if (r.Strip && r.Prefix != "/") p = path == r.Prefix ? "/" : path[r.Prefix.Length..];
+                return (r.Addr, p + query);
+            }
+            return null;
+        }
+
+    public static async Task<Tunnel> Connect(string server, string? local,
+        string? token = null, string? subdomain = null, string? resume = null, Route[]? routes = null)
     {
+        Route[]? norm = routes != null ? NormalizeRoutes(routes) : null;
+        if (norm != null && norm.Length == 0)
+            throw new ArgumentException("etunnel: routes must not be empty");
         if (int.TryParse(local, out var port)) local = $"127.0.0.1:{port}";
 
         var ws = new ClientWebSocket();
@@ -199,7 +252,7 @@ public sealed class Etunnel
             }
         }
 
-        var runner = new Runner(ws, sender, local);
+        var runner = new Runner(ws, sender, local, norm);
         _ = Task.Run(() => runner.Loop());
         return new Tunnel(ws, sender, url, resumeToken);
         }
@@ -214,13 +267,14 @@ public sealed class Etunnel
     {
         readonly ClientWebSocket _ws;
         readonly Sender _sender;
-        readonly string _local;
+        readonly string? _local;
+        readonly Route[]? _routes; // null = single-target (pre-routes behaviour)
         readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
         readonly Dictionary<uint, (JsonElement req, List<byte[]> body)> _streams = new();
 
-        internal Runner(ClientWebSocket ws, Sender sender, string local)
+        internal Runner(ClientWebSocket ws, Sender sender, string? local, Route[]? routes = null)
         {
-            _ws = ws; _sender = sender; _local = local;
+            _ws = ws; _sender = sender; _local = local; _routes = routes;
         }
 
         internal async Task Loop()
@@ -305,7 +359,15 @@ public sealed class Etunnel
             var path = req.GetProperty("path").GetString()!;
             try
             {
-                using var hr = new HttpRequestMessage(new HttpMethod(method), $"http://{_local}{path}");
+                var target = _local;
+                if (_routes != null)
+                {
+                    var hit = RouteFor(_routes, path);
+                    if (hit == null) { await NotFound(sid); return; }
+                    target = hit.Value.Addr;
+                    path = hit.Value.Path;
+                }
+                using var hr = new HttpRequestMessage(new HttpMethod(method), $"http://{target}{path}");
                 if (req.TryGetProperty("headers", out var hdrs))
                     foreach (var kv in hdrs.EnumerateObject())
                     {
@@ -383,6 +445,23 @@ public sealed class Etunnel
                 }
                 catch { /* ws gone: nothing left to deliver */ }
             }
+        }
+
+        /// <summary>No route matched: answer 404 at the SDK edge (PROTOCOL.md §2).</summary>
+        async Task NotFound(uint sid)
+        {
+            try
+            {
+                await _sender.Atomic(async () =>
+                {
+                    await _sender.SendText("{\"type\":\"res\",\"streamId\":" + sid +
+                        ",\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}");
+                    var msg = Encoding.UTF8.GetBytes("404 page not found (no route matches this path)\n");
+                    await _sender.SendBinary(Frame(0x01, sid, msg));
+                    await _sender.SendBinary(Frame(0x02, sid, Array.Empty<byte>()));
+                });
+            }
+            catch { /* ws gone: nothing left to deliver */ }
         }
     }
 

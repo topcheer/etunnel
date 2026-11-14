@@ -29,15 +29,90 @@ defmodule Etunnel do
     "patch" => :patch
   }
 
+  # --- multi-target local routing (PROTOCOL.md §2) ---------------------------
+  # Longest prefix wins, segment-boundary matching; strip keeps the query
+  # byte-for-byte; no match = 404 at the SDK edge.
+
+  def normalize_routes(routes) when is_list(routes) do
+    {out, _seen} =
+      Enum.reduce(Enum.with_index(routes), {[], MapSet.new()}, fn {r, i}, {acc, seen} ->
+        p = r[:prefix] || ""
+
+        cond do
+          p == "" ->
+            raise ArgumentError, "etunnel: route[#{i}]: prefix is required (use \"/\" for the fallback route)"
+
+          (r[:addr] || "") == "" ->
+            raise ArgumentError, "etunnel: route[#{i}]: addr is required"
+
+          not String.starts_with?(p, "/") ->
+            raise ArgumentError, "etunnel: route[#{i}]: prefix \"#{p}\" must start with '/'"
+
+          true ->
+            t = if(p != "/", do: String.trim_trailing(p, "/"), else: p)
+
+            if MapSet.member?(seen, t) do
+              raise ArgumentError, "etunnel: route[#{i}]: duplicate prefix \"#{t}\""
+            end
+
+            {[Map.merge(r, %{prefix: t, strip: !!r[:strip]}) | acc], MapSet.put(seen, t)}
+        end
+      end)
+
+    out |> Enum.reverse() |> Enum.sort_by(fn r -> -byte_size(r[:prefix]) end)
+  end
+
+  def route_for(routes, path_and_query) when is_list(routes) do
+    {path, query} =
+      case :binary.match(path_and_query, "?") do
+        {i, _} ->
+          {binary_part(path_and_query, 0, i),
+           binary_part(path_and_query, i, byte_size(path_and_query) - i)}
+
+        :nomatch ->
+          {path_and_query, ""}
+      end
+
+    Enum.find_value(routes, fn r ->
+      p = r[:prefix]
+
+      if p == "/" or path == p or String.starts_with?(path, p <> "/") do
+        stripped =
+          if r[:strip] and p != "/" do
+            if path == p,
+              do: "/",
+              else: binary_part(path, byte_size(p), byte_size(path) - byte_size(p))
+          else
+            path
+          end
+
+        {r[:addr], stripped <> query}
+      end
+    end)
+  end
+
   def start_link(opts) do
     server = Keyword.fetch!(opts, :server)
-    local = normalize_local(Keyword.fetch!(opts, :local))
+    routes = if r = opts[:routes], do: normalize_routes(r), else: nil
+    if routes == [], do: raise(ArgumentError, "etunnel: routes must not be empty")
+
+    local =
+      case Keyword.get(opts, :local) do
+        nil ->
+          # keep the pre-routes failure mode: fetch! raises the original KeyError
+          if is_nil(routes), do: Keyword.fetch!(opts, :local)
+
+        l ->
+          normalize_local(l)
+      end
+
     token = opts[:token]
     subdomain = opts[:subdomain]
     resume = opts[:resume]
 
     state = %{
       local: local,
+      routes: routes,
       token: token,
       subdomain: subdomain,
       resume: resume,
@@ -161,7 +236,7 @@ defmodule Etunnel do
                 state = update_in(state, [:streams], &Map.delete(&1, sid))
                 body = st.body |> Enum.reverse() |> IO.iodata_to_binary()
                 me = self()
-                Task.start(fn -> serve(me, sid, st.req, body, state.local) end)
+                Task.start(fn -> serve(me, sid, st.req, body, state.local, state.routes) end)
                 {:ok, state}
               3 ->
                 {:ok, update_in(state, [:streams], &Map.delete(&1, sid))}
@@ -272,9 +347,26 @@ defmodule Etunnel do
     """
   end
 
-  defp serve(ws_pid, sid, req, body, local) do
+  defp serve(ws_pid, sid, req, body, local, routes \\ nil) do
     method = req["method"] || "GET"
     path = req["path"] || "/"
+
+    {local, path} =
+      if routes do
+        case route_for(routes, path) do
+          nil ->
+            # no route matched: 404 at the SDK edge, nothing dialed
+            send(ws_pid, {:etunnel_send, {:text, Jason.encode!(%{type: "res", streamId: sid, status: 404, headers: %{"Content-Type" => ["text/plain; charset=utf-8"]}})}})
+            send(ws_pid, {:etunnel_send, {:binary, frame(0x01, sid, "404 page not found (no route matches this path)\n")}})
+            send(ws_pid, {:etunnel_send, {:binary, frame(0x02, sid, "")}})
+            {nil, nil}
+
+          {addr, p} ->
+            {addr, p}
+        end
+      else
+        {local, path}
+      end
 
     headers =
       (req["headers"] || %{})
@@ -287,7 +379,7 @@ defmodule Etunnel do
         send(ws_pid, {:etunnel_send, {:text, Jason.encode!(%{type: "res", streamId: sid, status: 501, headers: %{"Content-Type" => ["text/plain"]}})}})
         send(ws_pid, {:etunnel_send, {:binary, frame(0x02, sid, "")}})
 
-      {:ok, method_atom} ->
+      {:ok, method_atom} when not is_nil(local) ->
         url = String.to_charlist("http://#{local}#{path}")
 
         request =
@@ -318,6 +410,9 @@ defmodule Etunnel do
             send(ws_pid, {:etunnel_send, {:binary, frame(0x01, sid, local_error_page(inspect(e)))}})
             send(ws_pid, {:etunnel_send, {:binary, frame(0x02, sid, "")}})
         end
+
+      {:ok, _} ->
+        :ok
     end
   end
 
