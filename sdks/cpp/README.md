@@ -8,6 +8,10 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
 (default `wss://t.etun.uk/tunnel`).
 
+> **wss-only**: this SDK uses the TLS WebSocket transport; `ws://` URLs are
+> rejected up front with an actionable error (#152). For local plaintext
+> testing use another SDK or put TLS in front of the server.
+
 ## Install
 
 ```
