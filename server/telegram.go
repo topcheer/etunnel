@@ -171,7 +171,34 @@ func (s *Server) handleAdminCommand(text string) string {
 			"/tier <email> <tier> - change account tier\n" +
 			"/whois <subdomain> - tunnel owner\n" +
 			"/key <email> - show API key\n" +
-			"/delete <email> - remove account"
+			"/delete <email> - remove account\n" +
+			"/history [5|10|30] - tunnels opened in the last N minutes"
+	case "/history":
+		mins := 10
+		if rest != "" {
+			switch rest {
+			case "5", "10", "30":
+				mins, _ = strconv.Atoi(rest)
+			default:
+				return "usage: /history [5|10|30]"
+			}
+		}
+		if s.ledger == nil {
+			return "history needs ETUNNEL_PG_DSN (session ledger)"
+		}
+		total, byIP, newest, err := s.ledger.recentOpens(time.Duration(mins) * time.Minute)
+		if err != nil {
+			return "history: " + err.Error()
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "tunnels opened in last %dm: %d\n", mins, total)
+		for ip, c := range byIP {
+			fmt.Fprintf(&b, "  %dx %s\n", c, ip)
+		}
+		for _, row := range newest {
+			fmt.Fprintf(&b, "  %s\n", row)
+		}
+		return b.String()
 	case "/status":
 		var in, out int64
 		if s.metrics != nil {

@@ -107,3 +107,52 @@ func (l *sessionLedger) Close() {
 		l.pool.Close()
 	}
 }
+
+// recentOpens aggregates tunnel establishments inside the window (the
+// /history admin command): total, distinct source IPs, the top IPs and the
+// newest rows. nil-safe for non-PG deployments (caller falls back).
+func (l *sessionLedger) recentOpens(window time.Duration) (total int, byIP map[string]int, newest []string, err error) {
+	if l == nil {
+		return 0, nil, nil, fmt.Errorf("etunnel: no session ledger")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err = l.pool.QueryRow(ctx,
+		`SELECT count(*), count(DISTINCT ip) FROM sessions WHERE started > now() - $1::interval`,
+		window.String()).Scan(&total, new(int)); err != nil {
+		return 0, nil, nil, err
+	}
+	byIP = map[string]int{}
+	rows, err := l.pool.Query(ctx,
+		`SELECT ip, count(*) c FROM sessions WHERE started > now() - $1::interval GROUP BY ip ORDER BY c DESC LIMIT 5`,
+		window.String())
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	for rows.Next() {
+		var ip string
+		var c int
+		if err = rows.Scan(&ip, &c); err != nil {
+			rows.Close()
+			return 0, nil, nil, err
+		}
+		byIP[ip] = c
+	}
+	rows.Close()
+	rows, err = l.pool.Query(ctx,
+		`SELECT to_char(started, 'HH24:MI:SS'), ip, sub, plan FROM sessions WHERE started > now() - $1::interval ORDER BY started DESC LIMIT 5`,
+		window.String())
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	for rows.Next() {
+		var ts, ip, sub, plan string
+		if err = rows.Scan(&ts, &ip, &sub, &plan); err != nil {
+			rows.Close()
+			return 0, nil, nil, err
+		}
+		newest = append(newest, fmt.Sprintf("%s %s [%s] ip %s", ts, sub, plan, ip))
+	}
+	rows.Close()
+	return total, byIP, newest, rows.Err()
+}

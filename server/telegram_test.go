@@ -198,3 +198,22 @@ func TestTelegramMenuAliases(t *testing.T) {
 		t.Fatal("main menu keyboard missing")
 	}
 }
+
+// /history guards: usage validation and the no-ledger message (non-PG
+// deployments). The windowed SQL itself is covered live by the PG gate
+// (ET_PG_TEST_DSN) when reachable.
+func TestTelegramHistoryGuards(t *testing.T) {
+	s, err := New(Config{Domain: "t.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.handleAdminCommand("/history 7"); got != "usage: /history [5|10|30]" {
+		t.Fatalf("bad window reply = %q", got)
+	}
+	if got := s.handleAdminCommand("/history"); got != "history needs ETUNNEL_PG_DSN (session ledger)" {
+		t.Fatalf("no-ledger reply = %q", got)
+	}
+	if strings.Contains(s.handleAdminCommand("/help"), "/history") != true {
+		t.Fatal("help must list /history")
+	}
+}
