@@ -53,6 +53,7 @@ func TestBanWSSOverrideAndDisable(t *testing.T) {
 
 // The handler refuses banned sources before the WebSocket upgrade.
 func TestHandleTunnelWSBansBeforeUpgrade(t *testing.T) {
+	resetBanCache() // the "-" decision cached by TestBanWSSOverrideAndDisable must not leak in
 	s, err := New(Config{Domain: "t.test"})
 	if err != nil {
 		t.Fatal(err)
