@@ -77,3 +77,9 @@ wins; matching is on segment boundaries (`/api` never matches `/apiv2`);
 `strip` removes only the path part - the query string is carried over
 byte-for-byte, an exact hit bottoms out at `/`; no matching route (only
 possible without a `/` fallback) answers `404` at the SDK edge.
+
+## Environment
+
+Requires Lua 5.4 (5.5 changed syntax/semantics this example does not
+target) plus `lua-http` for the WebSocket transport. `luac -p` (5.4)
+is the CI gate; the demo is verified on 5.4 toolchains.

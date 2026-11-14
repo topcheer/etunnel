@@ -356,6 +356,15 @@ int main(int argc, char **argv) {
         // a stack object here was a use-after-free (#49).
         auto client = std::make_shared<WsClient>();
         client->init_asio();
+        // This SDK is wss-only (asio_tls_client transport): a ws:// URL used to
+        // surface as a confusing TLS-handshake retry loop against plaintext
+        // servers (#152). Fail fast with an actionable message instead.
+        if (server.rfind("ws://", 0) == 0) {
+            std::cerr << "etunnel: ws:// is not supported by this SDK (TLS transport only); "
+                         "use wss:// - for local plaintext testing pick another SDK or front the "
+                         "server with TLS" << std::endl;
+            return 1;
+        }
         // Host pinning for TLS identity (#49/#65): verify_peer alone proves the
         // chain is valid, not that it belongs to the host we dialed - a MITM
         // with any CA-signed certificate for ANY domain passes. The expected

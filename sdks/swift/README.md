@@ -82,3 +82,13 @@ wins; matching is on segment boundaries (`/api` never matches `/apiv2`);
 `strip` removes only the path part - the query string is carried over
 byte-for-byte, an exact hit bottoms out at `/`; no matching route (only
 possible without a `/` fallback) answers `404` at the SDK edge.
+
+## Toolchain note
+
+The example is written for Swift 5.9+ script semantics (`swift` interpreter,
+per the header comment in example/basic.swift). Newer toolchains (6.4+)
+changed top-level-async execution; if the concatenated script exits
+silently under your toolchain, wrap the example body in a `@main` struct
+with an async `main()` (the library itself builds clean on 6.x:
+`swift build` is the gate). The demo keeps `dispatchMain()` (#149-152
+follow-ups) so the process parks correctly on all versions.

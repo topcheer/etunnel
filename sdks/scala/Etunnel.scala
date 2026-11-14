@@ -70,7 +70,10 @@ object MiniJson {
           try num.toLong catch { case _: NumberFormatException => num.toDouble }
       }
     }
-    def skip(): Unit = while (i < s.length && s(i).isWhitespace) i += 1
+    // java.lang.Character, not scala.Char: the implicit-extension form
+    // (s(i).isWhitespace) has drifted across Scala binary versions and
+    // blew up as NoSuchMethodError under mixed scala3/2.13 classpaths (#149).
+    def skip(): Unit = while (i < s.length && java.lang.Character.isWhitespace(s(i))) i += 1
   }
 
   def esc(x: String): String =
@@ -103,7 +106,12 @@ object Etunnel {
       if (last) {
         val msg = textBuf.toString
         textBuf.setLength(0)
-        try handleText(msg) catch { case _: Exception => () }
+        // Parse failures must be loud once (#149): a swallowed NoSuchMethodError
+        // here used to stall the tunnel as "no welcome within 15s".
+        try handleText(msg) catch {
+          case e: Throwable =>
+            System.err.println(s"etunnel: dropping control message (${e.getClass.getSimpleName}: ${e.getMessage}): ${msg.take(120)}")
+        }
       }
       ws.request(1)
       null
