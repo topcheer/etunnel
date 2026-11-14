@@ -177,6 +177,25 @@ func (t *Tunnel) serveStream(st *clientStream, req *protocol.Req) {
 	if path == "" || path[0] != '/' {
 		path = "/" + path
 	}
+	addr := t.localAddr
+	if t.routes != nil {
+		var ok bool
+		addr, path, ok = routeFor(t.routes, path)
+		if !ok {
+			// No local route matches: answer at the SDK edge so the
+			// visitor gets a real 404 instead of a dial error.
+			_ = t.sendJSON(&protocol.Res{
+				Type:     protocol.MsgRes,
+				StreamID: st.id,
+				Status:   http.StatusNotFound,
+				Headers:  map[string][]string{"Content-Type": {"text/plain; charset=utf-8"}},
+			})
+			_ = t.sendData(st.id, []byte("404 page not found (no route matches this path)\n"))
+			_ = t.sendFin(st.id)
+			st.finish()
+			return
+		}
+	}
 	hdrs := mapToHeader(req.Headers)
 	isUpgrade := hasUpgradeHeader(hdrs)
 
@@ -186,7 +205,7 @@ func (t *Tunnel) serveStream(st *clientStream, req *protocol.Req) {
 	if isUpgrade {
 		body = http.NoBody
 	}
-	hreq, err := http.NewRequestWithContext(st.ctx, req.Method, "http://"+t.localAddr+path, body)
+	hreq, err := http.NewRequestWithContext(st.ctx, req.Method, "http://"+addr+path, body)
 	if err != nil {
 		t.sendLocalError(st, "bad request path")
 		return

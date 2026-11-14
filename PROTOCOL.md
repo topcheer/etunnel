@@ -189,6 +189,24 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+#### Client-side multi-target routing (SDK option, protocol unchanged)
+
+The server always routes by hostname to exactly one tunnel session. An SDK
+may additionally expose several local services under that one hostname by
+dispatching on `Req.Path` after the frame arrives (Go SDK: `Options.Routes`
+of `{PathPrefix, Addr, StripPrefix}`; single-`LocalAddr` tunnels behave
+exactly as before). Semantics every implementation must share:
+
+- Longest prefix wins; matching is on segment boundaries (`/api` never
+  matches `/apiv2`); a `/` route is the catch-all fallback.
+- `StripPrefix` removes only the matched path part - the query string is
+  carried over byte-for-byte; an exact-prefix hit bottoms out at `/`;
+  stripping a `/` prefix is a no-op.
+- No matching route (only possible when no `/` fallback is configured):
+  the SDK answers `404` locally instead of dialing anything.
+
+```
+
 ### 3. Heartbeat
 
 Either side may send `{"type":"ping","ts":<unix>}`; the peer answers

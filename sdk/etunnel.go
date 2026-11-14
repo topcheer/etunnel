@@ -28,7 +28,13 @@ type Options struct {
 	// A bare host gets "wss://" and "/tunnel" defaults.
 	Server string
 	// LocalAddr is the local service address to expose ("127.0.0.1:8080").
+	// Ignored when Routes is set (each Route carries its own Addr).
 	LocalAddr string
+	// Routes serves several local services under one public hostname by
+	// URL path prefix (e.g. "/" to a built SPA, "/api" to its backend).
+	// Non-empty Routes switches the tunnel to multi-target mode and makes
+	// LocalAddr optional. Routing is client-side; the protocol is unchanged.
+	Routes []Route
 	// Subdomain requests a static subdomain (a free key may hold one;
 	// paid keys hold more).
 	Subdomain string
@@ -81,6 +87,9 @@ type wsOut struct {
 type Tunnel struct {
 	ws        *websocket.Conn
 	localAddr string
+	// routes is non-nil only in multi-target mode (Options.Routes);
+	// localAddr is then unused. See route.go.
+	routes []*compiledRoute
 
 	url         string
 	hostname    string
@@ -136,10 +145,14 @@ var ErrUnsupportedProto = errors.New("etunnel: server protocol too new")
 // Connect establishes a reverse tunnel and returns it once the server has
 // assigned a public hostname.
 func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
-	if opts.LocalAddr == "" {
+	routes, err := normalizeRoutes(opts.Routes)
+	if err != nil {
+		return nil, err
+	}
+	if opts.LocalAddr == "" && routes == nil {
 		return nil, errors.New("etunnel: LocalAddr is required")
 	}
-	if opts.LocalAddr[0] == ':' {
+	if opts.LocalAddr != "" && opts.LocalAddr[0] == ':' {
 		opts.LocalAddr = "127.0.0.1" + opts.LocalAddr
 	}
 	server := NormalizeServerURL(opts.Server)
@@ -165,6 +178,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	t := &Tunnel{
 		ws:        ws,
 		localAddr: opts.LocalAddr,
+		routes:    routes,
 		ctx:       tctx,
 		cancel:    tcancel,
 		out:       make(chan wsOut, 256),

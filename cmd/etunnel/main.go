@@ -22,15 +22,31 @@ func main() {
 		subdomain = flag.String("subdomain", "", "request a static subdomain (free key: 1, paid: more)")
 		token     = flag.String("token", os.Getenv("ETUNNEL_TOKEN"), "API key (free key gets 1 static subdomain)")
 		reconnect = flag.Bool("reconnect", os.Getenv("ETUNNEL_RECONNECT") != "0", "reconnect automatically when the connection drops")
+		routes    = multiFlag{}
 	)
+	flag.Var(&routes, "route", "multi-target route PREFIX=ADDR[,strip] (repeatable, e.g. -route /api=127.0.0.1:8080,strip -route /=:3000); replaces -local")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: etunnel [-server URL] [-token KEY] [-subdomain NAME] <local-port-or-addr>\n\n")
+		fmt.Fprintf(os.Stderr, "usage: etunnel [-server URL] [-token KEY] [-subdomain NAME] <local-port-or-addr>\n"+
+			"       etunnel [-server URL] -route PREFIX=ADDR[,strip]... \n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	if flag.NArg() < 1 && *local == "" {
+	if flag.NArg() < 1 && *local == "" && len(routes.list) == 0 {
 		flag.Usage()
+		os.Exit(2)
+	}
+	routeOpts, err := parseRoutes(routes.list)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "etunnel: "+err.Error())
+		os.Exit(2)
+	}
+	if len(routeOpts) > 0 && *local != "" {
+		fmt.Fprintln(os.Stderr, "etunnel: -route and -local are mutually exclusive")
+		os.Exit(2)
+	}
+	if len(routeOpts) > 0 && flag.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "etunnel: positional <local-port-or-addr> cannot be combined with -route")
 		os.Exit(2)
 	}
 	if *local == "" {
@@ -53,6 +69,7 @@ func main() {
 	opts := etunnel.Options{
 		Server:    *server,
 		LocalAddr: *local,
+		Routes:    routeOpts,
 		Subdomain: *subdomain,
 		Token:     *token,
 		Client:    "etunnel-cli/1.0",
@@ -80,7 +97,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "\netunnel: closed")
 		return
 	}
-	var err error
 	t, err = etunnel.Connect(ctx, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "etunnel:", err)
