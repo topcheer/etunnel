@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 )
 
 // cloudflareRanges is the published Cloudflare list (v4 + v6), snapshotted
@@ -36,13 +37,29 @@ var cloudflareRanges = []string{
 
 // wssBans parses the effective ban list: ETUNNEL_BAN_RANGES overrides the
 // Cloudflare snapshot ("-" disables, comma-separated CIDRs otherwise).
-func wssBans() []*net.IPNet {
+// Misconfiguration must not be silent (#143): when the env var is set but
+// nothing parses, the operator gets one loud log line per process (the
+// result is cached), and the fall back is the Cloudflare snapshot rather
+// than an empty list. Per-CIDR drops are counted in the same line.
+var (
+	banCacheMu    sync.Mutex
+	banCache      []*net.IPNet
+	banCacheBuilt bool
+)
+
+func (s *Server) wssBans() []*net.IPNet {
+	banCacheMu.Lock()
+	defer banCacheMu.Unlock()
+	if banCacheBuilt {
+		return banCache
+	}
 	spec := strings.TrimSpace(os.Getenv("ETUNNEL_BAN_RANGES"))
 	var ranges []string
 	switch {
 	case spec == "" || spec == "cf":
 		ranges = cloudflareRanges
 	case spec == "-":
+		banCache, banCacheBuilt = nil, true
 		return nil
 	default:
 		ranges = strings.Split(spec, ",")
@@ -53,12 +70,33 @@ func wssBans() []*net.IPNet {
 			out = append(out, n)
 		}
 	}
+	if spec != "" && spec != "cf" && len(out) == 0 {
+		if s != nil {
+			s.logf("wss: ETUNNEL_BAN_RANGES=%q parsed to zero CIDRs - falling back to the Cloudflare snapshot (check separators: comma-separated)", spec)
+		}
+		out = parseCIDRs(cloudflareRanges)
+	} else if spec != "" && spec != "cf" && len(out) < len(ranges) {
+		if s != nil {
+			s.logf("wss: ETUNNEL_BAN_RANGES: %d of %d CIDRs failed to parse and were skipped", len(ranges)-len(out), len(ranges))
+		}
+	}
+	banCache, banCacheBuilt = out, true
+	return out
+}
+
+func parseCIDRs(rs []string) []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range rs {
+		if _, n, err := net.ParseCIDR(strings.TrimSpace(c)); err == nil {
+			out = append(out, n)
+		}
+	}
 	return out
 }
 
 // banWSS reports whether the WSS peer address is in the ban list.
-func banWSS(remoteAddr string) bool {
-	bans := wssBans()
+func banWSS(s *Server, remoteAddr string) bool {
+	bans := s.wssBans()
 	if len(bans) == 0 {
 		return false
 	}
