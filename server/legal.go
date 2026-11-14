@@ -178,8 +178,11 @@ clients, request metadata for tunnels, and aggregate byte counts, kept to
 operate the service, rate-limit abuse and diagnose faults. Lawful basis:
 legitimate interest in running a secure service.</li>
 <li><strong>Session cookie</strong> - one HttpOnly cookie (<code>et_session</code>)
-holding a signed value of your email, so you stay logged in. It is strictly
-necessary; we use no analytics, advertising or third-party tracking cookies.</li>
+holding a signed value of your email, so you stay logged in. During the
+sign-in redirect a second strictly necessary cookie (<code>et_returnto</code>,
+HttpOnly, Secure, 10 minutes) remembers where to send you back; it expires
+on its own. Both are strictly necessary; we use no analytics, advertising
+or third-party tracking cookies.</li>
 </ul>
 <p>We do not ask for and do not store card numbers, bank details or wallet keys.
 Payment credentials are entered on the payment provider's own pages.</p>
