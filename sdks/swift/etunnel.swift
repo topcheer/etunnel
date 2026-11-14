@@ -39,10 +39,55 @@ actor StreamStore {
     func drop(_ sid: UInt32) { streams[sid] = nil }
 }
 
+/// Multi-target local route (PROTOCOL.md §2): path prefix -> local addr.
+struct EtunnelRoute {
+    let prefix: String
+    let addr: String
+    var strip: Bool = false
+}
+
+private func routeError(_ msg: String) -> NSError {
+    NSError(domain: "etunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
+}
+
+/// Validate + compile a route table: trims trailing slashes ("/" stays),
+/// rejects duplicates and malformed prefixes, sorts longest-first.
+func etunnelNormalizeRoutes(_ routes: [EtunnelRoute]) throws -> [EtunnelRoute] {
+    var out: [EtunnelRoute] = []
+    var seen = Set<String>()
+    for (i, r) in routes.enumerated() {
+        guard !r.prefix.isEmpty else { throw routeError("etunnel: route[\(i)]: prefix is required (use \"/\" for the fallback route)") }
+        guard !r.addr.isEmpty else { throw routeError("etunnel: route[\(i)]: addr is required") }
+        guard r.prefix.hasPrefix("/") else { throw routeError("etunnel: route[\(i)]: prefix \"\(r.prefix)\" must start with '/'") }
+        var p = r.prefix
+        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+        guard !seen.contains(p) else { throw routeError("etunnel: route[\(i)]: duplicate prefix \"\(p)\"") }
+        seen.insert(p)
+        out.append(EtunnelRoute(prefix: p, addr: r.addr, strip: r.strip))
+    }
+    return out.sorted { $0.prefix.count > $1.prefix.count }
+}
+
+/// Resolve "path?query" (segment boundaries; strip keeps the query
+/// byte-for-byte). nil when nothing matches.
+func etunnelRouteFor(_ routes: [EtunnelRoute], _ pathAndQuery: String) -> (addr: String, path: String)? {
+    let qi = pathAndQuery.firstIndex(of: "?")
+    let path = qi.map { String(pathAndQuery[..<$0]) } ?? pathAndQuery
+    let query = qi.map { String(pathAndQuery[$0...]) } ?? ""
+    for r in routes {
+        guard r.prefix == "/" || path == r.prefix || path.hasPrefix(r.prefix + "/") else { continue }
+        var p = path
+        if r.strip && r.prefix != "/" { p = path == r.prefix ? "/" : String(path.dropFirst(r.prefix.count)) }
+        return (r.addr, p + query)
+    }
+    return nil
+}
+
 final class Etunnel: @unchecked Sendable {
     let task: URLSessionWebSocketTask
     let localHost: String
     let localPort: Int
+    let routes: [EtunnelRoute]? // nil = single-target (pre-routes behaviour)
     let session: URLSession
     let store = StreamStore()
   private let stateLock = NSLock()
@@ -65,7 +110,13 @@ final class Etunnel: @unchecked Sendable {
     stateLock.unlock()
   }
 
-    init?(server: String, local: String) {
+    init?(server: String, local: String, routes rawRoutes: [EtunnelRoute]? = nil) {
+        if let rs = rawRoutes {
+            guard let norm = try? etunnelNormalizeRoutes(rs), !norm.isEmpty else { return nil }
+            self.routes = norm
+        } else {
+            self.routes = nil
+        }
         if let i = local.lastIndex(of: ":"), let p = Int(local[local.index(after: i)...]) {
             self.localHost = String(local[..<i])
             self.localPort = p
@@ -169,10 +220,31 @@ final class Etunnel: @unchecked Sendable {
         }
     }
 
+    /// No route matched: answer 404 at the SDK edge (PROTOCOL.md §2).
+    func notFound(_ sid: UInt32) async {
+        let res: [String: Any] = ["type": "res", "streamId": Int(sid), "status": 404,
+            "headers": ["Content-Type": ["text/plain; charset=utf-8"]]]
+        if let d = try? JSONSerialization.data(withJSONObject: res),
+           let s = String(data: d, encoding: .utf8) {
+            try? await task.send(.string(s))
+        }
+        try? await task.send(.data(Data(frame(0x01, sid, Array("404 page not found (no route matches this path)\n".utf8)))))
+        try? await task.send(.data(Data(frame(0x02, sid, []))))
+    }
+
     func serve(_ req: [String: Any], body: [UInt8], sid: UInt32) async {
         let method = req["method"] as? String ?? "GET"
-        let path = req["path"] as? String ?? "/"
-        guard let url = URL(string: "http://\(localHost):\(localPort)\(path)") else { return }
+        var path = req["path"] as? String ?? "/"
+        var base = "http://\(localHost):\(localPort)"
+        if let rs = routes {
+            guard let hit = etunnelRouteFor(rs, path) else {
+                await notFound(sid)
+                return
+            }
+            base = "http://\(hit.addr)"
+            path = hit.path
+        }
+        guard let url = URL(string: base + path) else { return }
         var urlReq = URLRequest(url: url)
         urlReq.httpMethod = method
         urlReq.httpBody = (method == "GET" || method == "HEAD") ? nil : Data(body)

@@ -109,6 +109,84 @@ struct StreamBuf {
     std::string body;
 };
 
+// ---- multi-target local routing (PROTOCOL.md §2) --------------------------
+// ETUNNEL_ROUTES="PREFIX=ADDR[,strip];..." (same shape as the Go CLI -route
+// flag, e.g. "/api=127.0.0.1:8080,strip;/=3000"). Longest prefix wins;
+// matching on segment boundaries; no match = local 404.
+struct Route { std::string prefix, addr; bool strip = false; };
+static std::vector<Route> g_routes;
+
+static void route_die(size_t i, const std::string &what) {
+    std::cerr << "etunnel: route[" << i << "]: " << what << std::endl;
+    exit(1);
+}
+
+static void parse_routes(const char *env) {
+    if (!env) return;
+    std::string spec(env);
+    size_t pos = 0, idx = 0;
+    std::vector<Route> out;
+    while (pos < spec.size()) {
+        size_t semi = spec.find(';', pos);
+        if (semi == std::string::npos) semi = spec.size();
+        std::string item = spec.substr(pos, semi - pos);
+        pos = semi + 1;
+        if (item.empty()) continue;
+        auto eq = item.find('=');
+        if (eq == std::string::npos) route_die(idx, "want PREFIX=ADDR[,strip] in \"" + item + "\"");
+        Route r;
+        r.prefix = item.substr(0, eq);
+        std::string addr = item.substr(eq + 1);
+        size_t comma = addr.rfind(",strip");
+        if (comma != std::string::npos && comma + 6 == addr.size()) { r.strip = true; addr.resize(comma); }
+        r.addr = addr;
+        if (r.prefix.empty()) route_die(idx, "prefix is required (use \"/\" for the fallback route)");
+        if (r.addr.empty()) route_die(idx, "addr is required");
+        if (r.prefix[0] != '/') route_die(idx, "prefix \"" + r.prefix + "\" must start with '/'");
+        while (r.prefix.size() > 1 && r.prefix.back() == '/') r.prefix.pop_back();
+        for (const auto &prev : out)
+            if (prev.prefix == r.prefix) route_die(idx, "duplicate prefix \"" + r.prefix + "\"");
+        out.push_back(r);
+        idx++;
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const Route &a, const Route &b) { return a.prefix.size() > b.prefix.size(); });
+    g_routes = std::move(out);
+}
+
+// 1 = hit (addr/path filled), 0 = no route matches.
+static bool route_for(const std::vector<Route> &routes, const std::string &pq,
+                      std::string &addr, std::string &path) {
+    size_t qi = pq.find('?');
+    std::string p = qi == std::string::npos ? pq : pq.substr(0, qi);
+    std::string query = qi == std::string::npos ? "" : pq.substr(qi);
+    for (const auto &r : routes) {
+        bool match = r.prefix == "/" || p == r.prefix ||
+                     (p.size() > r.prefix.size() && p.compare(0, r.prefix.size(), r.prefix) == 0
+                      && p[r.prefix.size()] == '/');
+        if (!match) continue;
+        std::string out = p;
+        if (r.strip && r.prefix != "/") out = (p == r.prefix) ? "/" : p.substr(r.prefix.size());
+        addr = r.addr;
+        path = out + query;
+        return true;
+    }
+    return false;
+}
+
+static void send_404(std::shared_ptr<WsClient> client, websocketpp::connection_hdl hdl, uint32_t sid) {
+    websocketpp::lib::error_code ec;
+    std::string res = "{\"type\":\"res\",\"streamId\":" + std::to_string(sid)
+        + ",\"status\":404,\"headers\":{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}";
+    client->send(hdl, res, websocketpp::frame::opcode::text, ec);
+    if (ec) return;
+    auto b = frame(0x01, sid, "404 page not found (no route matches this path)\n");
+    client->send(hdl, b.data(), b.size(), websocketpp::frame::opcode::binary, ec);
+    if (ec) return;
+    auto fin = frame(0x02, sid, "");
+    client->send(hdl, fin.data(), fin.size(), websocketpp::frame::opcode::binary, ec);
+}
+
 // Themed 502 page shown when the local app is down (same HTML as the other SDKs).
 // Error text is truncated to 256 bytes to keep the frame payload bounded.
 static std::string localErrorPage(const char *msg) {
@@ -167,7 +245,20 @@ static void serve(std::shared_ptr<WsClient> client, websocketpp::connection_hdl 
                   const std::string &body, uint32_t sid, int local_port) {
     CURL *curl = curl_easy_init();
     if (!curl) return;
-    std::string url = "http://127.0.0.1:" + std::to_string(local_port) + path;
+    std::string pq = path;
+    std::string base = "http://127.0.0.1:" + std::to_string(local_port);
+    if (!g_routes.empty()) {
+        std::string addr, rpath;
+        if (!route_for(g_routes, pq, addr, rpath)) {
+            // no route matched: 404 at the SDK edge, nothing dialed
+            curl_easy_cleanup(curl);
+            send_404(client, hdl, sid);
+            return;
+        }
+        base = "http://" + addr;
+        pq = rpath;
+    }
+    std::string url = base + pq;
     std::string respHeaders, respBody;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
@@ -248,6 +339,8 @@ int main(int argc, char **argv) {
     int local_port = 3000;
     if (argc > 1) local_port = atoi(argv[1]);
     else if (localEnv) local_port = atoi(localEnv);
+    // with ETUNNEL_ROUTES set, argv[1]/ETUNNEL_LOCAL may stay absent (unused)
+    parse_routes(getenv("ETUNNEL_ROUTES"));
 
     // supervisor: connect, wait for the disconnect, back off, retry. The message
     // handler prints TUNNEL_URL on every welcome frame, so a reconnect

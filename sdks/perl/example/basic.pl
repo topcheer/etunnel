@@ -7,7 +7,7 @@ use lib '.';
 require './etunnel.pl';
 
 my $port = $ARGV[0] || 3000;
-set_defaults();   # reads ETUNNEL_* env (server/local/token/subdomain)
+# env (ETUNNEL_SERVER/LOCAL/TOKEN/SUBDOMAIN) is read inside etunnel_connect.
 my $t = etunnel_connect("wss://t.etun.uk/tunnel", $port);
 print "public URL: " . ($t->{url} // "?") . "\n";
 

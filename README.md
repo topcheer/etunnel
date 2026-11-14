@@ -88,6 +88,17 @@ Every SDK's file is also a runnable CLI: `etunnel 3000` (Go), `python -m etunnel
 `dotnet run Etunnel.cs 3000`, `swift run etunnel 3000`, `php etunnel.php 3000`.
 Each package README lists its own.
 
+Several local services under ONE hostname (SPA prod-bundle shape, no
+CORS, no second tunnel):
+
+```sh
+etunnel -route /api=127.0.0.1:8080,strip -route /=3000   # Go & Rust CLIs
+```
+
+Longest prefix wins, segment boundaries, `strip` keeps the query string,
+no-match answers 404 — identical semantics in every SDK (see PROTOCOL.md
+"Client-side multi-target routing"; runnable demo: `examples/basic/multi`).
+
 ### Embedded - the tunnel lives inside your process
 
 Go:

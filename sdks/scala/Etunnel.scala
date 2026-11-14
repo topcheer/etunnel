@@ -88,7 +88,7 @@ object Etunnel {
   // Handle of the last established socket, so the CLI can watch for a disconnect.
   @volatile var lastWs: WebSocket = _
 
-  class Handler(http: HttpClient, port: Int) extends WebSocket.Listener {
+  class Handler(http: HttpClient, port: Int, routes: Array[Route] = null) extends WebSocket.Listener {
     val welcome = new CountDownLatch(1)
     @volatile var info: Map[String, Any] = _
     @volatile var err: String = _
@@ -156,8 +156,16 @@ object Etunnel {
     def serve(req: Map[String, Any], body: Array[Byte], sid: Int): Unit = {
       try {
         val method = req("method").toString
+        var path = req.get("path").map(_.toString).getOrElse("/")
+        var target = s"http://127.0.0.1:$port"
+        if (routes != null) {
+          routeFor(routes, path) match {
+            case Some((addr, p)) => target = "http://" + addr; path = p
+            case None            => notFound(sid); return
+          }
+        }
         val rb = HttpRequest.newBuilder()
-          .uri(URI.create(s"http://127.0.0.1:$port${req("path")}"))
+          .uri(URI.create(s"$target$path"))
           .timeout(Duration.ofSeconds(120))
         req.get("headers").foreach { h =>
           h.asInstanceOf[Map[String, List[String]]].foreach { case (k, vs) =>
@@ -209,6 +217,18 @@ object Etunnel {
     def localError(sid: Int, msg: String): Unit = {
       ws.sendText(s"""{"type":"res","streamId":$sid,"status":502,"headers":{"Content-Type":["text/html; charset=utf-8"]}}""", true).join()
       val body = localErrorPage(Option(msg).getOrElse("error")).getBytes
+      val f = new Array[Byte](9 + body.length)
+      f(0) = 0x01
+      putSid(f, sid); putLen(f, body.length)
+      System.arraycopy(body, 0, f, 9, body.length)
+      ws.sendBinary(ByteBuffer.wrap(f), true).join()
+      ctl(0x02, sid)
+    }
+
+    /** No route matched: answer 404 at the SDK edge (PROTOCOL.md §2). */
+    def notFound(sid: Int): Unit = {
+      ws.sendText(s"""{"type":"res","streamId":$sid,"status":404,"headers":{"Content-Type":["text/plain; charset=utf-8"]}}""", true).join()
+      val body = "404 page not found (no route matches this path)\n".getBytes
       val f = new Array[Byte](9 + body.length)
       f(0) = 0x01
       putSid(f, sid); putLen(f, body.length)
@@ -285,10 +305,47 @@ the tunnel stays connected and keeps retrying for you.</div>
     .connectTimeout(Duration.ofSeconds(15))
     .build()
 
+  /** Local route: path prefix -> local addr ("host:port"). */
+  case class Route(prefix: String, addr: String, strip: Boolean = false)
+
+  /** Validate + compile a route table: trims trailing slashes ("/" stays),
+   *  rejects duplicates and malformed prefixes, sorts longest-first. */
+  def normalizeRoutes(routes: Seq[Route]): Array[Route] = {
+    val out = scala.collection.mutable.ArrayBuffer[Route]()
+    val seen = scala.collection.mutable.HashSet[String]()
+    for (i <- routes.indices) {
+      val r = routes(i)
+      require(r.prefix != null && r.prefix.nonEmpty, s"etunnel: route[$i]: prefix is required (use \"/\" for the fallback route)")
+      require(r.addr != null && r.addr.nonEmpty, s"etunnel: route[$i]: addr is required")
+      require(r.prefix.charAt(0) == '/', s"etunnel: route[$i]: prefix \"${r.prefix}\" must start with '/'")
+      var p = r.prefix
+      while (p.length > 1 && p.endsWith("/")) p = p.substring(0, p.length - 1)
+      require(!seen.contains(p), s"etunnel: route[$i]: duplicate prefix \"$p\"")
+      seen += p
+      out += Route(p, r.addr, r.strip)
+    }
+    out.sortBy(-_.prefix.length).toArray
+  }
+
+  /** Resolve "path?query" (segment boundaries; strip keeps the query
+   *  byte-for-byte). None when nothing matches. */
+  def routeFor(routes: Array[Route], pathAndQuery: String): Option[(String, String)] = {
+    val qi = pathAndQuery.indexOf('?')
+    val path = if (qi >= 0) pathAndQuery.substring(0, qi) else pathAndQuery
+    val query = if (qi >= 0) pathAndQuery.substring(qi) else ""
+    routes.find(r => r.prefix == "/" || path == r.prefix || path.startsWith(r.prefix + "/")).map { r =>
+      var p = path
+      if (r.strip && r.prefix != "/") p = if (path == r.prefix) "/" else path.substring(r.prefix.length)
+      (r.addr, p + query)
+    }
+  }
+
   def connect(server: String, localPort: Int, token: String = null, subdomain: String = null,
-              resume: String = null): Tunnel = {
+              resume: String = null, routes: Seq[Route] = null): Tunnel = {
     val http = localHttp
-    val h = new Handler(http, localPort)
+    val norm = if (routes != null) normalizeRoutes(routes) else null
+    if (norm != null && norm.isEmpty) throw new IllegalArgumentException("etunnel: routes must not be empty")
+    val h = new Handler(http, localPort, norm)
     val ws = wsHttp
       .newWebSocketBuilder()
       .subprotocols("etunnel-v1")

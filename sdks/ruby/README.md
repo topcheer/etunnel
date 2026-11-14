@@ -62,3 +62,22 @@ use the [Go SDK](../../sdk) for streaming and WebSocket pass-through).
 Use of the etunnel relay service (default `wss://t.etun.uk/tunnel`) is governed
 by its [Terms of Service](https://t.etun.uk/terms) and
 [Privacy Policy](https://t.etun.uk/privacy).
+
+## Multi-target routing
+
+One public hostname, several local services - e.g. `/` to a built frontend
+and `/api` to a backend - without CORS or a second tunnel. Routing is
+client-side; the protocol is unchanged (PROTOCOL.md 2).
+
+```ruby
+t = Etunnel.connect("wss://t.example.com/tunnel", nil, routes: [
+  Etunnel::Route.new("/api", "127.0.0.1:8080", true),
+  Etunnel::Route.new("/", "127.0.0.1:3000"),
+])
+```
+
+Semantics (identical in every SDK, pinned by tests): longest prefix
+wins; matching is on segment boundaries (`/api` never matches `/apiv2`);
+`strip` removes only the path part - the query string is carried over
+byte-for-byte, an exact hit bottoms out at `/`; no matching route (only
+possible without a `/` fallback) answers `404` at the SDK edge.

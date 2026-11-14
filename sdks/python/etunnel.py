@@ -90,6 +90,47 @@ def _parse_frame(buf: bytes):
     return kind, sid, buf[9:9 + n]
 
 
+
+# --- Multi-target local routing (mirrors sdk/route.go semantics) --------
+def _normalize_routes(routes):
+    """Validate a list of {"prefix","addr","strip"} dicts; returns the
+    normalized table sorted longest-prefix-first. Raises ValueError."""
+    out, seen = [], set()
+    for i, r in enumerate(routes):
+        prefix = (r.get("prefix") or "").strip()
+        addr = (r.get("addr") or "").strip()
+        if not prefix:
+            raise ValueError(f'etunnel: route[{i}]: PathPrefix is required (use "/" for the fallback route)')
+        if not addr:
+            raise ValueError(f"etunnel: route[{i}]: Addr is required")
+        if not prefix.startswith("/"):
+            raise ValueError(f"etunnel: route[{i}]: PathPrefix {prefix!r} must start with '/'")
+        while len(prefix) > 1 and prefix.endswith("/"):
+            prefix = prefix[:-1]
+        if prefix in seen:
+            raise ValueError(f'etunnel: route[{i}]: duplicate PathPrefix "{prefix}"')
+        seen.add(prefix)
+        out.append({"prefix": prefix, "addr": addr, "strip": bool(r.get("strip"))})
+    out.sort(key=lambda r: len(r["prefix"]), reverse=True)
+    return out
+
+
+def _route_for(routes, path_and_query):
+    """Resolve "path?query" -> (addr, path) or None. Query is preserved
+    byte-for-byte; stripping touches only the path part."""
+    qi = path_and_query.find("?")
+    path = path_and_query if qi < 0 else path_and_query[:qi]
+    query = "" if qi < 0 else path_and_query[qi:]
+    for r in routes:
+        pre = r["prefix"]
+        if not (pre == "/" or path == pre or path.startswith(pre + "/")):
+            continue
+        p = path
+        if r["strip"] and pre != "/":
+            p = "/" if path == pre else path[len(pre):]
+        return r["addr"], p + query
+    return None
+
 def connect(server: str, local, opts: Optional[dict] = None) -> dict:
     """Connect to an etunnel server exposing the local service.
 
@@ -98,10 +139,15 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
     Returns a dict {url, hostname, subdomain, plan, close()}.
     """
     opts = opts or {}
+    routes = _normalize_routes(opts["routes"]) if opts.get("routes") else None
+    if local is None and not routes:
+        raise ValueError("etunnel: local address is required")
     if isinstance(local, int):
         local = f"127.0.0.1:{local}"
-    elif ":" not in str(local):
+    elif local is not None and ":" not in str(local):
         local = f"127.0.0.1:{local}"
+    if local is None:
+        local = "127.0.0.1:80"  # unused in routed mode
 
     ws = websocket.create_connection(server, subprotocols=["etunnel-v1"], timeout=15)
     ws.send(json.dumps({
@@ -130,7 +176,17 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                    if k.lower() not in HOP}
         method = req.get("method", "GET")
         data = body if method not in ("GET", "HEAD") else None
-        r = urllib.request.Request(f"http://{local}{req.get('path', '/')}", data=data,
+        target, dial_path = local, req.get('path', '/')
+        if routes:
+            hit = _route_for(routes, dial_path)
+            if hit is None:
+                ws.send(json.dumps({"type": "res", "streamId": sid, "status": 404,
+                                    "headers": {"Content-Type": ["text/plain; charset=utf-8"]}}))
+                ws.send(_frame(0x01, sid, b"404 page not found (no route matches this path)\n"))
+                ws.send(_frame(0x02, sid, b""))
+                return
+            target, dial_path = hit
+        r = urllib.request.Request(f"http://{target}{dial_path}", data=data,
                                    headers=headers, method=method)
         try:
             with urllib.request.urlopen(r, timeout=60) as resp:

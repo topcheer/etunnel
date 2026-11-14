@@ -125,6 +125,48 @@ the tunnel stays connected and keeps retrying for you.</div>
       [502 {"Content-Type" ["text/html; charset=utf-8"]}
        (.getBytes (local-error-page (.getMessage e)))])))
 
+(defn- normalize-routes
+  "Validate + compile a route table ({:keys [prefix addr strip]}): trims
+   trailing slashes (\"/\" stays), rejects duplicates and malformed prefixes,
+   sorts longest-first."
+  [routes]
+  (let [[out seen]
+        (reduce (fn [[acc seen] [i r]]
+                  (let [p (str (:prefix r ""))]
+                    (cond
+                      (empty? (:prefix r))
+                      (throw (ex-info (str "etunnel: route[" i "]: prefix is required (use \"/\" for the fallback route)") {}))
+                      (empty? (str (:addr r "")))
+                      (throw (ex-info (str "etunnel: route[" i "]: addr is required") {}))
+                      (not (.startsWith ^String p "/"))
+                      (throw (ex-info (str "etunnel: route[" i "]: prefix \"" p "\" must start with '/'") {}))
+                      :else
+                      (let [t (if (> (count p) 1) (clojure.string/replace p #"/+$" "") p)]
+                        (when (contains? seen t)
+                          (throw (ex-info (str "etunnel: route[" i "]: duplicate prefix \"" t "\"") {})))
+                        [(conj acc {:prefix t :addr (:addr r) :strip (boolean (:strip r))})
+                         (conj seen t)]))))
+                [[] #{}]
+                (map-indexed vector routes))]
+    (vec (sort-by (comp count :prefix) > out))))
+
+(defn- route-for
+  "Resolve \"path?query\" against the normalized table: {:addr .. :path ..} or nil."
+  [routes path-and-query]
+  (let [qi (.indexOf ^String path-and-query (int \?))
+        [path query] (if (neg? qi)
+                       [path-and-query ""]
+                       [(subs path-and-query 0 qi) (subs path-and-query qi)])]
+    (some (fn [r]
+            (let [p (:prefix r)]
+              (when (or (= p "/") (= path p) (.startsWith ^String path (str p "/")))
+                {:addr (:addr r)
+                 :path (str (if (and (:strip r) (not= p "/"))
+                              (if (= path p) "/" (subs path (count p)))
+                              path)
+                            query)})))
+          routes)))
+
 (defn- handle-text
   [ws ctx m]
   (case (:type m)
@@ -151,8 +193,16 @@ the tunnel stays connected and keeps retrying for you.</div>
   (try
     (let [req (:req st)
           body (.toByteArray ^java.io.ByteArrayOutputStream (:body st))
-          [status hdrs out] (local-request (:http ctx) (:local ctx)
-                              (:method req "GET") (:path req "/") body)
+          routes (:routes ctx)
+          hit (when routes (route-for routes (:path req "/")))
+          [status hdrs out] (if (and routes (nil? hit))
+                              [404 {"Content-Type" ["text/plain; charset=utf-8"]}
+                               (.getBytes "404 page not found (no route matches this path)\n")]
+                              (local-request (:http ctx)
+                                (if (and routes hit) (:addr hit) (:local ctx))
+                                (:method req "GET")
+                                (if (and routes hit) (:path hit) (:path req "/"))
+                                body))
           ws ^WebSocket (:ws @(:state ctx))]
       (locking (:out-lock ctx)
         (send-text! ws (json/generate-string {:type "res" :streamId sid
@@ -184,9 +234,13 @@ the tunnel stays connected and keeps retrying for you.</div>
   "Connects to the etunnel server exposing the local service at local
   (\"127.0.0.1:3000\" or a port number). Returns a deref-able state map with
   :url filled once the server assigns the hostname, plus :ws and :close!."
-  [server local & {:keys [token subdomain resume]}]
-  (let [local (let [s (str local)]
-                (if (re-matches #"\d+" s) (str "127.0.0.1:" s) s))
+  [server local & {:keys [token subdomain resume routes]}]
+  (let [routes (when routes (normalize-routes routes))
+        _ (when (and routes (empty? routes))
+            (throw (ex-info "etunnel: routes must not be empty" {})))
+        local (when local
+                (let [s (str local)]
+                  (if (re-matches #"\d+" s) (str "127.0.0.1:" s) s)))
         state (atom nil)
         streams (ConcurrentHashMap.)
         out-lock (Object.)
@@ -206,7 +260,8 @@ the tunnel stays connected and keeps retrying for you.</div>
                      (let [b (byte-array (.remaining data))]
                        (.get data b)
                        (handle-binary {:state state :streams streams
-                                       :out-lock out-lock :http http :local local} b)
+                                       :out-lock out-lock :http http :local local
+                                       :routes routes} b)
                        (.request ws 1)
                        nil))
                    (onPing [ws msg]

@@ -22,6 +22,9 @@ const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-auth
  * Options for {@linkcode connect}.
  */
 export interface Options {
+  /** Multi-target route table: several local services under one public
+   * hostname, dispatched by URL path prefix (see normalizeRoutes). */
+  routes?: Route[];
   /** API key from {@linkcode login} or /api/register; unlocks paid features. */
   token?: string;
   /** Request a specific subdomain (requires a paid plan token). */
@@ -77,7 +80,44 @@ function pickHostPort(local: string | number): { host: string; port: number } {
  * @param opts    Optional token/subdomain/reconnect settings.
  * @returns The live tunnel; {@linkcode Tunnel.close} tears it down.
  */
+
+// --- Multi-target local routing (mirrors sdk/route.go semantics) --------
+export interface Route { prefix: string; addr: string; strip?: boolean; }
+export function normalizeRoutes(routes: Route[]): Route[] {
+  const out: Route[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < routes.length; i++) {
+    const r = routes[i];
+    if (!r || typeof r.prefix !== 'string' || r.prefix === '') {
+      throw new Error(`etunnel: route[${i}]: PathPrefix is required (use "/" for the fallback route)`);
+    }
+    if (!r.addr) throw new Error(`etunnel: route[${i}]: Addr is required`);
+    let p = r.prefix;
+    if (p[0] !== '/') throw new Error(`etunnel: route[${i}]: PathPrefix "${p}" must start with '/'`);
+    while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+    if (seen.has(p)) throw new Error(`etunnel: route[${i}]: duplicate PathPrefix "${p}"`);
+    seen.add(p);
+    out.push({ prefix: p, addr: r.addr, strip: !!r.strip });
+  }
+  out.sort((a, b) => b.prefix.length - a.prefix.length);
+  return out;
+}
+export function routeFor(routes: Route[], pathAndQuery: string): { addr: string; path: string } | null {
+  const qi = pathAndQuery.indexOf('?');
+  const path = qi >= 0 ? pathAndQuery.slice(0, qi) : pathAndQuery;
+  const query = qi >= 0 ? pathAndQuery.slice(qi) : '';
+  for (const r of routes) {
+    if (!(r.prefix === '/' || path === r.prefix || path.startsWith(r.prefix + '/'))) continue;
+    let p = path;
+    if (r.strip) p = r.prefix === '/' ? path : (path === r.prefix ? '/' : path.slice(r.prefix.length));
+    return { addr: r.addr, path: p + query };
+  }
+  return null;
+}
+
 export async function connect(server: string, local: string | number, opts: Options = {}): Promise<Tunnel> {
+  const routes = opts.routes ? normalizeRoutes(opts.routes) : null;
+
   const { host, port } = pickHostPort(local);
   const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
   ws.binaryType = 'arraybuffer'; // default is "blob" in Deno
@@ -130,7 +170,20 @@ export async function connect(server: string, local: string | number, opts: Opti
     }
     let resp: Response;
     try {
-      resp = await fetch(`http://${host}:${port}${st.req.path}`, {
+      let dialAddr = `${host}:${port}`;
+      let dialPath: string = st.req.path;
+      if (routes) {
+        const hit = routeFor(routes, dialPath);
+        if (!hit) {
+          ws.send(JSON.stringify({ type: 'res', streamId: id, status: 404, headers: { 'Content-Type': ['text/plain; charset=utf-8'] } }));
+          ws.send(frame(0x01, id, new TextEncoder().encode('404 page not found (no route matches this path)\n')));
+          ws.send(frame(0x02, id, new Uint8Array(0)));
+          return;
+        }
+        dialAddr = hit.addr;
+        dialPath = hit.path;
+      }
+      resp = await fetch(`http://${dialAddr}${dialPath}`, {
         method: st.req.method,
         headers,
         // Copy into a Uint8Array<ArrayBuffer>: newer Deno lib.dom types only

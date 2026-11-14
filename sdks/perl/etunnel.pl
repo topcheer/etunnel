@@ -248,10 +248,52 @@ EOHTML
     return $pa . $esc . $pb;
 }
 
+# ---- multi-target local routing (PROTOCOL.md §2) --------------------------
+# Route table: [ { prefix => '/api', addr => '127.0.0.1:8080', strip => 1 }, ... ]
+# Longest prefix wins; segment boundaries; strip keeps the query; no
+# match = 404 at the SDK edge.
+sub normalize_routes {
+    my ($routes) = @_;
+    my (@out, %seen);
+    for my $i (0 .. $#$routes) {
+        my $r = $routes->[$i];
+        my $p = (defined $r && defined $r->{prefix}) ? $r->{prefix} : '';
+        die "etunnel: route[$i]: prefix is required (use \"/\" for the fallback route)\n" unless length $p;
+        die "etunnel: route[$i]: addr is required\n" unless defined $r->{addr} && length $r->{addr};
+        die "etunnel: route[$i]: prefix \"$p\" must start with '/'\n" unless $p =~ m{^/};
+        1 while $p =~ s{^(/.+)/$}{$1};
+        die "etunnel: route[$i]: duplicate prefix \"$p\"\n" if $seen{$p}++;
+        push @out, { prefix => $p, addr => $r->{addr}, strip => $r->{strip} ? 1 : 0 };
+    }
+    return [sort { length($b->{prefix}) <=> length($a->{prefix}) } @out];
+}
+
+# returns (addr, path) on hit, () when nothing matches
+sub route_for {
+    my ($routes, $pq) = @_;
+    my ($path, $query) = $pq =~ /^([^?]*)(\?.*)?$/s;
+    for my $r (@$routes) {
+        my $p = $r->{prefix};
+        next unless $p eq '/' || $path eq $p || index($path, "$p/") == 0;
+        my $np = $path;
+        if ($r->{strip} && $p ne '/') { $np = $path eq $p ? '/' : substr($path, length($p)); }
+        return ($r->{addr}, $np . (defined $query ? $query : ''));
+    }
+    return;
+}
+
 sub etunnel_connect {
     my ($server, $local, $opts) = @_;
     $opts ||= {};
-    my ($lhost, $lport) = $local =~ /^([^:]+):(\d+)$/ or die "bad local $local\n";
+    my $routes = $opts->{routes};
+    if ($routes) {
+        $routes = normalize_routes($routes);
+        die "etunnel: routes must not be empty\n" unless @$routes;
+    }
+    $local = "127.0.0.1:$local" if defined($local) && $local =~ /^\d+$/;  # bare-port sugar
+    my ($lhost, $lport) = defined $local ? ($local =~ /^([^:]+):(\d+)$/) : ();
+    die "bad local $local\n" unless defined $lport || $routes;
+    ($lhost, $lport) = ('127.0.0.1', 0) unless defined $lport;  # unused when routes
     my $ws = ws_connect($server);
     ws_send_text($ws, $JSON->encode({
         type => 'hello', proto => 1,
@@ -302,8 +344,25 @@ sub etunnel_connect {
                     my $reqf = $st->{req};
                     my $bodyf = $st->{body};
                     threads->create(sub {
+                        my ($lhostf, $lportf) = ($lhost, $lport);
+                        if ($routes) {
+                            my ($addr, $rp) = route_for($routes, $reqf->{path} || '/');
+                            unless ($addr) {
+                                eval {
+                                    ws_send_text($ws, $JSON->encode({ type => 'res', streamId => $sidf,
+                                        status => 404, headers => { 'Content-Type' => ['text/plain; charset=utf-8'] } }));
+                                    ws_send_binary($ws, frame(0x01, $sidf, "404 page not found (no route matches this path)\n"));
+                                    ws_send_binary($ws, frame(0x02, $sidf, ''));
+                                };
+                                return;
+                            }
+                            if ($addr =~ /^(\d+)$/) { ($lhostf, $lportf) = ('127.0.0.1', $1); }
+                            elsif ($addr =~ /^(\[[^\]]+\]|[^:]+):(\d+)$/) { ($lhostf, $lportf) = ($1, $2); }
+                            else { ($lhostf, $lportf) = ($addr, 80); }
+                            $reqf = { %$reqf, path => $rp };
+                        }
                         my ($status, $rh, $out) = eval {
-                            local_request($lhost, $lport, $reqf->{method} || 'GET',
+                            local_request($lhostf, $lportf, $reqf->{method} || 'GET',
                                 $reqf->{path} || '/', $reqf->{headers} || {}, $bodyf);
                         };
                         if ($@) {
