@@ -159,12 +159,24 @@ pub fn connect(server: &str, local_port: u16, token: Option<&str>, subdomain: Op
 }
 
 pub fn connect_full(server: &str, local_addr: &str, token: Option<&str>, subdomain: Option<&str>) -> Result<Tunnel, String> {
-    connect_full_resume(server, local_addr, token, subdomain, None)
+    connect_local(server, Local::One(local_addr.to_string()), token, subdomain, None)
+}
+
+/// Route-aware connect: several local services under one public hostname
+/// dispatched by URL path prefix (see route.rs).
+pub fn connect_routes(server: &str, routes: Vec<Route>, token: Option<&str>, subdomain: Option<&str>, resume: Option<&str>) -> Result<Tunnel, String> {
+    let mut routes = routes;
+    route::normalize(&mut routes)?;
+    connect_local(server, Local::Routes(routes), token, subdomain, resume)
 }
 
 /// Like [`connect_full`], plus an optional resume token from a previous
 /// session so the server hands back the same subdomain after a drop.
 pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, subdomain: Option<&str>, resume: Option<&str>) -> Result<Tunnel, String> {
+    connect_local(server, Local::One(local_addr.to_string()), token, subdomain, resume)
+}
+
+fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Option<&str>, resume: Option<&str>) -> Result<Tunnel, String> {
     let mut request = server
         .into_client_request()
         .map_err(|e| format!("bad url: {}", e))?;
@@ -241,7 +253,7 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
 
     let closed = Arc::new(AtomicBool::new(false));
     let ws2 = Arc::clone(&ws);
-    let local = local_addr.to_string();
+    let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
@@ -379,12 +391,43 @@ fn local_error_page(msg: &str) -> String {
     format!("{}{}{}", ERR_PAGE_A, escape_html(msg), ERR_PAGE_B)
 }
 
-fn serve(tx: mpsc::Sender<Message>, local: String, sid: u32, st: StreamBuf) {
+mod route;
+
+use route::{parse_conf, parse_route_spec, Route};
+
+/// Local dial target: one address (legacy) or a route table (multi-target).
+#[derive(Clone)]
+enum Local {
+    One(String),
+    Routes(Vec<Route>),
+}
+
+impl Local {
+    fn resolve(&self, path: &str) -> Option<(String, String)> {
+        match self {
+            Local::One(a) => Some((a.clone(), path.to_string())),
+            Local::Routes(rs) => route::route_for(rs, path),
+        }
+    }
+}
+
+fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
+    let (addr, path) = match local.resolve(&st.path) {
+        Some(hit) => hit,
+        None => {
+            // No route matches: a real 404 answered at the SDK edge.
+            tx.send(Message::Text(format!(
+                "{{\"type\":\"res\",\"streamId\":{},\"status\":404,\"headers\":{{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}}}", sid).into())).ok();
+            tx.send(frame(0x01, sid, b"404 page not found (no route matches this path)\n")).ok();
+            tx.send(frame(0x02, sid, b"")).ok();
+            return;
+        }
+    };
     let hop = |k: &str| {
         matches!(k.to_ascii_lowercase().as_str(), "connection" | "transfer-encoding" | "keep-alive"
             | "upgrade" | "content-length" | "host" | "proxy-connection" | "te" | "trailer")
     };
-    let mut req = ureq::request(&st.method, &format!("http://{}{}", local, st.path));
+    let mut req = ureq::request(&st.method, &format!("http://{}{}", addr, path));
     for (k, vs) in &st.headers {
         if hop(k) { continue; }
         for v in vs {
@@ -450,16 +493,82 @@ fn backoff_ms(attempt: u32) -> u64 {
 }
 
 fn main() {
-    let server = std::env::var("ETUNNEL_SERVER").unwrap_or_else(|_| option_env!("ETUNNEL_BUILD_SERVER").unwrap_or("wss://t.etun.uk/tunnel").into());
-    let local = std::env::args().nth(1)
-        .or_else(|| std::env::var("ETUNNEL_LOCAL").ok())
-        .unwrap_or_else(|| "3000".into());
-    let local = if local.contains(':') { local } else { format!("127.0.0.1:{}", local) };
-    let (host, port) = local.rsplit_once(':').unwrap();
-    let port: u16 = port.parse().unwrap_or(3000);
-    let local = format!("{}:{}", host, port);
-    let token = std::env::var("ETUNNEL_TOKEN").ok();
-    let subdomain = std::env::var("ETUNNEL_SUBDOMAIN").ok();
+    // Args: [options] [local-port-or-addr]. Options (all optional):
+    //   --route PREFIX=ADDR[,strip]   repeatable; switches to multi-target
+    //   --config PATH                 key=value config with [route] blocks
+    //   --server URL / --token KEY / --subdomain NAME
+    // Precedence: flags > env (ETUNNEL_*) > --config file > defaults.
+    let mut server_arg: Option<String> = None;
+    let mut token_arg: Option<String> = None;
+    let mut subdomain_arg: Option<String> = None;
+    let mut route_specs: Vec<String> = Vec::new();
+    let mut conf_path: Option<String> = None;
+    let mut positional: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--route" => route_specs.push(args.next().unwrap_or_else(|| { eprintln!("etunnel: --route needs PREFIX=ADDR[,strip]"); std::process::exit(2); })),
+            "--config" => conf_path = Some(args.next().unwrap_or_else(|| { eprintln!("etunnel: --config needs a path"); std::process::exit(2); })),
+            "--server" => server_arg = Some(args.next().unwrap_or_else(|| { eprintln!("etunnel: --server needs a URL"); std::process::exit(2); })),
+            "--token" => token_arg = Some(args.next().unwrap_or_else(|| { eprintln!("etunnel: --token needs a key"); std::process::exit(2); })),
+            "--subdomain" => subdomain_arg = Some(args.next().unwrap_or_else(|| { eprintln!("etunnel: --subdomain needs a name"); std::process::exit(2); })),
+            "--help" | "-h" => {
+                eprintln!("usage: etunnel [--server URL] [--token KEY] [--subdomain NAME] [local-port-or-addr]\n       etunnel [--config etunnel.conf] [--route PREFIX=ADDR[,strip]]...");
+                std::process::exit(0);
+            }
+            other if other.starts_with("--") => { eprintln!("etunnel: unknown flag {}", other); std::process::exit(2); }
+            other => positional = Some(other.to_string()),
+        }
+    }
+    let conf = {
+        let path = conf_path.clone().or_else(|| std::path::Path::new("etunnel.conf").exists().then(|| "etunnel.conf".to_string()));
+        match path {
+            Some(p) => match std::fs::read_to_string(&p) {
+                Ok(text) => match parse_conf(&text) {
+                    Ok(c) => c,
+                    Err(e) => { eprintln!("etunnel: {}: {}", p, e); std::process::exit(2); }
+                },
+                Err(e) => { eprintln!("etunnel: read {}: {}", p, e); std::process::exit(2); }
+            },
+            None => parse_conf("").unwrap(),
+        }
+    };
+    let server = server_arg
+        .or_else(|| std::env::var("ETUNNEL_SERVER").ok())
+        .or(conf.server)
+        .unwrap_or_else(|| option_env!("ETUNNEL_BUILD_SERVER").unwrap_or("wss://t.etun.uk/tunnel").to_string());
+    let token = token_arg
+        .or_else(|| std::env::var("ETUNNEL_TOKEN").ok())
+        .or(conf.token);
+    let subdomain = subdomain_arg
+        .or_else(|| std::env::var("ETUNNEL_SUBDOMAIN").ok())
+        .or(conf.subdomain);
+    // CLI --route specs win over config [route] blocks; a positional/local
+    // only applies in single-target mode.
+    let cli_routes: Result<Vec<Route>, String> = route_specs.iter()
+        .map(|s| parse_route_spec(s)).collect();
+    let cli_routes = match cli_routes {
+        Ok(rs) => rs,
+        Err(e) => { eprintln!("etunnel: {}", e); std::process::exit(2); }
+    };
+    let (local, routes) = if !cli_routes.is_empty() {
+        if positional.is_some() { eprintln!("etunnel: positional <local-port-or-addr> cannot be combined with --route"); std::process::exit(2); }
+        (None, cli_routes)
+    } else if !conf.routes.is_empty() {
+        (None, conf.routes)
+    } else {
+        let l = positional
+            .or_else(|| std::env::var("ETUNNEL_LOCAL").ok())
+            .unwrap_or_else(|| "3000".into());
+        let l = if l.contains(':') { l } else { format!("127.0.0.1:{}", l) };
+        let (host, port) = l.rsplit_once(':').unwrap();
+        let port: u16 = port.parse().unwrap_or(3000);
+        (Some(format!("{}:{}", host, port)), Vec::new())
+    };
+    if local.is_none() && routes.is_empty() {
+        eprintln!("etunnel: nothing to expose (no --route, no config [route], no local address)");
+        std::process::exit(2);
+    }
     // ETUNNEL_RECONNECT=0 restores the one-shot behaviour (exit on first error).
     let reconnect = std::env::var("ETUNNEL_RECONNECT").map(|v| v != "0").unwrap_or(true);
 
@@ -469,13 +578,12 @@ fn main() {
     // Carried across drops so a reconnect reclaims the same subdomain.
     let mut resume: Option<String> = None;
     loop {
-        match connect_full_resume(
-            &server,
-            &local,
-            token.as_deref(),
-            subdomain.as_deref(),
-            resume.as_deref(),
-        ) {
+        let connected = if !routes.is_empty() {
+            connect_routes(&server, routes.clone(), token.as_deref(), subdomain.as_deref(), resume.as_deref())
+        } else {
+            connect_full_resume(&server, local.as_deref().unwrap(), token.as_deref(), subdomain.as_deref(), resume.as_deref())
+        };
+        match connected {
             Ok(t) => {
                 println!("TUNNEL_URL: {}", t.url);
                 attempt = 0;
