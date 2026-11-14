@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	etunnel "github.com/topcheer/etunnel/sdk"
+	"github.com/topcheer/etunnel/server"
 )
 
 func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
@@ -51,7 +52,7 @@ func status(t *testing.T, client *http.Client, url string, mold func(*http.Reque
 }
 
 func TestTunnelPolicyE2E(t *testing.T) {
-	_, srvURL := startTestServer(t, nil)
+	_, srvURL := startTestServer(t, func(c *server.Config) { c.TrustForwardedFor = true })
 	client := clientThroughServer(t, srvURL)
 
 	var sawWebhook string
@@ -99,7 +100,8 @@ func TestTunnelPolicyE2E(t *testing.T) {
 	}
 
 	// 3. allowIPs: visitor 127.0.0.1 outside the list -> 403; the CF header
-	// route is honoured (documented proxy-trust model).
+	// route is honoured behind a trusted proxy (opt-in via
+	// TrustForwardedFor, #140).
 	tun3 := policyTun(t, srvURL, localAddr, &etunnel.TunnelPolicy{AllowIPs: []string{"10.99.0.0/16"}})
 	if c := status(t, client, tun3.URL(), nil); c != http.StatusForbidden {
 		t.Fatalf("outside allowIPs = %d, want 403", c)

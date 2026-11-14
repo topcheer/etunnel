@@ -65,6 +65,7 @@ func New(cfg Config) (*Server, error) {
 	if err := cfg.normalize(); err != nil {
 		return nil, err
 	}
+	trustForwardedFor = cfg.TrustForwardedFor
 	accounts, err := NewAccountStore(cfg.AccountsFile)
 	if err != nil {
 		return nil, err

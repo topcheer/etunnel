@@ -67,6 +67,12 @@ type Config struct {
 	AdminAddr string
 	// AdminToken, when set, is required as X-Admin-Token for admin endpoints.
 	AdminToken string
+	// TrustForwardedFor honours CF-Connecting-IP / X-Real-IP /
+	// X-Forwarded-For when resolving the visitor IP for tunnel policy
+	// allowIPs. Only for deployments behind a trusted reverse proxy that
+	// overwrites those headers; default false keeps the socket address as
+	// the only source of truth (#140).
+	TrustForwardedFor bool
 
 	// WSPath is the WebSocket endpoint path (default "/tunnel").
 	WSPath string
