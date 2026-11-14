@@ -160,6 +160,13 @@ func (s *Server) accountTunnelLimitReached(acct *Account, tier *Tier) bool {
 // handleTunnelWS upgrades, authenticates, assigns a subdomain and runs the
 // session until it ends.
 func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
+	// WSS source ban (owner directive): CF Workers/WARP-hosted clients churn
+	// tunnel slots; refuse the upgrade before any state is created.
+	if banWSS(r.RemoteAddr) {
+		s.logf("wss: banned source %s (Cloudflare range) refused", r.RemoteAddr)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols:   []string{protocol.Subprotocol},
 		OriginPatterns: []string{"*"},
