@@ -83,9 +83,13 @@ Client → server:
   - `basicAuth: "user:pass"` — HTTP Basic; wrong/missing credentials get
     `401` + `WWW-Authenticate` at the edge.
   - `allowIPs: ["1.2.3.4", "10.0.0.0/8"]` — source allowlist (plain IPs are
-    treated as /32 or /128); outside gets `403`. Behind a reverse proxy the
-    visitor IP resolves from `CF-Connecting-IP` → `X-Real-IP` → first
-    `X-Forwarded-For` hop; strip those headers at your edge if untrusted.
+    treated as /32 or /128); outside gets `403`. The visitor IP is the
+    socket address. Only when the server runs with
+    `--trust-forwarded-for` / `TRUST_FORWARDED_FOR` (deployments behind a
+    trusted reverse proxy that overwrites the forwarded headers) is the
+    chain `CF-Connecting-IP` → `X-Real-IP` → first `X-Forwarded-For` hop
+    honoured; otherwise those headers are attacker-controlled and ignored
+    (#140).
   - `webhooks: [{provider, secret}]` with `provider` ∈ `stripe | github |
     gitlab`: requests carrying a known provider signature header are
     verified against the raw body (Stripe `t=…,v1=…` with 5-minute

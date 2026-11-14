@@ -91,12 +91,23 @@ func TestPolicyAllowIPs(t *testing.T) {
 	if tp.apply(w, r3, nil) || w.Code != http.StatusForbidden {
 		t.Fatalf("outside IP: %d", w.Code)
 	}
-	// X-Forwarded-For honoured (CF-fronted deployments)
+	// Forwarded headers honoured ONLY when the operator opted in (#140):
+	// spoof test first (default off: header ignored, socket truth wins) ...
+	sp := httptest.NewRequest("GET", "/", nil)
+	sp.RemoteAddr = "104.28.1.1:1"                // attacker socket, outside list
+	sp.Header.Set("CF-Connecting-IP", "10.9.9.9") // spoofed, inside list
+	wsp := httptest.NewRecorder()
+	if tp.apply(wsp, sp, nil) || wsp.Code != http.StatusForbidden {
+		t.Fatalf("spoofed CF-Connecting-IP must not bypass allowIPs by default: %d", wsp.Code)
+	}
+	// ... then with trust enabled (CF-fronted deployment).
+	trustForwardedFor = true
+	defer func() { trustForwardedFor = false }()
 	r4 := httptest.NewRequest("GET", "/", nil)
 	r4.RemoteAddr = "104.28.1.1:1" // CF edge, outside list
 	r4.Header.Set("CF-Connecting-IP", "10.9.9.9")
 	if !tp.apply(httptest.NewRecorder(), r4, nil) {
-		t.Fatal("CF-Connecting-IP not honoured")
+		t.Fatal("CF-Connecting-IP not honoured when TRUST_FORWARDED_FOR is on")
 	}
 }
 

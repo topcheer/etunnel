@@ -102,25 +102,34 @@ func parseTunnelPolicy(raw *rawPolicy) (*TunnelPolicy, error) {
 	return tp, nil
 }
 
-// clientIP resolves the visitor source IP. Behind a reverse proxy the
-// socket address is the proxy's; the standard forwarded headers are
-// honoured in order of specificity (CF-Connecting-IP, X-Real-IP, first
-// X-Forwarded-For hop). Deployments NOT behind a trusted proxy should
-// strip those headers at the edge (documented in PROTOCOL.md).
+// trustForwardedFor is set once at startup from Config.TrustForwardedFor
+// (#140): forwarded headers are attacker-controlled unless a trusted
+// reverse proxy strips and rewrites them at the edge, so they are only
+// honoured when the operator opted in. Default false: socket truth only.
+var trustForwardedFor bool
+
+// clientIP resolves the visitor source IP. When trustForwardedFor is set
+// (deployment behind a trusted reverse proxy that overwrites the standard
+// forwarded headers) they are honoured in order of specificity
+// (CF-Connecting-IP, X-Real-IP, first X-Forwarded-For hop); otherwise the
+// socket address is the only source of truth and spoofed headers are
+// ignored.
 func clientIP(r *http.Request) net.IP {
-	if v := r.Header.Get("CF-Connecting-IP"); v != "" {
-		if ip := net.ParseIP(strings.TrimSpace(v)); ip != nil {
-			return ip
+	if trustForwardedFor {
+		if v := r.Header.Get("CF-Connecting-IP"); v != "" {
+			if ip := net.ParseIP(strings.TrimSpace(v)); ip != nil {
+				return ip
+			}
 		}
-	}
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		if ip := net.ParseIP(strings.TrimSpace(v)); ip != nil {
-			return ip
+		if v := r.Header.Get("X-Real-IP"); v != "" {
+			if ip := net.ParseIP(strings.TrimSpace(v)); ip != nil {
+				return ip
+			}
 		}
-	}
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if ip := net.ParseIP(strings.TrimSpace(strings.SplitN(v, ",", 2)[0])); ip != nil {
-			return ip
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			if ip := net.ParseIP(strings.TrimSpace(strings.SplitN(v, ",", 2)[0])); ip != nil {
+				return ip
+			}
 		}
 	}
 	h, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -310,6 +319,6 @@ type replayBody struct {
 	r *bytes.Reader
 }
 
-func newReplayBody(b []byte) *replayBody { return &replayBody{bytes.NewReader(b)} }
+func newReplayBody(b []byte) *replayBody         { return &replayBody{bytes.NewReader(b)} }
 func (x *replayBody) Read(p []byte) (int, error) { return x.r.Read(p) }
-func (x *replayBody) Close() error { return nil }
+func (x *replayBody) Close() error               { return nil }

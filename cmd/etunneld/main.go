@@ -23,6 +23,7 @@ func main() {
 		httpAddr   = flag.String("http-addr", ":80", "plain HTTP listen address (redirect + ACME); empty disables")
 		adminAddr  = flag.String("admin-addr", "127.0.0.1:9090", "admin/stats listen address")
 		adminToken = flag.String("admin-token", os.Getenv("ADMIN_TOKEN"), "token required for admin endpoints (X-Admin-Token; env ADMIN_TOKEN)")
+		trustFwd   = flag.Bool("trust-forwarded-for", func() bool { v := os.Getenv("TRUST_FORWARDED_FOR"); return v == "true" || v == "1" }(), "honour forwarded headers (CF-Connecting-IP/X-Real-IP/X-Forwarded-For) for policy allowIPs - only behind a trusted proxy that rewrites them (env TRUST_FORWARDED_FOR)")
 		wsPath     = flag.String("ws-path", "/tunnel", "WebSocket endpoint path")
 
 		tlsMode   = flag.String("tls-mode", "http", "http | static | ondemand | dns")
@@ -50,6 +51,7 @@ func main() {
 		HTTPAddr:            *httpAddr,
 		AdminAddr:           *adminAddr,
 		AdminToken:          *adminToken,
+		TrustForwardedFor:   *trustFwd,
 		WSPath:              *wsPath,
 		TLS:                 server.TLSConfig{Mode: *tlsMode, CertFile: *certFile, KeyFile: *keyFile, CacheDir: *acmeDir, ACMEEmail: *acmeEmail, ACMECA: *acmeCA, DNSProvider: *dnsProv},
 		AccountsFile:        *accountsFile,
