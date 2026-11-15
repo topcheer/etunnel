@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.7.0 — 2026-11-15
+
+Multi-target routing across all SDKs; hardening.
+
+- **Multi-target local routing** (#148/#153): one public hostname, several
+  local services (path-based routing) — Go SDK first, then all 20 SDKs,
+  docs and a runnable demo.
+- Demo-gate follow-ups #149-#152 (#154) and the 302 strip-mode pitfall
+  note in every SDK README (#155/#156).
+- **Release staging guard** (#157/#158): `make verify` refuses a dirty
+  tree; release flow double-checks every manifest inside the tag before
+  pushing.
+
+## v1.7.2 — 2026-11-15
+
+- **Error-code registry** (#159): the full 11-code table lands in
+  PROTOCOL.md; the last bare errors get `et_` prefixes.
+
+## v1.7.4 — 2026-11-15
+
+Error handling and the Swift package restructure.
+
+- **SDK-local error codes** (#161): `sdk_` namespace (sdk_connect /
+  sdk_timeout / sdk_parse) — Go sentinel errors (`errors.Is`-able),
+  `err.code` on node; PROTOCOL.md documents the local-code section.
+- payments idempotency tests isolated per-process (#147).
+- **Swift Package Index restructure** (#161): library product `etunnel`
+  + executable `etunnel-cli` split — SPI compatibility matrix rebuilds
+  from this tag.
+
+## v1.7.5 — 2026-11-15
+
+- deno/typescript `err.code` parity with node (#164); stale swift example
+  CLI name fixed.
+- **Connect refactor** (#162/#165): handshake carved out; complexity 24
+  → 16, behavior byte-identical.
+- PROTOCOL.md local-code wording: node, deno and ts attach `err.code` (#166).
+
+## v1.7.6 — 2026-11-16
+
+- **Dependency upgrade** (#167): actions/setup-python v5 → v7, rust
+  `cc` 1.11.2, lockfile resync; go/npm/python/elixir already latest.
+
 ## v1.6.0 — 2026-11-11
 
 Site i18n, OAuth reliability, premium short domains & hardening follow-up.
