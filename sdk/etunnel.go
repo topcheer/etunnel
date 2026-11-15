@@ -157,27 +157,31 @@ var (
 	ErrParseWelcome = errors.New("etunnel: sdk_parse: bad welcome frame")
 )
 
-// Connect establishes a reverse tunnel and returns it once the server has
-// assigned a public hostname.
-func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
-	routes, err := normalizeRoutes(opts.Routes)
+// normalizeConnectArgs validates and normalizes the endpoint arguments:
+// routes vs single LocalAddr, bare-port sugar, server URL defaulting.
+func normalizeConnectArgs(opts Options) (routes []*compiledRoute, server, local string, err error) {
+	routes, err = normalizeRoutes(opts.Routes)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	if opts.LocalAddr == "" && routes == nil {
-		return nil, errors.New("etunnel: LocalAddr is required")
+		return nil, "", "", errors.New("etunnel: LocalAddr is required")
 	}
 	if opts.LocalAddr != "" && opts.LocalAddr[0] == ':' {
 		opts.LocalAddr = "127.0.0.1" + opts.LocalAddr
 	}
-	server := NormalizeServerURL(opts.Server)
+	server = NormalizeServerURL(opts.Server)
 	if server == "" {
 		server = DefaultServer
 	}
 	if server == "" {
-		return nil, errors.New("etunnel: Server is required")
+		return nil, "", "", errors.New("etunnel: Server is required")
 	}
+	return routes, server, opts.LocalAddr, nil
+}
 
+// dialServer opens the protocol WebSocket (ErrConnect wraps failures).
+func dialServer(ctx context.Context, server string) (*websocket.Conn, error) {
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	ws, _, err := websocket.Dial(dialCtx, server, &websocket.DialOptions{
 		Subprotocols:    []string{protocol.Subprotocol},
@@ -188,11 +192,15 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		return nil, fmt.Errorf("%w: dial %s: %w", ErrConnect, server, err)
 	}
 	ws.SetReadLimit(128 * 1024)
+	return ws, nil
+}
 
-	tctx, tcancel := context.WithCancel(ctx)
+// newTunnel assembles the Tunnel around a fresh connection; the caller
+// owns handshake (which cancels the context on failure).
+func newTunnel(ws *websocket.Conn, local string, routes []*compiledRoute, tctx context.Context, tcancel context.CancelFunc, opts Options) *Tunnel {
 	t := &Tunnel{
 		ws:        ws,
-		localAddr: opts.LocalAddr,
+		localAddr: local,
 		routes:    routes,
 		ctx:       tctx,
 		cancel:    tcancel,
@@ -211,8 +219,39 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		},
 	}
 	t.httpClient = &http.Client{Transport: t.transport}
+	return t
+}
 
-	// Handshake.
+func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
+	routes, server, local, err := normalizeConnectArgs(opts)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := dialServer(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	tctx, tcancel := context.WithCancel(ctx)
+	t := newTunnel(ws, local, routes, tctx, tcancel, opts)
+	if err := t.handshake(opts); err != nil {
+		return nil, err
+	}
+	go t.writeLoop()
+	go t.pingLoop()
+	now := time.Now().UnixNano()
+	t.lastPong.Store(now)
+	t.lastActivity.Store(now)
+	go func() {
+		t.readLoop()
+	}()
+	return t, nil
+}
+
+// handshake sends Hello and consumes the Welcome (or server ErrorMsg),
+// filling the tunnel identity fields. On failure it cancels the tunnel
+// context, closes the socket and returns the error (#162: carved out of
+// Connect; behavior byte-identical).
+func (t *Tunnel) handshake(opts Options) error {
 	hello, _ := protocol.EncodeControl(&protocol.Hello{
 		Type:      protocol.MsgHello,
 		Proto:     protocol.ProtoVersion,
@@ -222,17 +261,17 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 		Resume:    opts.resume,
 		Policy:    policyJSON(opts.Policy),
 	})
-	wctx, wcancel := context.WithTimeout(tctx, 10*time.Second)
-	err = ws.Write(wctx, websocket.MessageText, hello)
+	wctx, wcancel := context.WithTimeout(t.ctx, 10*time.Second)
+	err := t.ws.Write(wctx, websocket.MessageText, hello)
 	wcancel()
 	if err != nil {
-		tcancel()
-		_ = ws.Close(websocket.StatusProtocolError, "hello failed")
-		return nil, fmt.Errorf("etunnel: send hello: %w", err)
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusProtocolError, "hello failed")
+		return fmt.Errorf("etunnel: send hello: %w", err)
 	}
 
-	rctx, rcancel := context.WithTimeout(tctx, 15*time.Second)
-	typ, rd, err := ws.Reader(rctx)
+	rctx, rcancel := context.WithTimeout(t.ctx, 15*time.Second)
+	typ, rd, err := t.ws.Reader(rctx)
 	if err == nil && typ != websocket.MessageText {
 		err = errors.New("expected text welcome")
 	}
@@ -242,20 +281,20 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	}
 	rcancel()
 	if err != nil {
-		tcancel()
-		_ = ws.Close(websocket.StatusProtocolError, "no welcome")
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusProtocolError, "no welcome")
 		// Deadline-exceeded is the common case: surface the sentinel so
 		// callers can errors.Is(ErrWelcomeTimeout).
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w: %v", ErrWelcomeTimeout, err)
+			return fmt.Errorf("%w: %v", ErrWelcomeTimeout, err)
 		}
-		return nil, fmt.Errorf("etunnel: read welcome: %w", err)
+		return fmt.Errorf("etunnel: read welcome: %w", err)
 	}
 	msg, err := protocol.DecodeControl(b)
 	if err != nil {
-		tcancel()
-		_ = ws.Close(websocket.StatusProtocolError, "bad welcome")
-		return nil, fmt.Errorf("%w: %v", ErrParseWelcome, err)
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusProtocolError, "bad welcome")
+		return fmt.Errorf("%w: %v", ErrParseWelcome, err)
 	}
 	// Welcome.Proto gate (#14 F#5): the server rejects hello.proto != 1;
 	// the client must be symmetric - accepting any proto then decoding v2
@@ -274,9 +313,9 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	// newer protocol must be rejected - decoding v2 traffic as v1 yields
 	// silent garbage.
 	if _, isErr := msg.(*protocol.ErrorMsg); !isErr && (wel == nil || protoOf() < 0 || protoOf() > protocol.ProtoVersion) {
-		tcancel()
-		_ = ws.Close(websocket.StatusProtocolError, "unsupported proto")
-		return nil, fmt.Errorf("%w (type=%T proto=%d, want proto %d)",
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusProtocolError, "unsupported proto")
+		return fmt.Errorf("%w (type=%T proto=%d, want proto %d)",
 			ErrUnsupportedProto, msg, protoOf(), protocol.ProtoVersion)
 	}
 	switch m := msg.(type) {
@@ -290,24 +329,15 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 			t.expiresAt = time.Unix(m.ExpiresAt, 0)
 		}
 	case *protocol.ErrorMsg:
-		tcancel()
-		_ = ws.Close(websocket.StatusPolicyViolation, m.Code)
-		return nil, &APIError{Code: m.Code, Message: m.Message}
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusPolicyViolation, m.Code)
+		return &APIError{Code: m.Code, Message: m.Message}
 	default:
-		tcancel()
-		_ = ws.Close(websocket.StatusProtocolError, "unexpected message")
-		return nil, fmt.Errorf("etunnel: unexpected handshake message %T", msg)
+		t.cancel()
+		_ = t.ws.Close(websocket.StatusProtocolError, "unexpected message")
+		return fmt.Errorf("etunnel: unexpected handshake message %T", msg)
 	}
-
-	go t.writeLoop()
-	go t.pingLoop()
-	now := time.Now().UnixNano()
-	t.lastPong.Store(now)
-	t.lastActivity.Store(now)
-	go func() {
-		t.readLoop()
-	}()
-	return t, nil
+	return nil
 }
 
 // URL returns the public URL of the tunnel.
