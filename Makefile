@@ -41,6 +41,13 @@ verify: check-versions
 	# Guard the v1.6.10 failure mode: a renamed-but-unstaged rockspec.
 	@if [ -n "$$(git status --porcelain -- sdks/lua/ 2>/dev/null)" ]; then \
 		echo "verify: sdks/lua has unstaged/untracked changes (rockspec rename not committed?)"; exit 1; fi
+	# #157: v1.7.0/v1.7.1 shipped tags missing bumped manifests because the
+	# release commit staged a hand-picked subset. Nothing tracked-and-modified
+	# may be left when verify (and thereby a release) runs; untracked files
+	# (build artifacts) are fine.
+	@if [ -n "$$(git status --porcelain | grep -v '^??')" ]; then \
+		echo "verify: tracked files have staged/unstaged changes - release staging must be complete (see #157)"; \
+		git status --porcelain | grep -v '^??' | head -5; exit 1; fi
 	go build ./... && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
