@@ -8,7 +8,7 @@
 //   swift /tmp/basic.swift 3000
 //
 // In a real app, add etunnel.swift to your target and call Etunnel directly
-// (see README.md); the CLI target `swift run etunnel 3000` exposes an existing
+// (see README.md); the CLI target `swift run etunnel-cli 3000` exposes an existing
 // local service without any code changes.
 import Foundation
 
