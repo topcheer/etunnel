@@ -117,6 +117,7 @@ def bump(v):
     if errors:
         print("FAILED entries:\n  " + "\n  ".join(errors)); sys.exit(1)
     VERSION_FILE.write_text(v + "\n")
+    append_changelog(v)
     print(f"VERSION -> {v} ; all manifests verified in one pass")
 
 def check(expect=None):
@@ -153,3 +154,36 @@ if __name__ == "__main__":
         print(f"refusing to stamp {sys.argv[1]!r}: not a semantic version"); sys.exit(2)
     else:
         bump(sys.argv[1].lstrip("v"))
+
+def append_changelog(version: str) -> None:
+    """Insert a skeleton '## vX.Y.Z — date' entry so the log never goes stale (#168).
+
+    Best-effort: if CHANGELOG.md is missing or git is unavailable, bumping
+    still proceeds (releases must not block on docs); CI or the author fills
+    the body in a follow-up.
+    """
+    import datetime, re, subprocess
+    path = ROOT / "CHANGELOG.md"
+    if not path.exists():
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return
+    if f"## v{version}" in content:
+        return  # already recorded
+    try:
+        date = (
+            subprocess.run(
+                ["git", "log", "-1", "--format=%as"], cwd=ROOT,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            or datetime.date.today().isoformat()
+        )
+    except Exception:
+        date = datetime.date.today().isoformat()
+    entry = f"## v{version} — {date}\n\n- (fill in)\n\n"
+    content = re.sub(r"(# Changelog\n\n)", r"\1" + entry, content, count=1)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
