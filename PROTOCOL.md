@@ -145,8 +145,8 @@ Error codes (complete registry; every SDK surfaces them with the
 | `server_shutdown` | server draining/restarting | reconnect |
 
 Programming note: match on `code`, never on message text. Go exposes
-`*etunnel.Error{Code, Message}`; node attaches `err.code`; other SDKs
-prefix the code in the error string.
+`*etunnel.Error{Code, Message}`; node, deno and ts attach `err.code`; the
+remaining SDKs prefix the code in the error string.
 
 SDK-local failures (never sent by the server) carry `sdk_`-prefixed
 codes in the same surface, keeping the namespaces disjoint (#160):
