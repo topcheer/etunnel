@@ -108,11 +108,11 @@ export async function connect(server: string, local: string | number, opts: Opti
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.6.11', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
-    const to = setTimeout(() => rej(new Error('welcome timeout')), 15000);
+    const to = setTimeout(() => rej(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome')), 15000);
     ws.onmessage = (ev) => {
       const m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString());
       if (m.type === 'welcome') { clearTimeout(to); res(m); }
-      else if (m.type === 'error') { clearTimeout(to); rej(new Error(m.code + ': ' + (m.message || ''))); }
+      else if (m.type === 'error') { clearTimeout(to); rej(new Error(`etunnel: server rejected: ${m.code}: ${m.message || ''}`)); }
     };
   });
 

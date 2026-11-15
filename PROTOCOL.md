@@ -127,9 +127,26 @@ Server → client (failure):
 {"type":"error","code":"subdomain_taken","message":"..."}
 ```
 
-Error codes: `proto_version`, `unauthorized`, `subdomain_taken`,
-`subdomain_plan`, `subdomain_invalid`, `limit_reached`, `too_many_tunnels`,
-`bad_message`.
+Error codes (complete registry; every SDK surfaces them with the
+`etunnel: ` prefix, e.g. `etunnel: server rejected: subdomain_taken: ...`):
+
+| code | meaning | retry |
+|---|---|---|
+| `bad_message` | malformed control frame (incl. invalid hello.policy) | fix client |
+| `proto_version` | client speaks an older/newer protocol than the server | upgrade client |
+| `unauthorized` | unknown/absent API token, or account tier gone | fix token |
+| `subdomain_taken` | requested subdomain is in use | pick another / resume |
+| `subdomain_plan` | plan does not allow (more) static subdomains | upgrade |
+| `subdomain_invalid` | subdomain failed shape/reservation rules | fix name |
+| `limit_reached` | account-level concurrent tunnel limit | close one / upgrade |
+| `too_many_tunnels` | anonymous per-IP tunnel limit | auth or retry later |
+| `ttl_expired` | tunnel TTL elapsed (normal shutdown) | reconnect |
+| `ping_timeout` | heartbeat deadline missed | reconnect (resume token reclaims subdomain) |
+| `server_shutdown` | server draining/restarting | reconnect |
+
+Programming note: match on `code`, never on message text. Go exposes
+`*etunnel.Error{Code, Message}`; node attaches `err.code`; other SDKs
+prefix the code in the error string.
 
 ### 2. Request forwarding (server → client)
 
