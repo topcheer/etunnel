@@ -1,9 +1,10 @@
-// etunnel CLI entry point. Run: swift run etunnel 3000
+// etunnel CLI entry point. Run: swift run etunnel-cli 3000
 //
 // The client itself lives in etunnel.swift (a single file with no other
 // dependencies); this file only wires it to the command line.
 
 import Foundation
+import etunnel
 
 func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
 
