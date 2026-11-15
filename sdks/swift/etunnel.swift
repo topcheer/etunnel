@@ -40,7 +40,7 @@ actor StreamStore {
 }
 
 /// Multi-target local route (PROTOCOL.md §2): path prefix -> local addr.
-struct EtunnelRoute {
+public struct EtunnelRoute {
     let prefix: String
     let addr: String
     var strip: Bool = false
@@ -52,7 +52,7 @@ private func routeError(_ msg: String) -> NSError {
 
 /// Validate + compile a route table: trims trailing slashes ("/" stays),
 /// rejects duplicates and malformed prefixes, sorts longest-first.
-func etunnelNormalizeRoutes(_ routes: [EtunnelRoute]) throws -> [EtunnelRoute] {
+public func etunnelNormalizeRoutes(_ routes: [EtunnelRoute]) throws -> [EtunnelRoute] {
     var out: [EtunnelRoute] = []
     var seen = Set<String>()
     for (i, r) in routes.enumerated() {
@@ -70,7 +70,7 @@ func etunnelNormalizeRoutes(_ routes: [EtunnelRoute]) throws -> [EtunnelRoute] {
 
 /// Resolve "path?query" (segment boundaries; strip keeps the query
 /// byte-for-byte). nil when nothing matches.
-func etunnelRouteFor(_ routes: [EtunnelRoute], _ pathAndQuery: String) -> (addr: String, path: String)? {
+public func etunnelRouteFor(_ routes: [EtunnelRoute], _ pathAndQuery: String) -> (addr: String, path: String)? {
     let qi = pathAndQuery.firstIndex(of: "?")
     let path = qi.map { String(pathAndQuery[..<$0]) } ?? pathAndQuery
     let query = qi.map { String(pathAndQuery[$0...]) } ?? ""
@@ -83,7 +83,7 @@ func etunnelRouteFor(_ routes: [EtunnelRoute], _ pathAndQuery: String) -> (addr:
     return nil
 }
 
-final class Etunnel: @unchecked Sendable {
+public final class Etunnel: @unchecked Sendable {
     let task: URLSessionWebSocketTask
     let localHost: String
     let localPort: Int
@@ -94,11 +94,11 @@ final class Etunnel: @unchecked Sendable {
   private var closedFlag = false
   /// Server-signed resume token from the welcome message. Feeding it back on
   /// reconnect keeps the same subdomain instead of a fresh random one.
-  private(set) var resumeToken: String = ""
+  public private(set) var resumeToken: String = ""
 
   /// True once the receive loop is over (socket error, close or bye).
   /// The CLI supervisor polls it to decide when to reconnect.
-  var isClosed: Bool {
+  public var isClosed: Bool {
     stateLock.lock()
     defer { stateLock.unlock() }
     return closedFlag
@@ -110,7 +110,7 @@ final class Etunnel: @unchecked Sendable {
     stateLock.unlock()
   }
 
-    init?(server: String, local: String, routes rawRoutes: [EtunnelRoute]? = nil) {
+    public init?(server: String, local: String, routes rawRoutes: [EtunnelRoute]? = nil) {
         if let rs = rawRoutes {
             guard let norm = try? etunnelNormalizeRoutes(rs), !norm.isEmpty else { return nil }
             self.routes = norm
@@ -133,7 +133,7 @@ final class Etunnel: @unchecked Sendable {
         self.task = session.webSocketTask(with: u, protocols: ["etunnel-v1"])
     }
 
-    func connect(token: String? = nil, subdomain: String? = nil, resume: String? = nil) async throws -> String {
+    public func connect(token: String? = nil, subdomain: String? = nil, resume: String? = nil) async throws -> String {
         task.resume()
         var hello: [String: Any] = ["type": "hello", "proto": 1, "client": "etunnel-swift/1.0"]
         if let t = token { hello["token"] = t }
@@ -338,7 +338,7 @@ final class Etunnel: @unchecked Sendable {
         """
     }
 
-    func close() {
+    public func close() {
         Task { try? await task.send(.string("{\"type\":\"bye\",\"reason\":\"client closed\"}")) }
         task.cancel(with: .normalClosure, reason: nil)
         // a fresh URLSession per connection was never invalidated: a long

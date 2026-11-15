@@ -85,7 +85,7 @@ npx @easytunnel/et-sdk 3000
 ```
 
 Every SDK's file is also a runnable CLI: `etunnel 3000` (Go), `python -m etunnel 3000`,
-`dotnet run Etunnel.cs 3000`, `swift run etunnel 3000`, `php etunnel.php 3000`.
+`dotnet run Etunnel.cs 3000`, `swift run etunnel-cli 3000`, `php etunnel.php 3000`.
 Each package README lists its own.
 
 Several local services under ONE hostname (SPA prod-bundle shape, no

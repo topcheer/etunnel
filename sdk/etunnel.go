@@ -142,6 +142,21 @@ func NormalizeServerURL(s string) string {
 // supervisor treats it as permanent.
 var ErrUnsupportedProto = errors.New("etunnel: server protocol too new")
 
+// SDK-local error sentinels (#160): the server error registry in
+// PROTOCOL.md carries machine-readable codes; local failures get the
+// same programmability via errors.Is. The sdk_ naming keeps them out of
+// the server code namespace (proto_version, unauthorized, ...).
+var (
+	// ErrWelcomeTimeout: the socket opened but no welcome arrived in 15s
+	// (server hung, wrong endpoint, silent proxy timeout).
+	ErrWelcomeTimeout = errors.New("etunnel: sdk_timeout: no welcome within 15s")
+	// ErrConnect: the WebSocket dial itself failed (DNS, TLS, refused).
+	// The underlying net error stays wrapped for %w chains.
+	ErrConnect = errors.New("etunnel: sdk_connect: dial failed")
+	// ErrParseWelcome: the welcome frame did not decode as valid protocol.
+	ErrParseWelcome = errors.New("etunnel: sdk_parse: bad welcome frame")
+)
+
 // Connect establishes a reverse tunnel and returns it once the server has
 // assigned a public hostname.
 func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
@@ -170,7 +185,7 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	})
 	dialCancel()
 	if err != nil {
-		return nil, fmt.Errorf("etunnel: dial %s: %w", server, err)
+		return nil, fmt.Errorf("%w: dial %s: %w", ErrConnect, server, err)
 	}
 	ws.SetReadLimit(128 * 1024)
 
@@ -229,13 +244,18 @@ func Connect(ctx context.Context, opts Options) (*Tunnel, error) {
 	if err != nil {
 		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "no welcome")
+		// Deadline-exceeded is the common case: surface the sentinel so
+		// callers can errors.Is(ErrWelcomeTimeout).
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w: %v", ErrWelcomeTimeout, err)
+		}
 		return nil, fmt.Errorf("etunnel: read welcome: %w", err)
 	}
 	msg, err := protocol.DecodeControl(b)
 	if err != nil {
 		tcancel()
 		_ = ws.Close(websocket.StatusProtocolError, "bad welcome")
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrParseWelcome, err)
 	}
 	// Welcome.Proto gate (#14 F#5): the server rejects hello.proto != 1;
 	// the client must be symmetric - accepting any proto then decoding v2
