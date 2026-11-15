@@ -644,6 +644,16 @@ const paymentEventWindow = 7 * 24 * time.Hour
 // paymentEventSeen marks id as processed and reports whether it was already
 // seen. An empty id (provider sent none) never dedupes - behaviour then
 // matches the pre-#39 code exactly.
+// resetPaymentEventDedup clears the process-level dedup table. Test-only:
+// the table is deliberately process-global in production (#39 replay
+// guard); tests that run twice in one process (-count=2, #147) reset it
+// so the "first" delivery of the second run is a real first.
+func resetPaymentEventDedup() {
+	paymentEventsMu.Lock()
+	paymentEvents = map[string]time.Time{}
+	paymentEventsMu.Unlock()
+}
+
 func paymentEventSeen(id string) bool {
 	if id == "" {
 		return false

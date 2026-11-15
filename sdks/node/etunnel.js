@@ -51,7 +51,7 @@ async function connect(server, local, opts = {}) {
       if (err && (err.code || err.errno)) parts.push(`(${err.code || err.errno})`);
       if (err && err.message) parts.push(err.message);
       try { const u = new URL(server); parts.push(`\n  hints: DNS/proxy/firewall blocking ${u.host}? Try: curl -sI ${u.protocol}//${u.host}/`); } catch {}
-      rej(new Error(parts.join(' ')));
+      rej(Object.assign(new Error(parts.join(' ')), { code: 'sdk_connect' }));
     };
     ws.onerror = diag;
     ws.onclose = (ev) => { if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } }); };
@@ -60,7 +60,7 @@ async function connect(server, local, opts = {}) {
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.6.12', resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
-    const to = setTimeout(() => rej(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome')), 15000);
+    const to = setTimeout(() => rej(Object.assign(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome'), { code: 'sdk_timeout' })), 15000);
     ws.onmessage = (ev) => {
       const m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString());
       if (m.type === 'welcome') { clearTimeout(to); res(m); }

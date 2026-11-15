@@ -148,6 +148,14 @@ Programming note: match on `code`, never on message text. Go exposes
 `*etunnel.Error{Code, Message}`; node attaches `err.code`; other SDKs
 prefix the code in the error string.
 
+SDK-local failures (never sent by the server) carry `sdk_`-prefixed
+codes in the same surface, keeping the namespaces disjoint (#160):
+`sdk_connect` (dial failed - node also exposes the OS errno in the
+message text), `sdk_timeout` (socket open, no welcome within 15s),
+`sdk_parse` (undecodable welcome frame). Go equivalents are the
+sentinel errors `ErrConnect`, `ErrWelcomeTimeout`, `ErrParseWelcome`
+(`errors.Is`).
+
 ### 2. Request forwarding (server → client)
 
 When a visitor hits `https://<sub>.<domain>/path`, the server opens a stream

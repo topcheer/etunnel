@@ -179,6 +179,8 @@ func TestPayPalOrderMetaCaptureVsGetShapes(t *testing.T) {
 }
 
 func TestNowPaymentsIPNVerification(t *testing.T) {
+	t.Cleanup(resetPaymentEventDedup)
+	resetPaymentEventDedup()
 	s := newBillingTestServer(t)
 	s.billing.NowPaymentsIPNSecret = "ipnsecret"
 	ev := map[string]any{"order_id": "u@x.com:starter", "payment_status": "finished"}

@@ -39,6 +39,8 @@ func postStripeWebhook(t *testing.T, s *Server, secret, body string) *httptest.R
 }
 
 func TestStripeWebhookReplayIsIdempotent(t *testing.T) {
+	t.Cleanup(resetPaymentEventDedup)
+	resetPaymentEventDedup()
 	s := newBillingTestServer(t)
 	s.billing.StripeWebhookSecret = "whsec_test"
 	body := `{"id":"evt_replay_probe_1","type":"checkout.session.completed",` +
@@ -75,6 +77,8 @@ func TestStripeWebhookReplayIsIdempotent(t *testing.T) {
 }
 
 func TestNowPaymentsIPNReplayIsIdempotent(t *testing.T) {
+	t.Cleanup(resetPaymentEventDedup)
+	resetPaymentEventDedup()
 	s := newBillingTestServer(t)
 	s.billing.NowPaymentsIPNSecret = "ipnsecret"
 	post := func(paymentID string) *httptest.ResponseRecorder {
