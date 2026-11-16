@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.11 — 2026-11-17
+
+- gap docs narrowing (#178); deps upgrade puddle patch + rust lock sync (#179)
+
 ## v1.7.10 — 2026-11-16
 
 - cmd: drop the blind ready log line; CLI version now injected via ldflags at build (#175)
