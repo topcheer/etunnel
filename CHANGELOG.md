@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.9 — 2026-11-16
+
+- rubygems CI oracle fix (#172); systemd template unit parameterization + hardening (#174)
+
 ## v1.7.8 — 2026-11-16
 
 - helm chart: pod securityContext hardening defaults (#171)
