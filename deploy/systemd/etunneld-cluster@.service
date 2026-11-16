@@ -15,21 +15,33 @@ Environment=ETUNNEL_CLUSTER=mesh
 Environment=ETUNNEL_NODE_ID=etunneld-%i
 Environment=ETUNNEL_ADVERTISE=127.0.0.1:2044%i
 Environment=ETUNNEL_JOIN=127.0.0.1:20541
+# Site-specific values (ETUNNEL_DOMAIN, ETUNNEL_ALIAS_DOMAIN,
+# ETUNNEL_DNS_PROVIDER, ETUNNEL_ACME_EMAIL, ETUNNEL_ACME_CA) come from
+# cluster.env above so this template stays generic and reusable (#173).
 ExecStart=/opt/etunnel/etunneld \
-  --domain t2.etun.uk \
-  --alias-domain t.etun.uk \
+  --domain ${ETUNNEL_DOMAIN} \
+  --alias-domain ${ETUNNEL_ALIAS_DOMAIN} \
   --addr 127.0.0.1:2044%i \
   --http-addr 127.0.0.1:2045%i \
   --admin-addr 127.0.0.1:2046%i \
   --tls-mode dns \
-  --dns-provider cloudflare \
+  --dns-provider ${ETUNNEL_DNS_PROVIDER} \
   --acme-dir /var/lib/etunnel/acme \
-  --acme-email gg@liop.dev \
-  --acme-ca prod \
+  --acme-email ${ETUNNEL_ACME_EMAIL} \
+  --acme-ca ${ETUNNEL_ACME_CA} \
   --accounts /var/lib/etunnel/accounts-%i.json \
   --max-tunnels-per-ip 5
 Restart=always
 RestartSec=3
+
+# Hardening baseline (mirrors the helm securityContext defaults, #170):
+# etunneld only writes its own state dir; everything else is read-only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/etunnel
+PrivateTmp=yes
+ProtectHome=yes
+RestrictSUIDSGID=yes
 
 [Install]
 WantedBy=multi-user.target
