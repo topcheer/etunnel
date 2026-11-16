@@ -15,6 +15,10 @@ import (
 	etunnel "github.com/topcheer/etunnel/sdk"
 )
 
+// version is injected at build time (-ldflags "-X main.version=$(cat VERSION)");
+// "dev" marks a plain `go build` without the release pipeline.
+var version = "dev"
+
 func main() {
 	var (
 		server    = flag.String("server", os.Getenv("ETUNNEL_SERVER"), "tunnel server, e.g. wss://t.example.com/tunnel")
@@ -72,7 +76,7 @@ func main() {
 		Routes:    routeOpts,
 		Subdomain: *subdomain,
 		Token:     *token,
-		Client:    "etunnel-cli/1.0",
+		Client:    "etunnel-cli/" + version,
 		OnLog: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "etunnel: "+format+"\n", args...)
 		},

@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/topcheer/etunnel/server"
 )
@@ -88,12 +87,6 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		log.Printf("etunneld ready: domain=%s addr=%s http=%s admin=%s tls=%s",
-			*domain, *addr, *httpAddr, *adminAddr, *tlsMode)
-	}()
 
 	if err := srv.Run(ctx); err != nil {
 		log.Fatalf("run: %v", err)
