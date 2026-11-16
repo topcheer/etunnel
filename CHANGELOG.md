@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.10 — 2026-11-16
+
+- cmd: drop the blind ready log line; CLI version now injected via ldflags at build (#175)
+
 ## v1.7.9 — 2026-11-16
 
 - rubygems CI oracle fix (#172); systemd template unit parameterization + hardening (#174)
