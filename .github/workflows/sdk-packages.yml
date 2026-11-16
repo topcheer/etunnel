@@ -265,8 +265,14 @@ jobs:
         uses: rubygems/release-gem@v1
         with:
           working-directory: sdks/ruby
+        # v1.7.8: rake release's embedded rubygems-await 0.5.4 crashed with
+        # NoMethodError (upstream bug vs RubyGems 3.3.13) AFTER gem push
+        # succeeded - a false negative that failed the whole release. The
+        # push is real; the verdict comes from the verify step below, which
+        # fails the job iff the version is genuinely not on rubygems.org.
+        continue-on-error: true
       - name: Verify version landed on rubygems
-        if: steps.gate.outputs.published != 'true'
+        if: always() && steps.gate.outputs.published != 'true'
         run: |
           V=$(ruby -e "print Gem::Specification.load('sdks/ruby/etunnel.gemspec').version")
           for i in $(seq 1 20); do
