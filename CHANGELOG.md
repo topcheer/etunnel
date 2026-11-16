@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.8 — 2026-11-16
+
+- helm chart: pod securityContext hardening defaults (#171)
+- release tooling: CHANGELOG gap-fill + bump auto-append (#169); bump wiring-order fix + burned v1.7.7 (broken staging, per double-skip protocol)
+
 ## v1.7.0 — 2026-11-15
 
 Multi-target routing across all SDKs; hardening.
