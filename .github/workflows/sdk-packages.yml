@@ -140,7 +140,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install kotlin scala clojure libwebsockets json-c
       - name: Verify core
-        run: go build ./... && go vet ./... && test -z "$(gofmt -l . 2>/dev/null)" && go test -count=1 ./...
+        run: go build ./... && go vet ./... && test -z "$(gofmt -l . 2>/dev/null | grep -v "^\.ggcode/")" && go test -count=1 ./...
         env:
           ET_PG_TEST_DSN: postgres://etunnel:etunnel-ci@localhost:5432/etunnel?sslmode=disable
           ET_REDIS_TEST_URL: redis://localhost:6379/15

@@ -48,7 +48,7 @@ verify: check-versions
 	@if [ -n "$$(git status --porcelain | grep -v '^??')" ]; then \
 		echo "verify: tracked files have staged/unstaged changes - release staging must be complete (see #157)"; \
 		git status --porcelain | grep -v '^??' | head -5; exit 1; fi
-	go build ./... && go vet ./... && test -z "$$(gofmt -l . 2>/dev/null)" && go test -count=1 ./... > /dev/null && echo "go: ok"
+	go build ./... && go vet ./... && test -z "$$(gofmt -l . 2>/dev/null | grep -v "^\.ggcode/")" && go test -count=1 ./... > /dev/null && echo "go: ok"
 	cd $(Sdks)/node && node --check etunnel.js && echo "node: ok"
 	cd $(Sdks)/python && python3 -m py_compile etunnel.py && echo "python: ok"
 	cd $(Sdks)/java && javac --release 11 -d /tmp/et-verify-java src/main/java/dev/ggcode/Etunnel.java && echo "java: ok"
