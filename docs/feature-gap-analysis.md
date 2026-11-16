@@ -1,7 +1,7 @@
 # Feature Gap Analysis — 极简集成 tunnel 平台还缺什么
 
 日期：2026-11-13 ｜ 方法：六家竞品 web 调研矩阵 × 本仓协议/入口/CLI 实证 × 极简定位过滤
-仓库实证已于 v1.6.12 发版后复核（2026-11-13）确认仍成立。
+仓库实证已于 v1.6.12 发版后复核（2026-11-13）确认仍成立。（时效：v1.7.x 增量未并入本次分析，缺口③ 论断已按 v1.7.0 多目标路由收窄。）
 （竞品：ngrok、Cloudflare Tunnel、localhost.run、localtunnel、boringproxy、zrok）
 
 ## 现状盘点（已有的，比多数竞品强）
@@ -18,7 +18,7 @@
 |---|---|---|---|
 | ① | 隧道层 basic auth / IP allowlist | ngrok、zrok、Cloudflare Access（boringproxy 无内建证据，不计入） | grep 全 server/ 无隧道层 auth（仅支付 provider 出站用） |
 | ② | raw TCP 隧道（SSH/DB） | **公开可用口径 ≈ 3/6**：ngrok、zrok（配对式）、localhost.run（付费 Pro）；Cloudflare 公网 TCP 走 Spectrum 企业档，boringproxy 仅 HTTPS 端口上 SNI 分流的 TLS 流（issue #36 时代任意端口 TCP 长期缺），localtunnel 无 | 协议帧已是纯字节流复用（DATA/FIN/RST），缺的只是入口 TCP 监听层——底座现成 |
-| ③ | config 文件 / 多隧道声明 | ngrok.yml、cloudflared config.yml 标配 | CLI 仅 flags+env，一进程一隧道 |
+| ③ | config 文件 / 多隧道声明 | ngrok.yml、cloudflared config.yml 标配 | v1.7.0 起单进程多目标路由（-route PREFIX=ADDR 可重复）已支持；仍缺 config 文件载体（仅 flags+env） |
 | ④ | 自有域名绑定（CNAME+代管证书） | ngrok/zrok/localhost.run/boringproxy（4/6，多在付费档） | 仅子域+短域 |
 | ⑤ | 请求检查/回放 | 仅 ngrok（Inspector，护城河级） | 无 |
 
