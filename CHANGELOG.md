@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.12 — 2026-11-17
+
+- ci: vet + gofmt mechanical gates wired into make verify / tag build (#181)
+- swift: scope xdg-open Process.run to os(Linux) for iOS portability (#182)
+
 ## v1.7.11 — 2026-11-17
 
 - gap docs narrowing (#178); deps upgrade puddle patch + rust lock sync (#179)
