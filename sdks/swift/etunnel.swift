@@ -411,8 +411,7 @@ public func etunnelLogin(_ server: String, openBrowser: ((String) -> Void)? = ni
         #endif
     }
     if !opened {
-        #if os(macOS)
-        #else
+        #if os(Linux)
         _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/xdg-open"), arguments: [authUrl])
         #endif
         FileHandle.standardError.write("etunnel: authorize in your browser: \(authUrl)\n".data(using: .utf8)!)
