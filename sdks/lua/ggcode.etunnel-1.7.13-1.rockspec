@@ -1,5 +1,5 @@
 package = "ggcode.etunnel"
-version = "1.7.12-1"
+version = "1.7.13-1"
 source = {
   url = "git+https://github.com/topcheer/etunnel",
   tag = "v1.4.0"

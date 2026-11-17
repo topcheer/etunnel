@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.13 — 2026-11-18
+
+- deps upgrade: x/net 0.63 + zeroize 1.9.2 (#184)
+
 ## v1.7.12 — 2026-11-17
 
 - ci: vet + gofmt mechanical gates wired into make verify / tag build (#181)
