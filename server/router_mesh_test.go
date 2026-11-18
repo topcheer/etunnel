@@ -4,6 +4,7 @@ package server
 // subdomain, and the non-owner forwards an HTTP exchange to the owner.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,6 +26,8 @@ func freePort(t *testing.T) int {
 
 func newTestMesh(t *testing.T, name string) (*meshRouter, int) {
 	t.Helper()
+	// #186: mesh gossip is fail-closed on a shared secret; tests share one.
+	t.Setenv("ETUNNEL_MESH_SECRET", "test-shared-key")
 	port := freePort(t)
 	// memberlist binds both its gossip port and a TCP probe port; use the
 	// same number for simplicity of advertise and a second free port for
@@ -101,6 +104,7 @@ func TestMeshOwnershipGossipAndForward(t *testing.T) {
 // #120: Close must release the claim-broadcast goroutine (stopCh closed,
 // Once-guarded) and a second Close must not panic.
 func TestMeshCloseStopsClaimBroadcast(t *testing.T) {
+	t.Setenv("ETUNNEL_MESH_SECRET", "test-shared-key")
 	r, err := newMeshRouter(fmt.Sprintf("127.0.0.1:%d", freePort(t)), "", "close-test")
 	if err != nil {
 		t.Fatalf("mesh: %v", err)
@@ -115,5 +119,61 @@ func TestMeshCloseStopsClaimBroadcast(t *testing.T) {
 	}
 	if err := r.Close(); err != nil { // second Close: sync.Once must absorb it
 		t.Fatalf("second close panicked or failed: %v", err)
+	}
+}
+
+// #186: without a shared secret the mesh must refuse to start (gossip
+// decides where visitor traffic - cookies included - is forwarded).
+func TestMeshRouterRequiresSharedSecret(t *testing.T) {
+	t.Setenv("ETUNNEL_MESH_SECRET", "")
+	if _, err := newMeshRouter(fmt.Sprintf("127.0.0.1:%d", freePort(t)), "", "nokey"); err == nil {
+		t.Fatal("expected fail-closed error without ETUNNEL_MESH_SECRET")
+	}
+}
+
+// #186: a gossip event whose From address maps to no known member must be
+// dropped before it can touch the owner map; one from a member address is
+// still accepted.
+func TestMeshDropsEventsFromUnknownPeer(t *testing.T) {
+	t.Setenv("ETUNNEL_MESH_SECRET", "test-shared-key")
+	r, err := newMeshRouter(fmt.Sprintf("127.0.0.1:%d", freePort(t)), "", "lonely")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	// 203.0.113.x is TEST-NET-3: a literal IP (resolves offline) that matches
+	// no memberlist member.
+	spoofed, _ := json.Marshal(meshEvent{Kind: "claim", From: "203.0.113.7:8080", Subs: []string{"spoofed-1"}})
+	r.handleMsg(spoofed)
+	if got := r.Lookup("spoofed-1"); got != "" {
+		t.Fatalf("spoofed claim accepted: owner=%q", got)
+	}
+	// A loopback advertise address matches the member IP and is accepted.
+	legit, _ := json.Marshal(meshEvent{Kind: "claim", From: "127.0.0.1:9999", Subs: []string{"legit-1"}})
+	r.handleMsg(legit)
+	if got := r.Lookup("legit-1"); got == "" {
+		t.Fatal("claim from known peer address was dropped")
+	}
+}
+
+// #186: the owner map is bounded; a claim flood cannot grow it without limit.
+func TestMeshOwnerMapBounded(t *testing.T) {
+	t.Setenv("ETUNNEL_MESH_SECRET", "test-shared-key")
+	r, err := newMeshRouter(fmt.Sprintf("127.0.0.1:%d", freePort(t)), "", "cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	subs := make([]string, meshMaxOwnerEntries+50)
+	for i := range subs {
+		subs[i] = fmt.Sprintf("s-%d", i)
+	}
+	b, _ := json.Marshal(meshEvent{Kind: "claim", From: "127.0.0.1:9999", Subs: subs})
+	r.handleMsg(b)
+	r.mu.RLock()
+	n := len(r.owner)
+	r.mu.RUnlock()
+	if n > meshMaxOwnerEntries {
+		t.Fatalf("owner map exceeded cap: %d > %d", n, meshMaxOwnerEntries)
 	}
 }

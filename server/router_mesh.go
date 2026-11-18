@@ -17,7 +17,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -30,6 +32,11 @@ import (
 
 	"github.com/hashicorp/memberlist"
 )
+
+// meshMaxOwnerEntries bounds the owner map (#186): gossip events are
+// application-level data, so even an authenticated cluster member could flood
+// claims; a runaway owner map must not grow without limit.
+const meshMaxOwnerEntries = 1 << 16
 
 type meshRouter struct {
 	self   string // our advertise address
@@ -45,6 +52,13 @@ type meshRouter struct {
 	mu    sync.RWMutex
 	owner map[string]string // subdomain -> advertise addr ("" = us)
 	ours  map[string]bool   // subdomains we hold
+
+	// peerIPs caches resolved advertise hosts for knownPeer (#186): every
+	// gossip event's From must map to an address the memberlist actually
+	// knows before it may touch the owner map.
+	peerMu     sync.Mutex
+	peerIPs    map[string][]net.IP
+	peerIPsTTL map[string]time.Time
 }
 
 // meshEvent is the gossip payload.
@@ -56,13 +70,30 @@ type meshEvent struct {
 
 func newMeshRouter(advertise, join, nodeID string) (*meshRouter, error) {
 	r := &meshRouter{
-		self:   advertise,
-		hc:     &http.Client{Timeout: 30 * time.Second},
-		fwdHdr: "X-Etunnel-Forward",
-		owner:  map[string]string{},
-		ours:   map[string]bool{},
+		self:       advertise,
+		hc:         &http.Client{Timeout: 30 * time.Second},
+		fwdHdr:     "X-Etunnel-Forward",
+		owner:      map[string]string{},
+		ours:       map[string]bool{},
+		peerIPs:    map[string][]net.IP{},
+		peerIPsTTL: map[string]time.Time{},
+	}
+	// #186: mesh gossip decides where visitor traffic (cookies and
+	// Authorization headers included) is forwarded, so it is fail-closed on
+	// a shared secret - without it any reachable node can impersonate an
+	// owner and hijack tunnels. The secret is hashed to 32 bytes because
+	// memberlist keyrings only accept AES key sizes.
+	secret := os.Getenv("ETUNNEL_MESH_SECRET")
+	if secret == "" {
+		return nil, errors.New("etunnel: ETUNNEL_CLUSTER=mesh requires ETUNNEL_MESH_SECRET (shared cluster key; gossip would be unauthenticated without it)")
+	}
+	key := sha256.Sum256([]byte(secret))
+	kr, kerr := memberlist.NewKeyring([][]byte{key[:]}, key[:])
+	if kerr != nil {
+		return nil, fmt.Errorf("etunnel: mesh keyring: %w", kerr)
 	}
 	cfg := memberlist.DefaultLANConfig()
+	cfg.Keyring = kr
 	cfg.Name = nodeID
 	_, port, _ := net.SplitHostPort(advertise)
 	var p int
@@ -121,7 +152,10 @@ func newMeshRouter(advertise, join, nodeID string) (*meshRouter, error) {
 		}
 		if joined == 0 {
 			// Start anyway as a lone node; peers will find us via the
-			// probe/anti-entropy path once they come up.
+			// probe/anti-entropy path once they come up. Release the
+			// claim-refresh goroutine first (#191): it started above and
+			// would otherwise spin forever against the shut-down memberlist.
+			r.stopOnce.Do(func() { close(r.stopCh) })
 			ml.Shutdown()
 			return nil, fmt.Errorf("etunnel: memberlist join %v: no peer reachable", seeds)
 		}
@@ -182,11 +216,22 @@ func (r *meshRouter) handleMsg(b []byte) {
 	if json.Unmarshal(b, &ev) != nil {
 		return
 	}
+	// #186: an event may only rewrite ownership if its From address maps to
+	// a member this memberlist actually knows; drops spoofed senders before
+	// they can influence where visitor traffic is forwarded.
+	if !r.knownPeer(ev.From) {
+		logfMesh("dropping %s event from unknown peer %q", ev.Kind, ev.From)
+		return
+	}
 	switch ev.Kind {
 	case "claim":
 		r.mu.Lock()
 		for _, s := range ev.Subs {
 			if !r.ours[s] { // we do not own it: record the peer
+				if len(r.owner) >= meshMaxOwnerEntries {
+					logfMesh("owner map at capacity (%d); dropping claim for %s from %s", meshMaxOwnerEntries, s, ev.From)
+					break
+				}
 				r.owner[s] = ev.From
 			}
 			// If we DO own it, this is a genuine conflict (both instances
@@ -209,6 +254,10 @@ func (r *meshRouter) handleMsg(b []byte) {
 		r.mu.Lock()
 		for _, s := range ev.Subs {
 			if !r.ours[s] {
+				if len(r.owner) >= meshMaxOwnerEntries {
+					logfMesh("owner map at capacity (%d); dropping snapshot claim for %s from %s", meshMaxOwnerEntries, s, ev.From)
+					break
+				}
 				r.owner[s] = ev.From
 			}
 		}
@@ -345,6 +394,45 @@ var _ = bytes.MinRead
 func hostOf(hostPort string) string {
 	h, _, _ := net.SplitHostPort(hostPort)
 	return h
+}
+
+// knownPeer reports whether a gossip event's From address belongs to a node
+// the memberlist actually knows (#186). The shared keyring already keeps
+// outsiders out; this is defense-in-depth against a compromised member
+// claiming ownership for an address it does not run (which would redirect
+// visitor traffic to it). Host resolution is cached for 30s per host so the
+// gossip hot path stays free of repeated DNS lookups.
+func (r *meshRouter) knownPeer(from string) bool {
+	if from == "" || from == r.self {
+		return false
+	}
+	host := hostOf(from)
+	if host == "" {
+		return false
+	}
+	r.peerMu.Lock()
+	ips, ok := r.peerIPs[host]
+	if !ok || time.Since(r.peerIPsTTL[host]) > 30*time.Second {
+		if resolved, rerr := net.LookupIP(host); rerr == nil {
+			ips = resolved
+		} else {
+			ips = nil // resolution failure: treat as unknown peer
+		}
+		r.peerIPs[host] = ips
+		r.peerIPsTTL[host] = time.Now()
+	}
+	r.peerMu.Unlock()
+	if len(ips) == 0 {
+		return false
+	}
+	for _, n := range r.ml.Members() {
+		for _, ip := range ips {
+			if n.Addr != nil && ip.Equal(n.Addr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // logfMesh logs through the standard logger (visible in docker logs).
