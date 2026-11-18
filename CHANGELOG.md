@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.17 — 2026-11-19
+
+- deps upgrade: go-webauthn/x 0.4.1, tungstenite 0.30, gh-actions-lua v13 (#211)
+
 ## v1.7.16 — 2026-11-18
 
 - audit batch: 19 review fixes (mesh gossip auth #186 - BREAKING: mesh deployments must set ETUNNEL_MESH_SECRET; webhook header stripping #187; HEAD stream leak #188; payment webhook 5xx #198; PG upsert logging #199; short subdomain claim #197; strict tiers parsing #196; return_to validation #189; bounded register body #193)
