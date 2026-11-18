@@ -301,21 +301,30 @@ func (s *pgAccountStore) Snapshot(key string) (Account, bool) {
 
 // Mutate applies fn under the lock and persists the result.
 func (s *pgAccountStore) Mutate(email string, fn func(*Account)) bool {
+	found, _ := s.mutate(email, fn)
+	return found
+}
+
+// mutate mirrors the JSON store: it reports whether the account existed and
+// whether the write-through reached Postgres.
+//
+// #199 logged the swallowed upsert error; #218 showed why logging is not enough
+// on the payment path — the caller told the provider 200 while the tier lived
+// only in memory, and the next loadAll poll overwrote it.
+func (s *pgAccountStore) mutate(email string, fn func(*Account)) (bool, error) {
 	s.mu.Lock()
 	a, ok := s.byMail[email]
 	if !ok {
 		s.mu.Unlock()
-		return false
+		return false, nil
 	}
 	fn(a)
 	s.mu.Unlock()
-	// #199: a swallowed upsert error let the 5s loadAll poll overwrite the
-	// in-memory state, silently losing paid tiers and domains; log it so
-	// operations can see the write-through break.
 	if err := s.upsert(context.Background(), a); err != nil {
 		log.Printf("accounts: pg upsert %s failed (state may be lost on next poll): %v", a.Email, err)
+		return true, err
 	}
-	return true
+	return true, nil
 }
 
 // TryClaimDomain mirrors the JSON store's atomic claim (#101): uniqueness

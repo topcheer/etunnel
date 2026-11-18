@@ -455,15 +455,23 @@ func (s *Server) activate(email, tier string) (string, error) {
 	expires := time.Now().Add(subscriptionPeriod)
 	if acct, ok := s.accounts.LookupEmail(email); ok {
 		// renewal/upgrade, key unchanged — write the tier under the store
-		// mutex (#4: no lock-free writes to the shared *Account). Both store
-		// implementations persist inside Mutate; the JSON store additionally
-		// needed the explicit save, which lives behind the jsonSaver cut.
-		s.accounts.Mutate(email, func(a *Account) {
+		// mutex (#4: no lock-free writes to the shared *Account).
+		//
+		// #218: the persistence error must reach the caller. Both store
+		// implementations persist inside mutate, so a failure here means the
+		// entitlement exists only in memory: answering 200 would tell the
+		// provider "done" and stop it retrying, and the customer would lose the
+		// tier on the next restart. The old code additionally called
+		// saveLockedSafe() and discarded its error — a second, pointless write.
+		found, perr := s.accounts.mutate(email, func(a *Account) {
 			a.Tier = tier
 			a.ExpiresAt = expires // every successful payment renews the period
 		})
-		if js, ok := s.accounts.(jsonSaver); ok {
-			_ = js.saveLockedSafe()
+		if !found {
+			return "", fmt.Errorf("account %q vanished during activation", email)
+		}
+		if perr != nil {
+			return "", fmt.Errorf("persist tier for %q: %w", email, perr)
 		}
 		s.notifyPayment(email, tier)
 		return acct.APIKey, nil
@@ -472,7 +480,11 @@ func (s *Server) activate(email, tier string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.accounts.Mutate(email, func(a *Account) { a.ExpiresAt = expires })
+	// Same reasoning as above: a lost write here means a paid account that
+	// forgets its expiry on restart.
+	if _, perr := s.accounts.mutate(email, func(a *Account) { a.ExpiresAt = expires }); perr != nil {
+		return "", fmt.Errorf("persist expiry for %q: %w", email, perr)
+	}
 	s.notifyPayment(email, tier)
 	return acct.APIKey, nil
 }
@@ -501,9 +513,10 @@ func (s *Server) activateShortDomain(email, product string) (string, error) {
 			return "", err
 		}
 	}
-	s.accounts.Mutate(email, func(a *Account) { a.PaidShort = &ShortDomain{Len: n, ExpiresAt: expires} })
-	if js, ok := s.accounts.(jsonSaver); ok {
-		_ = js.saveLockedSafe()
+	if _, perr := s.accounts.mutate(email, func(a *Account) {
+		a.PaidShort = &ShortDomain{Len: n, ExpiresAt: expires}
+	}); perr != nil {
+		return "", fmt.Errorf("persist short domain for %q: %w", email, perr)
 	}
 	s.notifyPayment(email, product)
 	return acct.APIKey, nil
@@ -1002,16 +1015,6 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-// jsonSaver is the extra surface only the JSON-file store needs.
-type jsonSaver interface{ saveLockedSafe() error }
-
-// saveLockedSafe persists the store from an HTTP handler context.
-func (s *AccountStore) saveLockedSafe() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.saveLocked()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
