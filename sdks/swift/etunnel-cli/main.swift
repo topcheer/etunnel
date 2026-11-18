@@ -1,7 +1,11 @@
 // etunnel CLI entry point. Run: swift run etunnel-cli 3000
 //
-// The client itself lives in etunnel.swift (a single file with no other
-// dependencies); this file only wires it to the command line.
+// The client itself lives in etunnel.swift; the supervisor lives in
+// Reconnect.swift. This file only wires them to the command line.
+//
+// Until #183 the retry loop was hand-written here - exactly the burden the SDK
+// should carry. It now uses ReconnectingEtunnel, so the CLI and any app share
+// one supervisor (and one set of reconnect semantics with the Go SDK).
 
 import Foundation
 import etunnel
@@ -41,51 +45,53 @@ for sig in [SIGINT, SIGTERM] {
     signalSources.append(src)
 }
 
-/// 500ms, 1s, 2s, ... capped at 30s, then ±20% jitter.
-func backoffMs(_ attempt: Int) -> UInt64 {
-    let base = min(30_000.0, 500.0 * pow(2.0, Double(min(attempt, 6))))
-    return UInt64((base * Double.random(in: 0.8...1.2)).rounded())
+guard let tunnel = ReconnectingEtunnel(server: server, local: local) else {
+    log("etunnel: invalid server URL: \(server)")
+    exit(2)
 }
 
-var attempt = 0
-// Carried across drops so a reconnect reclaims the same subdomain.
-var resume: String? = nil
-while !stop.isStopped {
-    guard let et = Etunnel(server: server, local: local) else {
-        log("etunnel: invalid server URL: \(server)")
-        exit(2)
-    }
-    do {
-        let url = try await et.connect(
-            token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
-            subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"],
-            resume: resume)
+// Log every transition: operators watch stderr, and the shell E2E asserts on it.
+tunnel.onState = { state in
+    switch state {
+    case .connecting:
+        break // the initial dial logs its own URL below
+    case .connected(let url):
         log("TUNNEL_URL: \(url)")
-        if !et.resumeToken.isEmpty { resume = et.resumeToken }
-        attempt = 0
-        if !reconnect {
-            // one-shot must still observe the stop flag, or SIGINT hangs here
-            // forever (same class as the C# one-shot hang, #54)
-            while !stop.isStopped { try await Task.sleep(nanoseconds: 1_000_000_000) }
-        }
-        while !stop.isStopped && !et.isClosed {
-            try await Task.sleep(nanoseconds: 200_000_000)
-        }
-        et.close()
-        if stop.isStopped { break }
-        log("etunnel: connection lost, reconnecting")
-    } catch {
-        if stop.isStopped { break }
-        log("etunnel: \(error)")
-        if !reconnect {
-            exit(1)
-        }
-    }
-    let ms = backoffMs(attempt)
-    attempt += 1
-    log("etunnel: reconnect in \(ms)ms")
-    let deadline = Date().addingTimeInterval(Double(ms) / 1000)
-    while !stop.isStopped && Date() < deadline {
-        try await Task.sleep(nanoseconds: 100_000_000)
+    case .retrying(let attempt, let delay, let url):
+        let live = url.map { " (last url \($0))" } ?? ""
+        log("etunnel: connection lost, retry \(attempt) in \(String(format: "%.1f", delay))s\(live)")
+    case .closed(let reason):
+        log("etunnel: stopped: \(reason)")
     }
 }
+tunnel.onReconnect = { attempt, url in
+    log("etunnel: reconnected after \(attempt) attempt(s)")
+}
+
+do {
+    // onState(.connected) already logs TUNNEL_URL - logging it again here made
+    // the first URL appear twice, which the E2E (and any log scraper) misread
+    // as an immediate reconnect.
+    _ = try await tunnel.connect(
+        token: ProcessInfo.processInfo.environment["ETUNNEL_TOKEN"],
+        subdomain: ProcessInfo.processInfo.environment["ETUNNEL_SUBDOMAIN"])
+} catch {
+    log("etunnel: \(error)")
+    exit(1)
+}
+
+if !reconnect {
+    // One-shot mode: hold the connection but never let the supervisor retry.
+    // (Close on stop so SIGINT does not hang; same class as the C# hang, #54.)
+    while !stop.isStopped && !(tunnel.tunnel?.isClosed ?? true) {
+        try await Task.sleep(nanoseconds: 200_000_000)
+    }
+    tunnel.close(reason: "one-shot exit")
+    exit(tunnel.state.isConnected ? 0 : 1)
+}
+
+// Supervised mode: idle until a signal. ReconnectingEtunnel owns the retries.
+while !stop.isStopped {
+    try await Task.sleep(nanoseconds: 200_000_000)
+}
+tunnel.close(reason: "signal")

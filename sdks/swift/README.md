@@ -31,7 +31,7 @@ Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
 your local service. Ctrl-C closes the tunnel.
 
 **Reconnects automatically.** If the connection drops (including a server
-restart) the CLI re-dials with exponential backoff (500ms → 30s, ±20%
+restart) the CLI re-dials with exponential backoff (500ms → 30s, ±10%
 jitter, reset on success) and prints `TUNNEL_URL:` again. The subdomain is
 **reclaimed**, not re-randomised: the client replays the server's signed
 `resumeToken` in `hello.resume`, so links already shared keep working (the
@@ -40,7 +40,53 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```swift
+import etunnel
+
+// Supervised tunnel: dials once (failing fast on bad credentials), then keeps
+// itself alive. Publish the state straight into your UI.
+guard let tunnel = ReconnectingEtunnel(server: "wss://t.etun.uk/tunnel", local: "3000") else {
+    return  // invalid URL / route table
+}
+tunnel.onState = { state in
+    switch state {
+    case .connecting:                                   break
+    case .connected(let url):                           print("up:", url)
+    case .retrying(let attempt, let delay, let url):    print("retry \(attempt) in \(delay)s (last: \(url ?? "-"))")
+    case .closed(let reason):                           print("stopped:", reason)
+    }
+}
+let url = try await tunnel.connect()          // first public URL
+// ... later
+tunnel.close()                                 // never reconnects
+
+// Or consume transitions as an AsyncStream:
+for await state in tunnel.states { /* render */ }
+
+// Single connection (caller owns the retry policy):
+let et = Etunnel(server: url, local: "3000")!
+let publicURL = try await et.connect(token: nil, subdomain: nil, resume: nil)
+```
+
+**Reconnect semantics** (identical to the Go SDK's `ConnectReconnecting`, so
+both SDKs behave the same):
+
+| | |
+|---|---|
+| first dial | fails fast - bad token/plan does not loop forever |
+| drop not requested by you | retried with exponential backoff 0.5s → 30s, ×2, ±10% jitter |
+| backoff | resets after a successful reconnect |
+| subdomain | reclaimed via the server-signed resume token; `publicURL` keeps showing the last known URL while retrying |
+| `close()` | stops the supervisor for good |
+| permanent errors | `unauthorized`, `subdomain_plan`, `subdomain_invalid`, `bad_message`, protocol deviation: stop instead of retrying |
+| policy override | `EtunnelReconnectPolicy(minBackoff:maxBackoff:factor:jitterFraction:maxAttempts:)` |
+
+`onReconnect(attempt, url)` fires after each successful reconnect. State
+delivery is done on the main actor, so assigning to a `@Published` property is
+safe.
+
+E2E: `./Tests/test_reconnect.sh` hard-kills a real server mid-connection,
+restarts it, and asserts the **same** public URL comes back.
 
 ## Environment variables
 
@@ -50,6 +96,7 @@ See the header of the source file for the embed example.
 | `ETUNNEL_LOCAL` | local port or `host:port` (or 1st CLI arg) | `3000` |
 | `ETUNNEL_TOKEN` | paid-plan API key (optional) | - |
 | `ETUNNEL_RECONNECT` | `0` disables auto-reconnect (one-shot CLI) | enabled |
+| `SESSION_SECRET` | server-side: stable key for resume tokens (required across restarts) | per-process random |
 | `ETUNNEL_SUBDOMAIN` | custom subdomain (paid plans) | random |
 
 ## License
