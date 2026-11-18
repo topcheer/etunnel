@@ -27,7 +27,7 @@ require (
 	github.com/go-acme/alidns-20150109/v4 v4.7.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/x v0.3.1 // indirect
+	github.com/go-webauthn/x v0.4.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
