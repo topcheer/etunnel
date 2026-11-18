@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -308,7 +309,12 @@ func (s *pgAccountStore) Mutate(email string, fn func(*Account)) bool {
 	}
 	fn(a)
 	s.mu.Unlock()
-	_ = s.upsert(context.Background(), a)
+	// #199: a swallowed upsert error let the 5s loadAll poll overwrite the
+	// in-memory state, silently losing paid tiers and domains; log it so
+	// operations can see the write-through break.
+	if err := s.upsert(context.Background(), a); err != nil {
+		log.Printf("accounts: pg upsert %s failed (state may be lost on next poll): %v", a.Email, err)
+	}
 	return true
 }
 
@@ -337,7 +343,10 @@ func (s *pgAccountStore) TryClaimDomain(email, dom string, mayClaim func(*Accoun
 	}
 	a.Domains = append(a.Domains, dom)
 	s.mu.Unlock()
-	_ = s.upsert(context.Background(), a)
+	// #199: same as Mutate - never swallow the persistence failure.
+	if err := s.upsert(context.Background(), a); err != nil {
+		log.Printf("accounts: pg upsert %s failed after domain claim (state may be lost on next poll): %v", a.Email, err)
+	}
 	return true
 }
 

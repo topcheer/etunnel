@@ -569,6 +569,10 @@ var stripeHTTP = &http.Client{Timeout: 20 * time.Second}
 // stripeAPIBase is a var so tests can point the client at a stub.
 var stripeAPIBase = "https://api.stripe.com"
 
+// nowpaymentsAPIBase is a var so tests can point the client at a stub
+// (mirrors stripeAPIBase).
+var nowpaymentsAPIBase = "https://api.nowpayments.io"
+
 func (s *Server) stripeReq(method, path string, form url.Values) (map[string]any, error) {
 	var body io.Reader
 	if form != nil {
@@ -666,11 +670,21 @@ func paymentEventSeen(id string) bool {
 			delete(paymentEvents, k)
 		}
 	}
-	if _, ok := paymentEvents[id]; ok {
-		return true
+	_, ok := paymentEvents[id]
+	return ok
+}
+
+// markPaymentEvent records id as processed (#198). Marking is deliberately
+// separate from the check above: a webhook whose activation failed answers
+// 5xx so the provider retries, and that retry must reach activate() again
+// instead of being suppressed as a replay.
+func markPaymentEvent(id string) {
+	if id == "" {
+		return
 	}
-	paymentEvents[id] = now
-	return false
+	paymentEventsMu.Lock()
+	paymentEvents[id] = time.Now()
+	paymentEventsMu.Unlock()
 }
 
 // paymentActingFor reports whether the visitor's login session may act for
@@ -720,7 +734,13 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		if paymentEventSeen("stripe:" + ev.ID) {
 			s.logf("billing: stripe webhook replay suppressed (event %s)", ev.ID)
 		} else if _, err := s.activate(ev.Data.Object.Metadata.Email, ev.Data.Object.Metadata.Tier); err != nil {
+			// #198: 5xx so Stripe retries; the event is NOT marked seen, so the
+			// retry reaches activate() instead of being suppressed as a replay.
 			s.logf("billing: stripe webhook activation failed: %v", err)
+			http.Error(w, "{\"error\":\"activation failed\"}", http.StatusInternalServerError)
+			return
+		} else {
+			markPaymentEvent("stripe:" + ev.ID)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -812,8 +832,23 @@ func (s *Server) paypalToken() (string, error) {
 		return "", fmt.Errorf("paypal auth failed (%s)", resp.Status)
 	}
 	ppTok, ppTokBase = out.AccessToken, base
-	ppTokExp = time.Now().Add(time.Duration(out.ExpiresIn-60) * time.Second)
+	ppTokExp = time.Now().Add(paypalTokenLifetime(out.ExpiresIn))
 	return ppTok, nil
+}
+
+// paypalTokenLifetime returns how long a freshly minted PayPal token should
+// be cached. A 60s safety margin keeps us from racing expiry mid-request,
+// but must never go negative (#204): expires_in values at or below the
+// margin used to push ppTokExp into the past, making the cache useless and
+// re-authenticating on every call.
+func paypalTokenLifetime(expiresIn int) time.Duration {
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+	if expiresIn > 60 {
+		expiresIn -= 60
+	}
+	return time.Duration(expiresIn) * time.Second
 }
 
 func (s *Server) paypalReq(method, path string, payload any) (map[string]any, error) {
@@ -928,7 +963,10 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 	if ev.EventType == "PAYMENT.CAPTURE.COMPLETED" {
 		email, tier, _ := strings.Cut(ev.Resource.CustomID, ":")
 		if _, err := s.activate(email, tier); err != nil {
+			// #198: 5xx so PayPal retries the webhook until activation lands.
 			s.logf("billing: paypal webhook activation failed: %v", err)
+			http.Error(w, "{\"error\":\"activation failed\"}", http.StatusInternalServerError)
+			return
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -960,7 +998,7 @@ func (s *Server) nowpaymentsAPI(method, path string, payload any) (map[string]an
 		b, _ := json.Marshal(payload)
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "https://api.nowpayments.io"+path, body)
+	req, err := http.NewRequest(method, nowpaymentsAPIBase+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1037,6 +1075,14 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 				if oid, ok := st["order_id"].(string); ok {
 					email, tier, _ = strings.Cut(oid, ":")
 				}
+				// #190 (same #40 family as /billing/success): the NOWPayments
+				// payment id is a bearer capability; only the buyer's session may
+				// activate with it, or anyone who learns the id claims the key.
+				if !s.paymentActingFor(r, email) {
+					s.logf("billing: crypto success refused: payment %s belongs to %q, visitor %q", pid, email, s.sessionEmail(r))
+					http.Error(w, "this payment belongs to a different account; log in as the buyer to claim it", http.StatusForbidden)
+					return
+				}
 				key, aerr := s.activate(email, tier)
 				if aerr != nil {
 					http.Error(w, "activation failed: "+aerr.Error(), http.StatusInternalServerError)
@@ -1103,7 +1149,13 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		if paymentEventSeen("now:" + nowPaymentID(ev)) {
 			s.logf("billing: nowpayments IPN replay suppressed (payment %s)", nowPaymentID(ev))
 		} else if _, err := s.activate(email, tier); err != nil {
+			// #198: 5xx so NOWPayments retries; not marked seen, so the retry
+			// reaches activate() instead of being suppressed as a replay.
 			s.logf("billing: nowpayments activation failed: %v", err)
+			http.Error(w, "{\"error\":\"activation failed\"}", http.StatusInternalServerError)
+			return
+		} else {
+			markPaymentEvent("now:" + nowPaymentID(ev))
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1167,7 +1219,10 @@ func (s *Server) reapExpiredShortDomains(now time.Time) {
 		}
 		email := a.Email
 		s.accounts.Mutate(email, func(a *Account) {
-			kept := a.Domains[:0]
+			// #203: build a fresh slice, never compact a.Domains in place -
+			// Lookup hands out the live *Account, and an in-place [:0] rewrite
+			// lets concurrent readers observe a torn, shifted domain list.
+			kept := make([]string, 0, len(a.Domains))
 			for _, d := range a.Domains {
 				if len(d) > 3 {
 					kept = append(kept, d)
