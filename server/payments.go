@@ -552,13 +552,38 @@ func paypalCaptureCompleted(order map[string]any) bool {
 // nowpaymentsPaidEnough rejects clearly-underpaid payments (#3): the IPN
 // carries the expected fiat price (price_amount) and the settled fiat amount
 // (outcome_amount). Absent fields pass — the payment_status gate still applies.
+//
+// #222: "field absent" and "field present but unparseable" are different. Absent
+// keeps the documented fail-open (the payment_status gate still applies), but a
+// value we cannot read - notably a decimal sent as a JSON string, which providers
+// do - must not silently disable the check, so it is parsed or refused.
 func nowpaymentsPaidEnough(ev map[string]any) bool {
-	price, okP := ev["price_amount"].(float64)
-	paid, okA := ev["outcome_amount"].(float64)
+	price, okP := asAmount(ev["price_amount"])
+	paid, okA := asAmount(ev["outcome_amount"])
 	if !okP || !okA || price <= 0 {
+		if ev["price_amount"] != nil || ev["outcome_amount"] != nil {
+			// Present but unreadable: refuse rather than accept an unverified amount.
+			return false
+		}
 		return true
 	}
 	return paid >= price*0.95
+}
+
+// asAmount reads a money field that may arrive as a JSON number or a string
+// ("1.10" is common for decimals).
+func asAmount(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return f, err == nil
+	}
+	return 0, false
 }
 
 // --------------------------------------------------------------------------
@@ -1121,30 +1146,13 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	keys := make([]string, 0, len(ev))
-	for k := range ev {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteByte('&')
-		}
-		fmt.Fprintf(&sb, "%s=%v", k, ev[k])
-	}
-	mac := hmac.New(sha512.New, []byte(s.billing.NowPaymentsIPNSecret))
-	mac.Write([]byte(sb.String()))
-	want := hex.EncodeToString(mac.Sum(nil))
+	// #216: the signed string must reproduce the provider's own JSON value text.
+	// Building it with %v over `any` renders numbers via %g, so 5077125051 came
+	// out as 5.077125051e+09 and 1.10 as 1.1 - real IPNs could never match. We now
+	// try several canonicalisations and accept any that matches; the secret is
+	// still required for all of them, so this widens compatibility, not trust.
 	got := r.Header.Get("x-nowpayments-sig")
-	// sig may be "hex1,hex2" (sorted-string and base64 variants); accept any part
-	ok := false
-	for _, part := range strings.Split(got, ",") {
-		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(part)), []byte(want)) == 1 {
-			ok = true
-		}
-	}
-	if !ok {
+	if !nowpaymentsSignatureValid(s.billing.NowPaymentsIPNSecret, body, ev, got) {
 		s.logf("billing: nowpayments IPN bad signature")
 		http.Error(w, "bad signature", http.StatusBadRequest)
 		return
@@ -1166,6 +1174,91 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// nowpaymentsSignatureValid accepts an IPN signature if any of the plausible
+// canonicalisations matches. NOWPayments documents "sorted key=value pairs", but
+// not how numbers are rendered, and its own wire text varies (1.10 vs 1.1,
+// 6295.0000 vs 6295). Go's decoder loses that text, so we rebuild it from the
+// raw body (json.Number keeps the original literal) and also try the historical
+// %v rendering so a signature produced that way keeps working.
+//
+// Every candidate is still an HMAC-SHA512 under the IPN secret, so accepting
+// several does not let an attacker sign anything - it only stops a rendering
+// mismatch from silently rejecting genuine payments.
+func nowpaymentsSignatureValid(secret string, body []byte, ev map[string]any, header string) bool {
+	candidates := nowpaymentsSigningStrings(body, ev)
+	if len(candidates) == 0 {
+		return false
+	}
+	for _, part := range strings.Split(header, ",") {
+		got := strings.TrimSpace(part)
+		if got == "" {
+			continue
+		}
+		for _, payload := range candidates {
+			mac := hmac.New(sha512.New, []byte(secret))
+			mac.Write([]byte(payload))
+			want := hex.EncodeToString(mac.Sum(nil))
+			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// nowpaymentsSigningStrings returns the sorted "k=v&k=v" payloads we are willing
+// to accept, deduplicated.
+func nowpaymentsSigningStrings(body []byte, ev map[string]any) []string {
+	var numEv map[string]any
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber() // keeps 1.10 as the literal "1.10" instead of float64(1.1)
+	if err := dec.Decode(&numEv); err != nil {
+		numEv = nil
+	}
+
+	var out []string
+	seen := map[string]bool{}
+	add := func(payload string) {
+		if payload == "" || seen[payload] {
+			return
+		}
+		seen[payload] = true
+		out = append(out, payload)
+	}
+	// Best candidate first: the raw literals the provider actually sent.
+	add(sortedSigningString(numEv))
+	// Fallback: the pre-#216 rendering, so nothing that used to verify breaks.
+	add(sortedSigningString(ev))
+	return out
+}
+
+// sortedSigningString renders "k=v" pairs in sorted key order. json.Number is
+// emitted verbatim; other values use %v.
+func sortedSigningString(ev map[string]any) string {
+	if ev == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(ev))
+	for k := range ev {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteByte('&')
+		}
+		if n, ok := ev[k].(json.Number); ok {
+			sb.WriteString(k)
+			sb.WriteByte('=')
+			sb.WriteString(n.String())
+			continue
+		}
+		fmt.Fprintf(&sb, "%s=%v", k, ev[k])
+	}
+	return sb.String()
 }
 
 // nowPaymentID extracts the NOWPayments payment id as a string: the IPN
