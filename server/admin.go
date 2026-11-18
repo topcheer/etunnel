@@ -241,7 +241,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 		Tier  string `json:"tier"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// #193: every other public endpoint bounds its body; register is
+	// unauthenticated, so an unbounded read here is a cheap memory-exhaustion
+	// vector. 8 KiB is far beyond any legitimate {email, tier} payload.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
