@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.14 — 2026-11-18
+
+- patch maintenance release (no content deltas since v1.7.13)
+
 ## v1.7.13 — 2026-11-18
 
 - deps upgrade: x/net 0.63 + zeroize 1.9.2 (#184)
