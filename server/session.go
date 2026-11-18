@@ -855,6 +855,11 @@ func (st *Stream) finish() {
 	st.doneOnce.Do(func() {
 		close(st.done)
 		st.sess.removeStream(st.id)
+		// #188: finish() can run while a body reader is still parked in
+		// bodyPr.Read (HEAD responses finish at header time) or a pump is
+		// blocked in bodyPw.Write. Closing the pipe wakes both with EOF
+		// instead of leaving them parked forever on a removed stream.
+		_ = st.bodyPw.CloseWithError(io.EOF)
 	})
 }
 
