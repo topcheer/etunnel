@@ -34,6 +34,9 @@ type accountBackend interface {
 	ExpiredPaid(now time.Time) []string
 	Snapshot(key string) (Account, bool)
 	Mutate(email string, fn func(*Account)) bool
+	// mutate also reports a persistence failure, for callers that must not
+	// answer "ok" when the write did not reach storage (#218).
+	mutate(email string, fn func(*Account)) (bool, error)
 	List() []*Account
 	PruneInactive(olderThan time.Duration, now time.Time) int
 }
@@ -321,18 +324,31 @@ func (s *AccountStore) FindByProvider(provider, subject string) (*Account, bool)
 }
 
 // Mutate applies fn to the account under the store lock and persists.
+// It reports only whether the account existed; use mutate when a failed write
+// must not be reported as success (payment activation, #218).
 func (s *AccountStore) Mutate(email string, fn func(*Account)) bool {
+	ok, _ := s.mutate(email, fn)
+	return ok
+}
+
+// mutate applies fn under the lock and returns both facts callers need:
+// whether the account existed, and whether the change reached storage.
+//
+// The distinction matters where money is involved: a tier upgrade that only
+// lives in memory is a customer charged for nothing after the next restart, so
+// the caller must be able to fail instead of answering 200 (#218).
+func (s *AccountStore) mutate(email string, fn func(*Account)) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a, ok := s.byMail[email]
 	if !ok {
-		return false
+		return false, nil
 	}
 	fn(a)
 	if err := s.saveLocked(); err != nil {
-		// surfaced via reportSaveErr
+		return true, err // found, mutated, but not durable
 	}
-	return true
+	return true, nil
 }
 
 // List returns all accounts sorted by creation time.
