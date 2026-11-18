@@ -84,8 +84,10 @@ func TestDecodeControlRejectsGarbage(t *testing.T) {
 }
 
 func TestValidateSubdomain(t *testing.T) {
-	good := []string{"abc", "my-dev-box", "x9z"}
-	bad := []string{"ab", "-abc", "abc-", "a_b", "a.b", "", strings.Repeat("a", 41), "WWW", "www", "admin"}
+	// #197: bounds aligned with the portal (1-63, premium 1-2 char names
+	// are purchasable; ownership gating happens at claim time, not here).
+	good := []string{"abc", "my-dev-box", "x9z", "ab", strings.Repeat("a", 41), strings.Repeat("a", 63)}
+	bad := []string{"-abc", "abc-", "a_b", "a.b", "", strings.Repeat("a", 64), "WWW", "www", "admin"}
 	for _, s := range good {
 		if err := ValidateSubdomain(s); err != nil {
 			t.Errorf("%q should be valid: %v", s, err)

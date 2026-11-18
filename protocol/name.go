@@ -68,7 +68,11 @@ func randomSuffix(n int) string {
 func randInt(n int) int {
 	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
 	if err != nil {
-		return 0
+		// #201: silently returning 0 collapses every character of a
+		// random suffix to suffixAlphabet[0]. A failing CSPRNG cannot be
+		// worked around here; fail loudly instead of issuing degenerate
+		// (guessable) anonymous subdomains.
+		panic(fmt.Sprintf("etunnel: crypto/rand failed: %v", err))
 	}
 	return int(v.Int64())
 }
@@ -79,11 +83,13 @@ func NormalizeSubdomain(s string) string {
 }
 
 // ValidateSubdomain checks that a subdomain is a single DNS label usable as a
-// tunnel hostname: 3-40 chars, [a-z0-9-], no leading/trailing hyphen, not a
-// reserved word.
+// tunnel hostname: 1-63 chars (#197, aligned with the portal's claim-side
+// bounds and DNS label limits - premium 1-2 char names are purchasable, so
+// the wire-level check must not reject what the account already owns),
+// [a-z0-9-], no leading/trailing hyphen, not a reserved word.
 func ValidateSubdomain(s string) error {
-	if len(s) < 3 || len(s) > 40 {
-		return fmt.Errorf("%w: must be 3-40 characters", ErrBadSubdomain)
+	if len(s) == 0 || len(s) > 63 {
+		return fmt.Errorf("%w: must be 1-63 characters", ErrBadSubdomain)
 	}
 	if s[0] == '-' || s[len(s)-1] == '-' {
 		return fmt.Errorf("%w: cannot start or end with a hyphen", ErrBadSubdomain)

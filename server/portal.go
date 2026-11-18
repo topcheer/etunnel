@@ -82,6 +82,17 @@ nav .links a{color:var(--dim)}nav .links a:hover{color:var(--fg);text-decoration
   .card{padding:1.25rem}
 }`
 
+// emailJSValue renders an email as a safe JavaScript string literal (#195).
+// json.Marshal escapes <, > and & (\u003c etc.), so unlike fmt %q the result
+// cannot close the surrounding <script> block early.
+func emailJSValue(email string) template.JS {
+	b, err := json.Marshal(email)
+	if err != nil {
+		return template.JS(`""`)
+	}
+	return template.JS(b)
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	type prov struct {
 		ID, Label string
@@ -89,7 +100,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Remember where to resume after the OAuth round-trip (the CLI grant
 	// page sets this). Validated on use in the callback; same-site paths only.
-	if rt := r.URL.Query().Get("return_to"); rt != "" {
+	if rt := r.URL.Query().Get("return_to"); validReturnTo(rt) { // #189: validate on write too
 		http.SetCookie(w, &http.Cookie{Name: "et_returnto", Value: rt, Path: "/", MaxAge: 600, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: true})
 	}
 	var providers []prov
@@ -413,7 +424,7 @@ pkRender();
 		"SubLine":        template.HTML(subLine),
 		"Provider":       acct.Provider,
 		"Name":           acct.Name,
-		"EmailJS":        template.JS(fmt.Sprintf("%q", acct.Email)),
+		"EmailJS":        emailJSValue(acct.Email), // #195: json.Marshal escapes <,>,& - no </script> breakout
 		"Tier":           acct.Tier,
 		"Key":            acct.APIKey,
 		"MaxDomains":     maxDomains,
