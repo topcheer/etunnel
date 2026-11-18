@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -310,5 +312,39 @@ func TestAppleFormPostFlow(t *testing.T) {
 	s.handleOAuthCallback(rec, r, "apple")
 	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "bad oauth state") {
 		t.Fatal("state from POST body was not accepted")
+	}
+}
+
+// #221: the boot fallback key must be built exactly once. Without the Once, two
+// goroutines racing on the first request each generated a key and the second
+// Store silently invalidated cookies signed with the first, so sessions failed
+// at random right after startup.
+func TestSessionKeyIsStableUnderConcurrentFirstUse(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.auth.sessionSecret = "" // force the boot-secret path
+
+	const n = 32
+	keys := make([][]byte, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // maximise the chance of a real race
+			keys[i] = s.sessionKey()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	first := keys[0]
+	if len(first) != 32 {
+		t.Fatalf("boot key length %d, want 32", len(first))
+	}
+	for i, k := range keys {
+		if !bytes.Equal(k, first) {
+			t.Fatalf("goroutine %d got a different key: %x != %x", i, k, first)
+		}
 	}
 }

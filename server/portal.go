@@ -210,7 +210,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	acct, _ := s.accounts.LookupEmail(email)
+	// sessionEmail already verified existence, but the account can be removed
+	// between the two lookups (GC, admin delete, PG poll): dereferencing a nil
+	// acct here turned every later visit into a 500 on a page that no longer
+	// offers /logout (#224).
+	acct, ok := s.accounts.LookupEmail(email)
+	if !ok {
+		http.SetCookie(w, &http.Cookie{Name: "et_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
 	tier := s.cfg.Tiers[acct.Tier]
 	maxDomains := 0
 	if tier != nil {

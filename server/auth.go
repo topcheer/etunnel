@@ -28,7 +28,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -61,19 +61,29 @@ func oauthFromEnv() oauthConfig {
 	}
 }
 
-var bootSecret atomic.Value // random fallback when SESSION_SECRET unset
+// bootSecret is the process-local fallback key used when SESSION_SECRET is
+// unset. sync.Once both builds it exactly once and publishes it: without it, two
+// goroutines racing on the first request each generated a key and the second
+// write silently invalidated cookies signed with the first, so sessions failed at
+// random right after startup (#221). resumeSecret uses the same pattern.
+//
+// A plain []byte is enough - Once.Do establishes the happens-before edge, so no
+// atomic.Value is needed and there is no "unreachable" branch to get wrong.
+var (
+	bootSecretOnce sync.Once
+	bootSecret     []byte
+)
 
 func (s *Server) sessionKey() []byte {
 	if s.auth.sessionSecret != "" {
 		return []byte(s.auth.sessionSecret)
 	}
-	if v, ok := bootSecret.Load().([]byte); ok {
-		return v
-	}
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	bootSecret.Store(b)
-	return b
+	bootSecretOnce.Do(func() {
+		b := make([]byte, 32)
+		_, _ = rand.Read(b)
+		bootSecret = b
+	})
+	return bootSecret
 }
 
 // sessionCookie mints "email|expiry|hex(hmac)".
