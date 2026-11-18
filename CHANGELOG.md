@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.15 — 2026-11-18
+
+- swift: supervised reconnect wrapper + observable tunnel state (Reconnect.swift, #183)
+
 ## v1.7.14 — 2026-11-18
 
 - patch maintenance release (no content deltas since v1.7.13)
