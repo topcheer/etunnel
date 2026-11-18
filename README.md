@@ -182,8 +182,10 @@ Capability differences (streaming bodies, WebSocket pass-through) are in the
 | Concurrent tunnels | 2 per account (5 per IP when anonymous) | 5 | 20 |
 
 Tiers are configuration, not code: `etunneld -tiers tiers.json` maps a tier id to
-`{name, ttlHours, customDomains, bandwidthMbps, maxTunnels}` (`maxTunnels: 0`
-means unlimited).
+`{name, ttl, customDomains, bandwidth, maxTunnels}` (`maxTunnels: 0`
+means unlimited). `ttl` is a Go duration in nanoseconds (4h =
+`14400000000000`) and `bandwidth` is bits per second; a typo'd key aborts
+startup instead of silently lifting limits.
 
 ## Paid plans
 
