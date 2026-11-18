@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -272,7 +273,11 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       120 * time.Second,
 	}
 	servers = append(servers, mainSrv)
-	go func() { _ = mainSrv.Serve(mainLn) }()
+	go func() {
+		if err := mainSrv.Serve(mainLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logf("http: main listener: %v", err) // #192: Serve errors were silently dropped
+		}
+	}()
 
 	// --- plain HTTP listener (80) ---------------------------------------------
 	if s.cfg.HTTPAddr != "" {
@@ -291,7 +296,11 @@ func (s *Server) Run(ctx context.Context) error {
 			ReadHeaderTimeout: 15 * time.Second,
 		}
 		servers = append(servers, httpSrv)
-		go func() { _ = httpSrv.Serve(httpLn) }()
+		go func() {
+			if err := httpSrv.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.logf("http: plain listener: %v", err) // #192
+			}
+		}()
 	}
 
 	// --- admin listener -------------------------------------------------------
@@ -302,13 +311,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		adminSrv := &http.Server{Handler: s.adminHandler}
 		servers = append(servers, adminSrv)
-		go func() { _ = adminSrv.Serve(adminLn) }()
+		go func() {
+			if err := adminSrv.Serve(adminLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.logf("http: admin listener: %v", err) // #192
+			}
+		}()
 	}
 
 	<-ctx.Done()
 	// Ask live tunnels to hang up politely.
 	for _, sess := range s.reg.Snapshot() {
 		sess.Close(protocol.ErrCodeServerShutdown)
+	}
+	// #192: http.Server.Shutdown does not wait for hijacked (upgraded)
+	// connections, and Close above only enqueues the bye. Give sessions a
+	// bounded grace to flush in-flight streams before Run returns.
+	drainDeadline := time.Now().Add(5 * time.Second)
+	for s.reg.Count() > 0 {
+		if time.Now().After(drainDeadline) {
+			s.logf("shutdown: %d session(s) still draining after 5s, cutting over", s.reg.Count())
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	return nil
 }

@@ -107,6 +107,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 // serveTunnelRequest forwards one external HTTP exchange over a session
 // stream.
 func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess *Session) {
+	// #187: X-Etunnel-* is this server's namespace. The verified-webhook
+	// marker is set by the policy layer below; anything arriving from the
+	// visitor is spoofed and must never reach the tunneled app.
+	stripEtunnelHeaders(r.Header)
 	// Edge policy gate (feature-gap #1/#3): evaluated before any stream is
 	// opened, so rejected visitors never reach the tunnel. Webhook rules
 	// need the raw body: buffer (bounded), verify, then replay into the
@@ -180,6 +184,12 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	s.writeTunnelResponseHeaders(w, r, res, st)
+	if r.Method == http.MethodHead {
+		// #188: HEAD carries no body. finish() above already closed the
+		// body pipe (EOF), so returning here flushes the headers and frees
+		// the handler instead of parking it in streamTunnelBody forever.
+		return
+	}
 	s.streamTunnelBody(w, r, sess, st)
 }
 
@@ -209,7 +219,14 @@ func (s *Server) writeTunnelResponseHeaders(w http.ResponseWriter, r *http.Reque
 			respHdr.Add(k, v)
 		}
 	}
-	w.WriteHeader(res.Status)
+	status := res.Status
+	if status < 100 || status > 999 {
+		// #200: res.Status is tunnel-client controlled; net/http panics on
+		// out-of-range codes. Answer 502 instead of killing the connection.
+		s.logf("proxy: %s %s%s: client sent invalid status %d", r.Method, r.Host, r.URL.RequestURI(), status)
+		status = http.StatusBadGateway
+	}
+	w.WriteHeader(status)
 	if r.Method == http.MethodHead {
 		st.finish()
 	}
@@ -243,6 +260,17 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 				return
 			}
 			panic(http.ErrAbortHandler)
+		}
+	}
+}
+
+// stripEtunnelHeaders deletes every X-Etunnel-* header from an inbound
+// request (#187): the only legitimate source of the verified-webhook marker
+// is the policy layer after signature verification.
+func stripEtunnelHeaders(h http.Header) {
+	for k := range h {
+		if strings.HasPrefix(strings.ToLower(k), "x-etunnel-") {
+			h.Del(k)
 		}
 	}
 }
@@ -442,7 +470,10 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 }
 
 func (s *Server) badGateway(w http.ResponseWriter, host, msg string) {
-	host = strings.Split(host, ":")[0]
+	// #194: host and msg end up inside generated HTML; escape both (host is
+	// visitor-controlled via the Host header).
+	host = htmlEscapeText(strings.Split(host, ":")[0])
+	msg = htmlEscapeText(msg)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
 	_, _ = io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8">
@@ -722,7 +753,7 @@ mermaid.initialize({startOnLoad:true,theme:'dark',themeVariables:{fontFamily:'ui
 func notFoundHTML(cfg Config, r *http.Request) string {
 	lang := pickLang(r)
 	t := func(key string) string { return T(lang, key) }
-	host := r.Host
+	host := htmlEscapeText(r.Host) // #194: r.Host is visitor-controlled
 	return `<!doctype html>
 <html><head><meta charset="utf-8"><title>` + t("nf.title") + `</title>
 <meta http-equiv="refresh" content="5; url=https://github.com/topcheer/etunnel">
