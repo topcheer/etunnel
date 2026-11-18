@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.16 — 2026-11-18
+
+- audit batch: 19 review fixes (mesh gossip auth #186 - BREAKING: mesh deployments must set ETUNNEL_MESH_SECRET; webhook header stripping #187; HEAD stream leak #188; payment webhook 5xx #198; PG upsert logging #199; short subdomain claim #197; strict tiers parsing #196; return_to validation #189; bounded register body #193)
+- build: make verify now runs go test -race (#202)
+- docs: protocol/README sync with the above (mesh secret noted as breaking)
+
 ## Unreleased
 
 - **security**: mesh gossip is now authenticated and encrypted via a required
