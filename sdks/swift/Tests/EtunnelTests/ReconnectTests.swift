@@ -136,3 +136,30 @@ final class ReconnectTests: XCTestCase {
         _ = states
     }
 }
+
+// The stream must FINISH on a terminal state; a `for await` that never ends
+// would hang any consumer that awaits the tunnel's lifetime.
+final class ReconnectStreamTerminationTests: XCTestCase {
+
+    func testClosedStateFinishesTheStream() async throws {
+        guard let server = ProcessInfo.processInfo.environment["ETUNNEL_SERVER"], !server.isEmpty else {
+            throw XCTSkip("ETUNNEL_SERVER not set; run via Tests/test_reconnect.sh")
+        }
+        guard let rt = ReconnectingEtunnel(server: server, local: "127.0.0.1:39999") else {
+            return XCTFail("could not build supervisor")
+        }
+        _ = try await rt.connect()
+
+        let finished = expectation(description: "stream finished")
+        let consumer = Task {
+            var count = 0
+            for await _ in rt.states { count += 1 }
+            finished.fulfill()
+            return count
+        }
+        rt.close(reason: "done")
+        await fulfillment(of: [finished], timeout: 5)
+        let seen = await consumer.value
+        XCTAssertGreaterThanOrEqual(seen, 1)
+    }
+}

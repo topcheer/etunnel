@@ -182,7 +182,17 @@ public final class ReconnectingEtunnel: @unchecked Sendable {
         self.policy = policy
     }
 
-    deinit { supervisorTask?.cancel() }
+    deinit {
+        // Cancel first so nothing starts another dial, then close the live
+        // socket: dropping the last reference to a connected supervisor used to
+        // leave the tunnel running (the URLSession keeps the task alive).
+        supervisorTask?.cancel()
+        lock.lock()
+        let cur = current
+        current = nil
+        lock.unlock()
+        cur?.close()
+    }
 
     // MARK: observation
 
@@ -190,10 +200,18 @@ public final class ReconnectingEtunnel: @unchecked Sendable {
     public var states: AsyncStream<EtunnelState> {
         AsyncStream { continuation in
             lock.lock()
-            self.continuation = continuation
             let snapshot = lastState
+            let alreadyClosed: Bool
+            if case .closed = snapshot { alreadyClosed = true } else { alreadyClosed = false }
+            if !alreadyClosed { self.continuation = continuation }
             lock.unlock()
             continuation.yield(snapshot)
+            // Subscribing AFTER the supervisor stopped must not hang: hand back
+            // the terminal state and finish immediately.
+            if alreadyClosed {
+                continuation.finish()
+                return
+            }
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
                 self.lock.lock()
@@ -394,8 +412,16 @@ public final class ReconnectingEtunnel: @unchecked Sendable {
         lock.lock()
         lastState = state
         let cont = continuation
+        if case .closed = state {
+            continuation = nil // a finished stream cannot be reused
+        }
         lock.unlock()
         cont?.yield(state)
+        // Finish the sequence on a terminal state: otherwise a consumer doing
+        // `for await state in tunnel.states` would wait forever after close.
+        if case .closed = state {
+            cont?.finish()
+        }
         onState?(state)
     }
 }
