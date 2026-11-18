@@ -269,6 +269,18 @@ localized governing-language note.
 
 ## Multi-instance (cluster)
 
+### Mesh mode requires `ETUNNEL_MESH_SECRET`
+
+`ETUNNEL_CLUSTER=mesh` refuses to start unless `ETUNNEL_MESH_SECRET` is set to
+the same value on every node. Gossip carries tunnel ownership claims that other
+nodes trust when forwarding visitor traffic, so an unauthenticated cluster would
+let any host that can reach the gossip port impersonate a node and receive
+another tenant's requests (issue #186).
+
+Upgrading an existing mesh deployment therefore needs the variable set on all
+nodes *before* rolling them; a node without it exits non-zero at startup rather
+than joining unauthenticated.
+
 One binary, three modes - `ETUNNEL_CLUSTER=single` (default, today's node),
 `mesh` (gossip + cross-peer forwarding, behind any L4 LB) and `sticky`
 (Redis routing table for L7 LBs). Shared services are env-driven:

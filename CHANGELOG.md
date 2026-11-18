@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- **security**: mesh gossip is now authenticated and encrypted via a required
+  `ETUNNEL_MESH_SECRET`; the router additionally verifies that ownership claims
+  come from known members and bounds the owner map (#186, #191). **Breaking for
+  existing mesh deployments**: set the variable on every node before upgrading.
+- **security**: the edge strips inbound `X-Etunnel-*` headers, so the
+  `verified:` webhook marker can no longer be spoofed by a visitor (#187)
+- **fix**: HEAD responses no longer park a reader in `bodyPr.Read` (goroutine +
+  connection leak) and now flush their headers (#188)
+- **fix**: tunnel-client supplied `res.status` is clamped to 502 instead of
+  panicking `net/http` (#200)
+- **fix**: generated 404/502 pages HTML-escape the visitor-controlled Host
+  header (#194)
+- **fix**: graceful shutdown drains sessions, waits for `bye` to flush, and logs
+  listener errors instead of discarding them (#192)
+- **docs**: subdomain length rules are consistent end to end (1-63), so paid
+  1-2 character subdomains are usable (#197)
+- **fix**: CSPRNG failure while generating a subdomain now fails loudly instead
+  of silently degrading entropy (#201)
+- **fix**: `return_to` rejects backslash and absolute-URL bypasses (#189)
+- **fix**: `/me` emits the email as a JSON string literal, not `%q` inside
+  `template.JS` (#195)
+
 ## v1.7.15 — 2026-11-18
 
 - swift: supervised reconnect wrapper + observable tunnel state (Reconnect.swift, #183)

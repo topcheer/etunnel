@@ -96,7 +96,9 @@ Client → server:
     tolerance, GitHub `X-Hub-Signature-256`, GitLab `X-Gitlab-Token`);
     mismatch gets `401`, verified requests reach the local service with
     `X-Etunnel-Webhook: verified: <provider>`. Requests without any known
-    signature header fall through to the other layers.
+    signature header fall through to the other layers. Any inbound
+    `X-Etunnel-*` header is stripped at the edge before policy evaluation, so
+    the marker can only originate from a verified signature (issue #187).
   A malformed policy fails the handshake (protocol error). An omitted
   policy is exactly the legacy behavior. Secrets ride the WSS hello and
   live in server memory only — they are never persisted.

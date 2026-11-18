@@ -81,7 +81,9 @@ Commands as actually used by Makefile and CI
 
 ## Cluster layer (server/cluster*.go, account_pg.go, counter_*.go, router_*.go)
 
-- `ETUNNEL_CLUSTER=single|mesh|sticky` picks the mode; everything else is
+- `ETUNNEL_CLUSTER=single|mesh|sticky` picks the mode; `mesh` additionally
+  requires `ETUNNEL_MESH_SECRET` (shared keyring; startup fails closed
+  without it, #186); everything else is
   env-driven and optional (no env = exact single-node behaviour).
 - Postgres store keeps the JSON store's in-memory hot path (RLock reads,
   write-through mutations, 5s poll). Tests against the real PG on host 13
