@@ -4,6 +4,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -45,6 +47,26 @@ type Tier struct {
 
 // TierFile is the on-disk format for custom tier definitions.
 type TierFile map[string]Tier
+
+// ParseTiers decodes a tiers file strictly (#196): unknown keys are errors,
+// so a misspelled field (the README used to suggest ttlHours/bandwidthMbps
+// while the Tier JSON tags are ttl/bandwidth) cannot silently zero a tier's
+// limits - an accepted-but-ignored typo used to yield "unlimited TTL and
+// bandwidth" with no error at all.
+func ParseTiers(b []byte) (map[string]*Tier, error) {
+	var tf TierFile
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&tf); err != nil {
+		return nil, fmt.Errorf("etunnel: parse tiers file: %w", err)
+	}
+	tiers := make(map[string]*Tier, len(tf))
+	for id, t := range tf {
+		t := t
+		tiers[id] = &t
+	}
+	return tiers, nil
+}
 
 // Config configures a Server.
 type Config struct {
