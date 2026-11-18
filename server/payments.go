@@ -832,23 +832,30 @@ func (s *Server) paypalToken() (string, error) {
 		return "", fmt.Errorf("paypal auth failed (%s)", resp.Status)
 	}
 	ppTok, ppTokBase = out.AccessToken, base
-	ppTokExp = time.Now().Add(paypalTokenLifetime(out.ExpiresIn))
+	lifetime, lerr := paypalTokenLifetime(out.ExpiresIn)
+	if lerr != nil {
+		return "", lerr
+	}
+	// lifetime 0 means "valid for this call, too short to cache": ppTokExp
+	// set to now makes the next call re-authenticate (#204).
+	ppTokExp = time.Now().Add(lifetime)
 	return ppTok, nil
 }
 
 // paypalTokenLifetime returns how long a freshly minted PayPal token should
-// be cached. A 60s safety margin keeps us from racing expiry mid-request,
-// but must never go negative (#204): expires_in values at or below the
-// margin used to push ppTokExp into the past, making the cache useless and
-// re-authenticating on every call.
-func paypalTokenLifetime(expiresIn int) time.Duration {
-	if expiresIn < 0 {
-		expiresIn = 0
+// be cached (#204). expires_in <= 0 is a PayPal response anomaly and errors
+// out so the caller sees it; a lifetime at or below the 60s safety margin
+// yields 0 (use the token now, never cache it - the old ExpiresIn-60
+// arithmetic went negative and silently re-authenticated on every call);
+// anything longer keeps the 60s early-refresh margin.
+func paypalTokenLifetime(expiresIn int) (time.Duration, error) {
+	if expiresIn <= 0 {
+		return 0, fmt.Errorf("etunnel: paypal token response has invalid expires_in %d", expiresIn)
 	}
-	if expiresIn > 60 {
-		expiresIn -= 60
+	if expiresIn <= 60 {
+		return 0, nil
 	}
-	return time.Duration(expiresIn) * time.Second
+	return time.Duration(expiresIn-60) * time.Second, nil
 }
 
 func (s *Server) paypalReq(method, path string, payload any) (map[string]any, error) {

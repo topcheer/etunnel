@@ -119,24 +119,23 @@ func TestReapExpiredShortDomainsKeepsReaderSnapshotsIntact(t *testing.T) {
 }
 
 // #204: the PayPal token cache lifetime must never go negative - a negative
-// margin put ppTokExp in the past and re-authenticated on every call.
+// margin put ppTokExp in the past and re-authenticated on every call. Per
+// review: expires_in <= 0 errors (response anomaly); (0,60] yields 0
+// (use now, never cache); longer values keep the 60s early-refresh margin.
 func TestPaypalTokenLifetimeClamp(t *testing.T) {
-	cases := []struct {
-		in   int
-		want time.Duration
-	}{
-		{-5, 0},
-		{0, 0},
-		{30, 30 * time.Second},
-		{60, 60 * time.Second},
-		{61, 1 * time.Second},
-		{90, 30 * time.Second},
-		{32400, 32340 * time.Second},
-	}
-	for _, c := range cases {
-		if got := paypalTokenLifetime(c.in); got != c.want {
-			t.Fatalf("paypalTokenLifetime(%d) = %v, want %v", c.in, got, c.want)
+	for _, bad := range []int{-5, 0} {
+		if _, err := paypalTokenLifetime(bad); err == nil {
+			t.Fatalf("paypalTokenLifetime(%d) must error on invalid expires_in", bad)
 		}
+	}
+	for _, short := range []int{1, 30, 60} {
+		d, err := paypalTokenLifetime(short)
+		if err != nil || d != 0 {
+			t.Fatalf("paypalTokenLifetime(%d) = (%v,%v), want (0,nil): too short to cache", short, d, err)
+		}
+	}
+	if d, err := paypalTokenLifetime(3600); err != nil || d != 3540*time.Second {
+		t.Fatalf("paypalTokenLifetime(3600) = (%v,%v), want (3540s,nil)", d, err)
 	}
 }
 
