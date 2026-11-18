@@ -232,6 +232,22 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request, provid
 	http.Redirect(w, r, authURL, http.StatusSeeOther)
 }
 
+// validReturnTo reports whether v is a strictly same-site resume path:
+// rooted and relative, no scheme/host/opaque part, no backslash (browsers
+// normalise "\" to "/", so "/\\evil.com" becomes a protocol-relative hop
+// to evil.com) and no control characters (#189).
+func validReturnTo(v string) bool {
+	if v == "" || !strings.HasPrefix(v, "/") || strings.HasPrefix(v, "//") ||
+		strings.ContainsAny(v, "\\\r\n\x00") {
+		return false
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.IsAbs() || u.Host != "" || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, provider string) {
 	if !s.oauthEnabled(provider) {
 		http.Error(w, "provider not configured", http.StatusServiceUnavailable)
@@ -296,7 +312,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 	if c, err := r.Cookie("et_returnto"); err == nil && c.Value != "" {
 		v := c.Value
 		http.SetCookie(w, &http.Cookie{Name: "et_returnto", Value: "", Path: "/", MaxAge: -1})
-		if strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//") && !strings.Contains(v, "\r") && !strings.Contains(v, "\n") {
+		if validReturnTo(v) {
 			http.Redirect(w, r, v, http.StatusSeeOther)
 			return
 		}
