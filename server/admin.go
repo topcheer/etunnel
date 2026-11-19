@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -73,13 +74,23 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // adminAuthOptional guards read-only ops routes (/stats): it enforces the
-// token when one is configured, but stays open when AdminToken is unset so
-// local `curl 127.0.0.1:9090/stats` keeps working. Mutating admin routes use
-// adminAuth, which fails closed.
+// token when one is configured, and when AdminToken is unset it only serves
+// loopback callers, so `curl 127.0.0.1:9090/stats` keeps working. Mutating
+// admin routes use adminAuth, which fails closed.
+//
+// #228: /stats answers with every tunnel's subdomain, account email and client
+// IP. Leaving it open to any peer whenever a token was unset turned the shipped
+// docker-compose (which binds -admin-addr=:9090 and publishes 20381-20383 on
+// the host) into an unauthenticated census endpoint, so the no-token case is
+// now loopback-only rather than open.
 func (s *Server) adminAuthOptional(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AdminToken == "" {
-			next(w, r)
+			if isLoopbackRemoteAddr(r.RemoteAddr) {
+				next(w, r)
+				return
+			}
+			http.Error(w, "stats disabled for remote callers: set -admin-token", http.StatusServiceUnavailable)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
@@ -89,6 +100,17 @@ func (s *Server) adminAuthOptional(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// isLoopbackRemoteAddr reports whether the peer address (host:port) is on the
+// loopback interface. Anything unparsable is treated as remote: fail closed.
+func isLoopbackRemoteAddr(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type tunnelStat struct {

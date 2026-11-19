@@ -47,7 +47,10 @@ services:
       - -http-addr=:8081
       - -admin-addr=:9090
       - -tls-mode=http
-    ports: ["20301:8080", "20381:9090"]
+    # #228: no host mapping for the admin port anymore - /stats answers with
+    # account emails and client IPs, and the compose file sets no admin token.
+    # Inspect stats from inside the network: docker compose exec etunneld1 ...
+    ports: ["20301:8080"]
 
   etunneld2:
     <<: *node
@@ -59,7 +62,7 @@ services:
       <<: *nodeenv
       ETUNNEL_ADVERTISE: etunneld2:8080
       ETUNNEL_JOIN: etunneld1:8180
-    ports: ["20302:8080", "20382:9090"]
+    ports: ["20302:8080"]
 
   etunneld3:
     <<: *node
@@ -71,4 +74,4 @@ services:
       <<: *nodeenv
       ETUNNEL_ADVERTISE: etunneld3:8080
       ETUNNEL_JOIN: etunneld1:8180
-    ports: ["20303:8080", "20383:9090"]
+    ports: ["20303:8080"]
