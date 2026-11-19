@@ -292,6 +292,16 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 		http.Error(w, "login failed, please retry", http.StatusBadGateway)
 		return
 	}
+	// #215: an email the provider has not verified must never reach the
+	// find-or-create logic below. The claim branch rotates the API key and
+	// issues a session cookie, so trusting an unverified address is account
+	// takeover for any address an attacker can type into a soft-confirm IdP.
+	// Fail closed for the whole login.
+	if !id.emailVerified {
+		s.logf("auth: %s login rejected: email %q not verified by provider (subject %s)", provider, id.email, id.subject)
+		http.Error(w, "email not verified by provider, verify it there first", http.StatusForbidden)
+		return
+	}
 	// find-or-create by (provider, subject); link email as fallback identity.
 	var acct *Account
 	if a, ok := s.accounts.FindByProvider(provider, id.subject); ok {
@@ -332,6 +342,9 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 
 type oauthIdentityRes struct {
 	subject, email, name string
+	// emailVerified reports whether the provider verified the email (or
+	// synthesized a per-subject noreply address that cannot be squatted).
+	emailVerified bool
 }
 
 func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oauthIdentityRes, error) {
@@ -347,12 +360,13 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 		}
 		var ui struct {
 			Sub, Email, Name string
+			EmailVerified    bool `json:"email_verified"`
 		}
 		if err := oauthGetJSON(ctx, "https://openidconnect.googleapis.com/v1/userinfo",
 			tok["access_token"], &ui); err != nil {
 			return nil, err
 		}
-		return &oauthIdentityRes{ui.Sub, strings.ToLower(ui.Email), ui.Name}, nil
+		return &oauthIdentityRes{ui.Sub, strings.ToLower(ui.Email), ui.Name, ui.EmailVerified}, nil
 	case "gitlab":
 		tok, err := s.oauthToken(ctx, s.auth.gitlabURL+"/oauth/token", url.Values{
 			"client_id": {s.auth.gitlabID}, "client_secret": {s.auth.gitlabSecret},
@@ -372,10 +386,30 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 			return nil, err
 		}
 		email := strings.ToLower(ui.Email)
+		verified := false
 		if email == "" {
 			email = fmt.Sprintf("%s@users.noreply.gitlab.com", ui.Username)
+			// Provider-synthesized address: unique to this GitLab account and
+			// not typeable by others, so it cannot be squatted for a claim.
+			verified = true
+		} else {
+			// #215: /api/v4/user carries no confirmation flag; confirmation
+			// state lives on /api/v4/user/emails (confirmed_at). Fail closed
+			// when the listing is unavailable or shows no confirmed match.
+			var glEmails []struct {
+				Email       string `json:"email"`
+				ConfirmedAt any    `json:"confirmed_at"`
+			}
+			if err := oauthGetJSON(ctx, s.auth.gitlabURL+"/api/v4/user/emails", tok["access_token"], &glEmails); err == nil {
+				for _, e := range glEmails {
+					if strings.ToLower(e.Email) == email && e.ConfirmedAt != nil {
+						verified = true
+						break
+					}
+				}
+			}
 		}
-		return &oauthIdentityRes{fmt.Sprint(ui.ID), email, ui.Name}, nil
+		return &oauthIdentityRes{fmt.Sprint(ui.ID), email, ui.Name, verified}, nil
 	case "github":
 		tok, err := s.oauthToken(ctx, "https://github.com/login/oauth/access_token", url.Values{
 			"client_id": {s.auth.githubID}, "client_secret": {s.auth.githubSecret},
@@ -416,7 +450,10 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 		if ghName == "" {
 			ghName = gh.Login
 		}
-		return &oauthIdentityRes{fmt.Sprint(gh.ID), ghEmail, ghName}, nil
+		// GitHub emails are trusted as verified here: the /user field is the
+		// confirmed primary address, the /user/emails fallback filters on
+		// verified, and the noreply fallback is provider-synthesized.
+		return &oauthIdentityRes{fmt.Sprint(gh.ID), ghEmail, ghName, true}, nil
 	case "apple":
 		tok, err := s.oauthToken(ctx, "https://appleid.apple.com/auth/token", url.Values{
 			"client_id": {s.auth.appleID}, "client_secret": {s.appleClientSecret()},
@@ -432,7 +469,26 @@ func (s *Server) oauthIdentity(ctx context.Context, provider, code string) (*oau
 		}
 		sub, _ := idt["sub"].(string)
 		email, _ := idt["email"].(string)
-		return &oauthIdentityRes{sub, strings.ToLower(email), ""}, nil
+		email = strings.ToLower(email)
+		// email_verified arrives as bool in newer tokens, "true"/"false"
+		// strings in older ones.
+		ev := false
+		switch v := idt["email_verified"].(type) {
+		case bool:
+			ev = v
+		case string:
+			ev = v == "true"
+		}
+		if email == "" {
+			// Apple only includes the email on the FIRST authorization; later
+			// logins carry just the stable subject. Synthesize a per-subject
+			// noreply address (unique, not typeable by others) so returning
+			// users still pass the verified gate via provider+subject instead
+			// of being locked out (#215).
+			return &oauthIdentityRes{sub,
+				fmt.Sprintf("%s@users.noreply.apple.com", sub), "", true}, nil
+		}
+		return &oauthIdentityRes{sub, email, "", ev}, nil
 	}
 	return nil, errors.New("unknown provider")
 }
