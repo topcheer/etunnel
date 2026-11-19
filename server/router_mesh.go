@@ -56,9 +56,10 @@ type meshRouter struct {
 	// peerIPs caches resolved advertise hosts for knownPeer (#186): every
 	// gossip event's From must map to an address the memberlist actually
 	// knows before it may touch the owner map.
-	peerMu     sync.Mutex
-	peerIPs    map[string][]net.IP
-	peerIPsTTL map[string]time.Time
+	peerMu        sync.Mutex
+	peerIPs       map[string][]net.IP
+	peerIPsTTL    map[string]time.Time
+	peerResolving map[string]bool // hosts with an in-flight lookup (#219)
 }
 
 // meshEvent is the gossip payload.
@@ -109,6 +110,12 @@ func newMeshRouter(advertise, join, nodeID string) (*meshRouter, error) {
 	// HTTP (tunnels/forwarding), so gossip uses ETUNNEL_GOSSIP_PORT or
 	// advertise+100. Peers learn it from the join address / node meta.
 	gossipPort := p + 100
+	if gossipPort > 65535 {
+		// #237: an advertise port in 65436..65535 is legal but leaves no room
+		// for gossip (+100); fail with the reason instead of memberlist's
+		// opaque "bind: invalid argument".
+		return nil, fmt.Errorf("etunnel: advertise port %d leaves no room for the gossip port (+100 > 65535); set ETUNNEL_GOSSIP_PORT", p)
+	}
 	if v := os.Getenv("ETUNNEL_GOSSIP_PORT"); v != "" {
 		fmt.Sscanf(v, "%d", &gossipPort)
 	}
@@ -397,6 +404,46 @@ func hostOf(hostPort string) string {
 }
 
 // knownPeer reports whether a gossip event's From address belongs to a node
+// resolvePeer returns the cached IPs for a peer host, resolving when stale.
+//
+// #219: resolution happens OUTSIDE peerMu. This runs on memberlist's delegate
+// goroutines (NotifyMsg / MergeRemoteState), and net.LookupIP has no deadline -
+// holding the lock through it froze every concurrent gossip message for the
+// duration of a slow lookup, stalling member probes and push/pull. The
+// single-flight map keeps at most one in-flight lookup per host, so concurrent
+// callers for the same host share the result instead of piling up.
+func (r *meshRouter) resolvePeer(host string) []net.IP {
+	r.peerMu.Lock()
+	if ips, ok := r.peerIPs[host]; ok && time.Since(r.peerIPsTTL[host]) <= 30*time.Second {
+		r.peerMu.Unlock()
+		return ips
+	}
+	if _, busy := r.peerResolving[host]; busy {
+		r.peerMu.Unlock()
+		// Another goroutine is resolving; treat as unknown this round rather
+		// than blocking the gossip goroutine. The next message after the
+		// in-flight lookup completes gets the cached answer.
+		return nil
+	}
+	if r.peerResolving == nil {
+		r.peerResolving = map[string]bool{}
+	}
+	r.peerResolving[host] = true
+	r.peerMu.Unlock()
+
+	ips, rerr := net.LookupIP(host)
+	if rerr != nil {
+		ips = nil // resolution failure: treat as unknown peer
+	}
+
+	r.peerMu.Lock()
+	delete(r.peerResolving, host)
+	r.peerIPs[host] = ips
+	r.peerIPsTTL[host] = time.Now()
+	r.peerMu.Unlock()
+	return ips
+}
+
 // the memberlist actually knows (#186). The shared keyring already keeps
 // outsiders out; this is defense-in-depth against a compromised member
 // claiming ownership for an address it does not run (which would redirect
@@ -410,18 +457,10 @@ func (r *meshRouter) knownPeer(from string) bool {
 	if host == "" {
 		return false
 	}
-	r.peerMu.Lock()
-	ips, ok := r.peerIPs[host]
-	if !ok || time.Since(r.peerIPsTTL[host]) > 30*time.Second {
-		if resolved, rerr := net.LookupIP(host); rerr == nil {
-			ips = resolved
-		} else {
-			ips = nil // resolution failure: treat as unknown peer
-		}
-		r.peerIPs[host] = ips
-		r.peerIPsTTL[host] = time.Now()
+	ips := r.resolvePeer(host)
+	if len(ips) == 0 {
+		return false
 	}
-	r.peerMu.Unlock()
 	if len(ips) == 0 {
 		return false
 	}
