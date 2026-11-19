@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.20 — 2026-11-19
+
+- python sdk: clear the socket timeout after the handshake - idle tunnels no longer drop every 15-45s (#241) (PR #244)
+- rust sdk: arm the 200ms read tick after the welcome frame, not before it - slow networks no longer fail the handshake spuriously (#242) (PR #245)
+
 ## v1.7.19 — 2026-11-19
 
 - stats loopback-only without admin token (#234); mesh peer DNS off gossip lock + gossip port fail-fast (#238); ACME renewal-window startup falls back to cached cert (#239)
