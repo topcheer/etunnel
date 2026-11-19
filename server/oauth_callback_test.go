@@ -24,6 +24,13 @@ func newFakeGitlab(t *testing.T, id int64, email, name string) *httptest.Server 
 			"id": id, "username": name, "email": email, "name": name,
 		})
 	})
+	// #215: the callback only trusts emails confirmed by the provider; the
+	// fake GitLab reports this address as confirmed (happy path).
+	mux.HandleFunc("/api/v4/user/emails", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"email": email, "confirmed_at": "2026-01-01T00:00:00Z"},
+		})
+	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
