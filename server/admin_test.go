@@ -58,12 +58,29 @@ func TestRegisterEmailNormalizedAndUnique(t *testing.T) {
 // #7 (complement to TestAdminFailsClosedWithoutToken): /stats enforces the
 // token when one is configured but stays open for local ops when it is not.
 func TestStatsAuthOptional(t *testing.T) {
-	// no token: stats stays reachable, mutating admin routes stay closed
+	// no token: stats stays reachable for loopback callers (#228 keeps
+	// `curl 127.0.0.1:9090/stats` working), remote callers are refused, and
+	// mutating admin routes stay closed
 	s := newAdminTestServer(t, "")
 	rec := httptest.NewRecorder()
 	s.adminHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stats", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stats without token from %s: want 503, got %d", httptest.DefaultRemoteAddr, rec.Code)
+	}
+	loopReq := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	loopReq.RemoteAddr = "127.0.0.1:5555"
+	rec = httptest.NewRecorder()
+	s.adminHandler.ServeHTTP(rec, loopReq)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("stats without token configured: want 200, got %d", rec.Code)
+		t.Fatalf("stats without token from loopback: want 200, got %d", rec.Code)
+	}
+	// IPv6 loopback counts too
+	v6 := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	v6.RemoteAddr = "[::1]:5555"
+	rec = httptest.NewRecorder()
+	s.adminHandler.ServeHTTP(rec, v6)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats without token from [::1]: want 200, got %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
 	s.adminHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/accounts", nil))
