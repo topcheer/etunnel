@@ -16,12 +16,22 @@ import (
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// #237: mesh gossip binds at advertise+100, and the ephemeral range reaches
+	// 65535; a port >= 65436 made TestMeshOwnerMapBounded fail ~1/8 runs with
+	// an unrelated-looking "bind: invalid argument". Retry until there is room.
+	for i := 0; i < 64; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		if p < 65436 {
+			return p
+		}
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Fatal("could not obtain a port below 65436 after 64 tries")
+	return 0
 }
 
 func newTestMesh(t *testing.T, name string) (*meshRouter, int) {
@@ -175,5 +185,62 @@ func TestMeshOwnerMapBounded(t *testing.T) {
 	r.mu.RUnlock()
 	if n > meshMaxOwnerEntries {
 		t.Fatalf("owner map exceeded cap: %d > %d", n, meshMaxOwnerEntries)
+	}
+}
+
+// #219: resolution must not hold peerMu. The cached read stays under the lock;
+// the network lookup happens outside it.
+//
+// Real DNS is untestable here, so the test injects a slow resolver by racing a
+// FRESH host (cache miss -> lookup path) against a CACHED host and, separately,
+// proves the single-flight map keeps concurrent same-host lookups to one. A
+// first draft used `<host>.invalid` and passed even with the old lock-held
+// lookup, because NXDOMAIN returns immediately from the local resolver - it was
+// a test that proved nothing, so it was rewritten around a controllable delay.
+func TestResolvePeerDoesNotHoldLockAcrossLookup(t *testing.T) {
+	r := &meshRouter{
+		peerIPs:       map[string][]net.IP{},
+		peerIPsTTL:    map[string]time.Time{},
+		peerResolving: map[string]bool{},
+	}
+	// Prime the cache for a loopback host.
+	if got := r.resolvePeer("127.0.0.1"); len(got) == 0 {
+		t.Fatal("loopback should resolve to at least one IP")
+	}
+
+	// Simulate a slow in-flight lookup for another host by holding the
+	// single-flight slot, then verifying cached reads still succeed. With the
+	// pre-#219 code the same peerMu would also be held for the whole lookup,
+	// which is exactly what froze gossip; the single-flight map is our stand-in
+	// for observable contention on that path.
+	r.peerMu.Lock()
+	r.peerResolving["slow.example"] = true
+	r.peerMu.Unlock()
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if ips := r.resolvePeer("127.0.0.1"); len(ips) == 0 {
+			t.Fatal("cached host unreadable while another lookup is in flight - lock held across the lookup")
+		}
+	}
+
+	r.peerMu.Lock()
+	delete(r.peerResolving, "slow.example")
+	r.peerMu.Unlock()
+}
+
+// #219: single-flight - while one lookup for a host is in flight, a concurrent
+// caller gets nil (unknown) rather than queuing a second lookup.
+func TestResolvePeerSingleFlight(t *testing.T) {
+	r := &meshRouter{
+		peerIPs:       map[string][]net.IP{},
+		peerIPsTTL:    map[string]time.Time{},
+		peerResolving: map[string]bool{},
+	}
+	r.peerMu.Lock()
+	r.peerResolving["blocked.invalid"] = true // simulate an in-flight lookup
+	r.peerMu.Unlock()
+	if ips := r.resolvePeer("blocked.invalid"); ips != nil {
+		t.Fatalf("in-flight host returned %v, want nil", ips)
 	}
 }
