@@ -164,6 +164,12 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 		if !st.finished() {
 			_ = sess.sendRst(st.id)
 			st.abort()
+			// #217: with the response abandoned, a pump parked in
+			// r.Body.Read must be released too - the stream cancel alone
+			// cannot reach it. A past read deadline unblocks the Read; the
+			// connection is unusable for keep-alive at this point anyway
+			// (unread body, dead stream).
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
 		}
 	}()
 
@@ -188,6 +194,13 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 		// #188: HEAD carries no body. finish() above already closed the
 		// body pipe (EOF), so returning here flushes the headers and frees
 		// the handler instead of parking it in streamTunnelBody forever.
+		// #217: the request body is abandoned too. Without this, a visitor
+		// can park pumpRequestBody in r.Body.Read forever (goroutine + fd +
+		// tunnel bandwidth, uncounted by MaxStreamsPerTunnel - the stream is
+		// already removed). A past read deadline unblocks the pump; the
+		// connection cannot be reused with an unread body, so keep-alive is
+		// not a concern here.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
 		return
 	}
 	s.streamTunnelBody(w, r, sess, st)
@@ -351,6 +364,13 @@ func schemeOf(r *http.Request) string {
 func (s *Server) pumpRequestBody(sess *Session, st *Stream, r *http.Request) {
 	buf := make([]byte, protocol.MaxPayload)
 	for {
+		if st.finished() {
+			// #217: the response completed without this body (HEAD, early
+			// finish). Sending more data would target a removed stream, so
+			// just stop; the caller has also set a read deadline that
+			// unblocks a Read parked between checks.
+			return
+		}
 		n, err := r.Body.Read(buf)
 		if n > 0 {
 			if sess.limiter != nil {
