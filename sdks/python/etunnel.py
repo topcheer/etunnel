@@ -167,6 +167,13 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
             ws.close()
             raise RuntimeError(f"etunnel: {m.get('code')}: {m.get('message', '')}")
 
+    # The 15s connect timeout above stays on the socket after the handshake
+    # (#241): the server pings every 30s, so an idle tunnel always hit the
+    # 15s socket timeout first and dropped with "read closed" every 15-45s of
+    # quiet. Liveness is the protocol's job (ping/150s server-side), so clear
+    # the socket timeout once the welcome exchange is done.
+    ws.settimeout(None)
+
     state = {"closed": False}
     streams: dict[int, dict] = {}
     lock = threading.Lock()
