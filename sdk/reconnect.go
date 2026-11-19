@@ -53,8 +53,14 @@ type ReconnectingTunnel struct {
 // credentials fail fast rather than looping forever) and then supervises the
 // connection in the background.
 func ConnectReconnecting(ctx context.Context, opts Options) (*ReconnectingTunnel, error) {
-	if opts.LocalAddr == "" {
-		return nil, errors.New("etunnel: LocalAddr is required")
+	// Validate exactly as Connect does. An empty LocalAddr is legitimate in
+	// multi-target mode - the -route entries supply the targets - and rejecting
+	// it here made -route unusable from the CLI, whose -reconnect defaults to on
+	// (#229). Delegating also fails fast on a malformed route spec instead of
+	// looping on it forever, which is why the check lives here rather than in
+	// the supervise loop.
+	if _, _, _, err := normalizeConnectArgs(opts); err != nil {
+		return nil, err
 	}
 	rctx, cancel := context.WithCancel(ctx)
 	r := &ReconnectingTunnel{
