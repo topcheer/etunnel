@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.18 — 2026-11-19
+
+- payments: NOWPayments IPN signature now verified over json.Number raw literals - every real crypto-payment IPN no longer 400s (#216); underpayment with mismatched types fails closed instead of open (#222) (PR #226)
+- payments: paid-activation persistence failures return an error and the webhook answers 5xx so the provider retries (#218); redundant double-write removed (PR #227)
+- sdk: ConnectReconnecting accepts multi-target routes - -route mode starts by default (#229) (PR #233)
+
 ## v1.7.17 — 2026-11-19
 
 - deps upgrade: go-webauthn/x 0.4.1, tungstenite 0.30, gh-actions-lua v13 (#211)
