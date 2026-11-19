@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.21 — 2026-11-19
+
+- (fill in)
+
 ## v1.7.20 — 2026-11-19
 
 - python sdk: clear the socket timeout after the handshake - idle tunnels no longer drop every 15-45s (#241) (PR #244)
