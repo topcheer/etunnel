@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.19 — 2026-11-19
+
+- stats loopback-only without admin token (#234); mesh peer DNS off gossip lock + gossip port fail-fast (#238); ACME renewal-window startup falls back to cached cert (#239)
+
 ## v1.7.18 — 2026-11-19
 
 - payments: NOWPayments IPN signature now verified over json.Number raw literals - every real crypto-payment IPN no longer 400s (#216); underpayment with mismatched types fails closed instead of open (#222) (PR #226)
