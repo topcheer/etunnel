@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,21 +74,43 @@ func (w *wildcardCert) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 }
 
 func (w *wildcardCert) loadOrObtain(ctx context.Context) error {
+	// #231: load whatever is on disk FIRST. A certificate with any remaining
+	// validity can serve traffic while renewal happens in the background, so a
+	// transient ACME failure (DNS provider outage, CA 5xx) must not stop the
+	// process from starting with 3+ weeks of perfectly good cert in hand - the
+	// old code only accepted disk certs with >30d left and discarded the rest.
+	// The 30-day renewal window itself is unchanged; it now also drives a
+	// best-effort renewal here, with renewLoop retrying in the background.
+	var disk *tls.Certificate
 	if cert, err := tls.LoadX509KeyPair(w.certPath, w.keyPath); err == nil {
-		if time.Until(leafExpiry(&cert)) > 30*24*time.Hour {
+		disk = &cert
+		w.mu.Lock()
+		w.cert = disk
+		w.mu.Unlock()
+	}
+	if disk == nil {
+		// No certificate at all: obtaining one is mandatory, there is nothing
+		// to fall back to.
+		cert, err := w.obtain(ctx)
+		if err != nil {
+			return err
+		}
+		w.mu.Lock()
+		w.cert = cert
+		w.mu.Unlock()
+		return nil
+	}
+	if time.Until(leafExpiry(disk)) <= 30*24*time.Hour {
+		// Renewal window reached: try once now so a fresh cert lands promptly
+		// when ACME is healthy, but a failure only logs - renewLoop retries.
+		if fresh, err := w.obtain(ctx); err == nil {
 			w.mu.Lock()
-			w.cert = &cert
+			w.cert = fresh
 			w.mu.Unlock()
-			return nil
+		} else {
+			log.Printf("acme: renewal at startup failed (serving the cached certificate, will retry): %v", err)
 		}
 	}
-	cert, err := w.obtain(ctx)
-	if err != nil {
-		return err
-	}
-	w.mu.Lock()
-	w.cert = cert
-	w.mu.Unlock()
 	return nil
 }
 
@@ -105,11 +128,17 @@ func (w *wildcardCert) renewLoop(ctx context.Context) {
 			if cert == nil || time.Until(leafExpiry(cert)) > 30*24*time.Hour {
 				continue
 			}
-			// Renewal window reached: obtain a fresh certificate.
+			// Renewal window reached: obtain a fresh certificate. A failure
+			// keeps serving the old cert and retries next tick - but it must
+			// be visible, not silent: the operator needs to know the cert is
+			// ageing while renewals fail (#231).
 			if fresh, err := w.obtain(ctx); err == nil {
 				w.mu.Lock()
 				w.cert = fresh
 				w.mu.Unlock()
+			} else {
+				days := int(time.Until(leafExpiry(cert)).Hours() / 24)
+				log.Printf("acme: renewal failed, %dd left on the current certificate (will retry): %v", days, err)
 			}
 		}
 	}
