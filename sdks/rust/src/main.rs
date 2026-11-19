@@ -195,8 +195,16 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     // unbounded read() blocked every sender (serve threads, pong) until the
     // next inbound frame arrived (#53 MED). MaybeTlsStream has no blanket
     // timeout setter, so drill into the concrete stream it wraps.
-    {
-        let tick = Some(Duration::from_millis(READ_TICK_MS));
+    //
+    // #242: the tick is applied AFTER the welcome exchange. The handshake
+    // loop below does not treat WouldBlock/TimedOut as retryable, so a 200ms
+    // tick during the handshake turned any welcome that arrived later than
+    // 200ms (cross-geo latency, busy server) into "read welcome: TimedOut" -
+    // the Rust CLI was effectively unusable off localhost. During the
+    // handshake we want no tick at all; the steady-state reader spawned
+    // further down DOES handle the tick (it drops the lock and flushes), so
+    // it keeps the #53 guarantee.
+    fn apply_tick(ws: &tungstenite::WebSocket<MaybeTlsStream<TcpStream>>, tick: Option<Duration>) {
         let res = match ws.get_ref() {
             MaybeTlsStream::Plain(s) => s.set_read_timeout(tick),
             MaybeTlsStream::Rustls(s) => s.get_ref().set_read_timeout(tick),
@@ -209,6 +217,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             eprintln!("etunnel: read timeout not applied: {}", e);
         }
     }
+    apply_tick(&ws, None); // handshake phase: no tick (#242)
 
     let ws = Arc::new(Mutex::new(ws));
     // Outbound relay: senders hand messages to the reader loop, which flushes
@@ -255,6 +264,10 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     let ws2 = Arc::clone(&ws);
     let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
+    // Welcome received: arm the read tick for the steady-state reader (#242).
+    // It handles WouldBlock/TimedOut by design (drops the lock, flushes), so
+    // the #53 anti-head-of-line guarantee is preserved from here on.
+    apply_tick(&ws2.lock().unwrap(), Some(Duration::from_millis(READ_TICK_MS)));
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
         let mut out_rx = out_rx;
