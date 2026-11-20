@@ -721,12 +721,22 @@ func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
 		s.closeMsg.Store(reason)
 		// Cluster: release the subdomain so peers stop forwarding to us.
+		// #220: Release does blocking per-peer mesh sends; run it off the
+		// close path so a flapping mesh cannot hold this Once (and the four
+		// goroutines waiting on it) hostage. Its result was already
+		// best-effort everywhere.
 		if s.srv != nil && s.srv.router != nil && s.sub != "" {
-			s.srv.router.Release(s.sub)
+			go s.srv.router.Release(s.sub)
 		}
 		// Cluster: drop the anonymous per-IP counter we took at handshake.
+		// #220: bounded deadline - a stalled Redis must never park the close
+		// (go-redis defaults alone can block for tens of seconds).
 		if s.srv != nil && s.srv.counter != nil && s.account == nil && s.ip != "" {
-			_ = s.srv.counter.Decr(context.Background(), "ip:"+s.ip)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := s.srv.counter.Decr(ctx, "ip:"+s.ip); err != nil {
+				s.srv.logf("session %s: per-IP counter decr failed: %v", s.id, err)
+			}
+			cancel()
 		}
 		s.mu.Lock()
 		ttl := s.ttlTimer
