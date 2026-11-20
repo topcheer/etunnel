@@ -27,8 +27,12 @@ const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-auth
 function pickHostPort(local) {
   if (/^\d+$/.test(String(local))) return { host: '127.0.0.1', port: Number(local) };
   const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(String(local));
-  if (m) return { host: m[1].replace(/^[\[\]]|$/g, ''), port: Number(m[2]) };
-  return { host: String(local), port: 80 };
+  // #243 L7: keep the brackets on IPv6 hosts - stripping them makes
+  // `http://${host}:${port}` an invalid URL - and wrap a bare IPv6 literal.
+  if (m) return { host: m[1], port: Number(m[2]) };
+  const h = String(local);
+  if (h.includes(':') && !h.startsWith('[')) return { host: `[${h}]`, port: 80 };
+  return { host: h, port: 80 };
 }
 
 async function connect(server, local, opts = {}) {
@@ -115,7 +119,7 @@ async function connect(server, local, opts = {}) {
     for (const [k, vs] of Object.entries(st.req.headers || {})) {
       const lk = k.toLowerCase();
       if (HOP.has(lk)) { if (lk === 'connection' && /upgrade/i.test(String(vs))) isHop = true; continue; }
-      headers[k] = vs.join(', ');
+      headers[k] = vs; // #243 M6: keep arrays - joining with commas corrupts multi-value headers
     }
     let target = `http://${host}:${port}`;
     let path = st.req.path;
