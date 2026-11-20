@@ -288,13 +288,16 @@ func (r *meshRouter) owns(sub string) bool {
 	return r.ours[sub]
 }
 
-// Claim marks the subdomain ours and tells the peers.
-func (r *meshRouter) Claim(sub string) {
+// Claim marks the subdomain ours and tells the peers. Gossip delivery is
+// retried by memberlist and a 10s rebroadcast backs it up (#191), so there
+// is no synchronous failure to report.
+func (r *meshRouter) Claim(sub string) error {
 	r.mu.Lock()
 	r.ours[sub] = true
 	delete(r.owner, sub)
 	r.mu.Unlock()
 	r.broadcast(meshEvent{Kind: "claim", From: r.self, Subs: []string{sub}})
+	return nil
 }
 
 // Release drops ownership and tells the peers.

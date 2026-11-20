@@ -13,6 +13,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -31,6 +34,14 @@ type stickyRouter struct {
 	cancel context.CancelFunc
 	hc     *http.Client
 	ctx0   context.Context
+	// Injectable Redis seams (#236): the concrete client cannot be faked
+	// without a live server, so the routing ops go through these funcs.
+	setRoute func(ctx context.Context, key string, val string, ttl time.Duration) error
+	getRoute func(ctx context.Context, key string) (string, error)
+	delRoute func(ctx context.Context, keys ...string) error
+	// hbFails counts consecutive failed heartbeat ticks (guarded by mu).
+	// Three in a row (~15s, one lease) relinquish local ownership (#236).
+	hbFails int
 }
 
 func newStickyRouter(redisURL, advertise string) (*stickyRouter, error) {
@@ -43,6 +54,15 @@ func newStickyRouter(redisURL, advertise string) (*stickyRouter, error) {
 		self: advertise,
 		ours: map[string]bool{},
 		hc:   &http.Client{Timeout: 30 * time.Second},
+	}
+	r.setRoute = func(ctx context.Context, key, val string, ttl time.Duration) error {
+		return r.rdb.Set(ctx, key, val, ttl).Err()
+	}
+	r.getRoute = func(ctx context.Context, key string) (string, error) {
+		return r.rdb.Get(ctx, key).Result()
+	}
+	r.delRoute = func(ctx context.Context, keys ...string) error {
+		return r.rdb.Del(ctx, keys...).Err()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.ctx0 = ctx
@@ -59,16 +79,55 @@ func (r *stickyRouter) heartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			r.mu.RLock()
-			subs := make([]string, 0, len(r.ours))
-			for s := range r.ours {
-				subs = append(subs, s)
-			}
-			r.mu.RUnlock()
-			for _, s := range subs {
-				r.rdb.Set(ctx, "et:route:"+s, r.self, routeLeaseTTL)
+			r.heartbeatTick(ctx)
+		}
+	}
+}
+
+// heartbeatTick renews every owned lease once and tracks consecutive
+// failures. Redis swallowing lease renewals is how a live node ends up
+// "expiring" into split-brain (#236): after three failed ticks (~one lease
+// lifetime) the node relinquishes its ownership so peers take over
+// cleanly instead of racing a resurrected key.
+func (r *stickyRouter) heartbeatTick(ctx context.Context) {
+	r.mu.RLock()
+	subs := make([]string, 0, len(r.ours))
+	for s := range r.ours {
+		subs = append(subs, s)
+	}
+	r.mu.RUnlock()
+	if len(subs) == 0 {
+		r.mu.Lock()
+		r.hbFails = 0
+		r.mu.Unlock()
+		return
+	}
+	var firstErr error
+	failed := 0
+	for _, s := range subs {
+		if err := r.setRoute(ctx, "et:route:"+s, r.self, routeLeaseTTL); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
 			}
 		}
+	}
+	r.mu.Lock()
+	if failed > 0 {
+		r.hbFails++
+	} else {
+		r.hbFails = 0
+	}
+	fails := r.hbFails
+	r.mu.Unlock()
+	if failed > 0 {
+		log.Printf("etunneld: sticky: heartbeat failed for %d/%d route(s): %v", failed, len(subs), firstErr)
+	}
+	if fails == 3 {
+		log.Printf("etunneld: sticky: %d consecutive heartbeat ticks failed; relinquishing %d owned route(s) so peers take over cleanly", fails, len(subs))
+		r.mu.Lock()
+		r.ours = map[string]bool{}
+		r.mu.Unlock()
 	}
 }
 
@@ -81,27 +140,43 @@ func (r *stickyRouter) Lookup(sub string) string {
 	if own {
 		return ""
 	}
-	v, err := r.rdb.Get(r.ctx0, "et:route:"+sub).Result()
-	if err != nil || v == r.self {
-		return ""
+	v, err := r.getRoute(r.ctx0, "et:route:"+sub)
+	if err == nil && v != r.self {
+		return v
 	}
-	return v
+	// #236: a missing key genuinely means "nobody owns it"; any other
+	// error means the routing table is UNREADABLE - surface it, because
+	// returning "" here lets any instance accept the subdomain and is the
+	// front door to a split-brain.
+	if err != nil && !errors.Is(err, redis.Nil) {
+		log.Printf("etunneld: sticky: route lookup for %s failed (treated as unowned): %v", sub, err)
+	}
+	return ""
 }
 
-// Claim writes the route with a lease.
-func (r *stickyRouter) Claim(sub string) {
+// Claim writes the route with a lease. An error means the cluster cannot
+// see this ownership: the caller must fail the handshake rather than run
+// a tunnel only this node knows about (#236).
+func (r *stickyRouter) Claim(sub string) error {
+	if err := r.setRoute(r.ctx0, "et:route:"+sub, r.self, routeLeaseTTL); err != nil {
+		log.Printf("etunneld: sticky: claim %s failed: tunnel would be invisible to the cluster: %v", sub, err)
+		return fmt.Errorf("etunnel: claim route %s: %w", sub, err)
+	}
 	r.mu.Lock()
 	r.ours[sub] = true
 	r.mu.Unlock()
-	r.rdb.Set(r.ctx0, "et:route:"+sub, r.self, routeLeaseTTL)
+	return nil
 }
 
-// Release deletes the route.
+// Release deletes the route. Best effort by design (the lease expires
+// anyway), but failures are logged instead of silently swallowed (#236).
 func (r *stickyRouter) Release(sub string) {
 	r.mu.Lock()
 	delete(r.ours, sub)
 	r.mu.Unlock()
-	r.rdb.Del(r.ctx0, "et:route:"+sub)
+	if err := r.delRoute(r.ctx0, "et:route:"+sub); err != nil {
+		log.Printf("etunneld: sticky: release %s failed (key expires with the lease): %v", sub, err)
+	}
 }
 
 // Forward proxies to the owner (mixed-mode deployments; normally the LB does it).
@@ -165,7 +240,12 @@ func (r *stickyRouter) Close() error {
 	}
 	r.mu.RUnlock()
 	if len(keys) > 0 {
-		r.rdb.Del(context.Background(), keys...)
+		if err := r.delRoute(context.Background(), keys...); err != nil {
+			log.Printf("etunneld: sticky: close failed to delete %d route key(s) (they expire with their leases): %v", len(keys), err)
+		}
+	}
+	if r.rdb == nil {
+		return nil // constructed without a client (tests inject the seams)
 	}
 	return r.rdb.Close()
 }

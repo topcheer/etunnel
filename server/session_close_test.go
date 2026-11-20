@@ -32,7 +32,7 @@ func (blockingCounter) SetTTL(ctx context.Context, key string, d time.Duration) 
 type blockingRouter struct{ released chan string }
 
 func (b *blockingRouter) Lookup(sub string) string { return "" }
-func (b *blockingRouter) Claim(sub string)         {}
+func (b *blockingRouter) Claim(sub string) error   { return nil }
 func (b *blockingRouter) Release(sub string)       { <-make(chan struct{}) }
 func (b *blockingRouter) Forward(sub string, w http.ResponseWriter, req *http.Request) bool {
 	return false

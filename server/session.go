@@ -401,8 +401,17 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cluster: announce ownership (resume / custom / random all land here).
+	// #236: a claim the cluster cannot see must fail the handshake - the
+	// alternative is a tunnel only this node knows about (split-brain URL).
 	if s.router != nil && sess.sub != "" {
-		s.router.Claim(sess.sub)
+		if err := s.router.Claim(sess.sub); err != nil {
+			s.logf("session %s: cluster claim for %s failed: %v", sess.id, sess.sub, err)
+			cancel()
+			releaseIPSlot()
+			s.reg.Release(sess.sub, sess)
+			s.wsErrorClose(ws, protocol.ErrCodeServerShutdown, "cluster routing unavailable, try again")
+			return
+		}
 	}
 
 	sess.hostname = sess.sub + "." + s.cfg.Domain
