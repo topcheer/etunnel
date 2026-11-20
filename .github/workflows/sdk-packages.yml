@@ -503,6 +503,81 @@ jobs:
             mvn -q deploy:deploy-file -DrepositoryId=clojars -Durl=https://repo.clojars.org \
               -Dfile=/tmp/etunnel-clj.jar -DpomFile=pom.xml
           fi
+  publish-android:
+    # Maven Central (AAR, dev.ggcode:etunnel-android) - #260. Uses the OIDC
+    # trusted-publishing pipeline (id-token:write + environment), same as the
+    # npm/pypi/rubygems/nuget/hex/pub/jsr jobs above; no portal credentials
+    # stored in secrets.
+    # One-time setup on central.sonatype.com: account -> Publisher -> Trusted
+    # Publishing: register namespace dev.ggcode, repository topcheer/etunnel,
+    # workflow file sdk-packages.yml, environment "maven" (create that GH
+    # environment first). Signing: Central still requires GPG signatures, so
+    # the same GPG_PRIVATE_KEY/GPG_PASSPHRASE secrets publish-central uses
+    # are injected as vanniktech in-memory key properties. If the OIDC
+    # exchange fails (trusted publisher not yet registered), the job falls
+    # back to the classic Portal user token (MAVEN_USERNAME/MAVEN_PASSWORD),
+    # which publish-central already relies on.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC token for Maven Central trusted publishing
+      contents: read
+    environment: maven
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Pinned Gradle; the runner's preinstalled Android SDK (ANDROID_HOME)
+      # satisfies AGP, everything else resolves from Google/Maven Central.
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - name: Publish etunnel-android AAR to Maven Central (idempotent)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          V=$(sed -n 's/.*coordinates("dev.ggcode", "etunnel-android", "\([^"]*\)").*/\1/p' sdks/android/build.gradle.kts)
+          echo "etunnel-android version: $V"
+          if curl -sf "https://repo1.maven.org/maven2/dev/ggcode/etunnel-android/${V}/etunnel-android-${V}.pom" > /dev/null; then
+            echo "central: etunnel-android ${V} already published, skipping"
+            exit 0
+          fi
+          # OIDC trusted publishing: exchange the Actions JWT for short-lived
+          # Central Portal credentials; fall back to the stored Portal token.
+          USER=""
+          PASS=""
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            JWT=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=central.sonatype.com" | jq -r '.value // empty')
+            if [ -n "$JWT" ]; then
+              RESP=$(curl -sS -X POST https://central.sonatype.com/api/internal/trusted_publishing/exchange \
+                -H 'Content-Type: application/json' -d "{\"token\":\"$JWT\"}" || true)
+              USER=$(echo "$RESP" | jq -r '.username // empty')
+              PASS=$(echo "$RESP" | jq -r '.password // empty')
+            fi
+          fi
+          if [ -z "$USER" ]; then
+            echo "OIDC exchange unavailable - falling back to Portal token credentials"
+            USER="$MAVEN_USERNAME"; PASS="$MAVEN_PASSWORD"
+          fi
+          if [ -z "$USER" ]; then
+            echo "::error::no Maven Central credentials: register the trusted publisher (environment maven) or provide MAVEN_USERNAME/MAVEN_PASSWORD"
+            exit 1
+          fi
+          # In-memory GPG signing key (vanniktech signingInMemoryKey).
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import || true
+          export ORG_GRADLE_PROJECT_mavenCentralUsername="$USER"
+          export ORG_GRADLE_PROJECT_mavenCentralPassword="$PASS"
+          export ORG_GRADLE_PROJECT_signingInMemoryKey="$(gpg --batch --armor --export-secret-keys 2>/dev/null || printf '%s' "$GPG_PRIVATE_KEY")"
+          export ORG_GRADLE_PROJECT_signingInMemoryKeyPassword="$GPG_PASSPHRASE"
+          cd sdks/android
+          gradle publishToMavenCentral
+
   #
   # publish-others:
   #   # crates.io / RubyGems / NuGet / Hex / LuaRocks / Clojars / Maven Central:

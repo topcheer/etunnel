@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Library manifest: merged into the consuming app. Only INTERNET is
+     required; foreground-service / battery permissions are app policy
+     (see README "Doze and foreground services"). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
