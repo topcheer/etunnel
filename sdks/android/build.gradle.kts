@@ -1,3 +1,5 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
 // etunnel Android SDK build (#260): Kotlin + OkHttp3 WebSocket client,
 // packaged as an AAR on Maven Central (dev.ggcode:etunnel-android).
 //
@@ -87,6 +89,13 @@ mavenPublishing {
     // mavenCentralUsername/mavenCentralPassword Gradle properties (env
     // ORG_GRADLE_PROJECT_* in CI). Publish tasks are only invoked by the
     // sdk-packages publish-android job on v* tags.
-    publishToMavenCentral()
+    // CENTRAL_PORTAL is required: vanniktech 0.30.0's no-arg
+    // publishToMavenCentral() defaults to the EOL Sonatype OSSRH Nexus host
+    // (stagingProfiles API), which answers 402 for every account now
+    // (sdk-packages run 44769516350). The Portal token fallback
+    // (publish-central's MAVEN_USERNAME/PASSWORD) publishes fine against
+    // this host. automaticRelease=true so tag runs publish unattended;
+    // the default false would leave the deployment pending manual release.
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     signAllPublications()
 }
