@@ -1,9 +1,25 @@
 plugins {
-    kotlin("jvm") version "1.9.24"
+    kotlin("jvm") version "2.2.0"
 }
 
 group = "com.ggcode"
 version = "1.4.0"
+
+kotlin {
+    jvmToolchain(17)
+}
+
+// The SDK is a single file at the repo root (the Makefile's packaging step
+// and the generated READMEs reference `kotlinc Etunnel.kt` there, so the
+// location is load-bearing). example/ and tests/ are user-facing snippets,
+// not part of the artifact. Without this block gradle built NOTHING
+// (NO-SOURCE) - the SDK had no real compile verification (#214).
+sourceSets {
+    main {
+        kotlin.srcDir(".")
+        kotlin.exclude("example/**", "tests/**", "build/**")
+    }
+}
 
 repositories { mavenCentral() }
 
