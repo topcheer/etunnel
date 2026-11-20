@@ -1,0 +1,5 @@
+.build/
+.cxx/
+oh_modules/
+local.properties
+*.har
