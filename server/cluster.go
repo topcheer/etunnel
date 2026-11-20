@@ -53,8 +53,10 @@ type Router interface {
 	// Lookup returns the advertise address of the owner, or "" when we own it
 	// or nobody does (fresh subdomain: we take it and broadcast).
 	Lookup(sub string) string
-	// Claim broadcasts that we now own sub.
-	Claim(sub string)
+	// Claim broadcasts that we now own sub. An error means the ownership
+	// could not be recorded cluster-wide; the caller must fail the
+	// handshake - a tunnel the cluster cannot see is split-brain (#236).
+	Claim(sub string) error
 	// Release broadcasts that we no longer own sub (going away or tunnel died).
 	Release(sub string)
 	// Forward proxies an HTTP exchange to the peer that owns sub.
