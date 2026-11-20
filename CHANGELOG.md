@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.23 — 2026-11-20
+
+- sdks: cross-SDK stream caps and client ping (#243 M2/M3) (PR #262)
+- docs: declare Swift SDK Apple platforms + planned Android/HarmonyOS (#260)
+- docs(readme): annotate visionOS/Catalyst as untested in the Swift SDK platform note (#260) (PR #261)
+
 ## v1.7.22 — 2026-11-20
 
 - auth: only trust provider-verified emails in the OAuth callback (#215) (PR #247)
