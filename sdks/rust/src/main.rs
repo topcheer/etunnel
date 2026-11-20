@@ -34,12 +34,25 @@ pub struct Tunnel {
     /// Set once the reader loop sees the connection end (error, close or bye).
     /// The CLI supervisor polls it to decide when to reconnect.
     pub closed: Arc<AtomicBool>,
+    /// Outbound relay handle for close() (#243 M8): sending a bye here is
+    /// flushed by the reader loop, which owns the socket lock.
+    out: Option<mpsc::Sender<Message>>,
 }
 
 impl Tunnel {
-    /// Dropping the tunnel process / task ends the connection; the server
-    /// detects the closed socket and frees the subdomain.
-    pub fn close(&self) {}
+    /// Close tells the server we are going away (bye) so the subdomain is
+    /// freed promptly, then marks the tunnel closed; the reader flushes the
+    /// queue and exits when the server hangs up. Previously a no-op that
+    /// leaked the connection until process exit (#243 M8).
+    pub fn close(&self) {
+        if let Some(tx) = &self.out {
+            tx.send(Message::Text(
+                "{\"type\":\"bye\",\"reason\":\"client close\"}".into(),
+            ))
+            .ok();
+        }
+        self.closed.store(true, Ordering::SeqCst);
+    }
 }
 
 fn frame(kind: u8, sid: u32, payload: &[u8]) -> Message {
@@ -179,7 +192,7 @@ pub fn connect_full_resume(server: &str, local_addr: &str, token: Option<&str>, 
 fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Option<&str>, resume: Option<&str>) -> Result<Tunnel, String> {
     let mut request = server
         .into_client_request()
-        .map_err(|e| format!("bad url: {}", e))?;
+        .map_err(|e| format!("etunnel: bad url: {}", e))?;
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         "etunnel-v1".parse().unwrap(),
@@ -188,7 +201,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
 
     let _ = cfg;
     let (ws, _resp) = tungstenite::connect(request)
-        .map_err(|e| format!("connect: {}", e))?;
+        .map_err(|e| format!("etunnel: connect: {}", e))?;
 
     // Bound every blocking read so the reader periodically releases the
     // socket lock and drains the outbound queue: holding the lock across an
@@ -268,6 +281,9 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     // It handles WouldBlock/TimedOut by design (drops the lock, flushes), so
     // the #53 anti-head-of-line guarantee is preserved from here on.
     apply_tick(&ws2.lock().unwrap(), Some(Duration::from_millis(READ_TICK_MS)));
+    // The reader thread gets its own clone; the original stays with the
+    // Tunnel so close() can enqueue the bye (#243 M8).
+    let reader_tx = out_tx.clone();
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
         let mut out_rx = out_rx;
@@ -300,7 +316,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                         });
                     } else if t.contains("\"type\":\"ping\"") {
                         let ts = extract_num(&t, "ts").unwrap_or(0.0) as i64;
-                        out_tx.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
+                        reader_tx.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
                     } else if t.contains("\"type\":\"bye\"") {
                         break;
                     }
@@ -316,7 +332,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                         0x01 => st.body.extend_from_slice(payload),
                         0x02 => {
                             let st = streams.remove(&sid).unwrap();
-                            let tx3 = out_tx.clone();
+                            let tx3 = reader_tx.clone();
                             let local3 = local.clone();
                             thread::spawn(move || serve(tx3, local3, sid, st));
                         }
@@ -331,7 +347,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
         closed2.store(true, Ordering::SeqCst);
     });
 
-    Ok(Tunnel { url, resume_token, closed })
+    Ok(Tunnel { url, resume_token, closed, out: Some(out_tx) })
 }
 
 /// Reader-side flush of the outbound relay: sends every queued message on the
@@ -454,6 +470,10 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
         req.send_bytes(&body)
     };
 
+    // #243 M7: bodies are buffered; a response over the cap must not end
+    // with a clean FIN that fakes a complete 200 - detect and RST instead.
+    const BODY_CAP: usize = 64 * 1024 * 1024;
+    let mut truncated = false;
     let (status, headers, out) = match resp {
         Ok(r) => {
             let status = r.status();
@@ -465,12 +485,20 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
                 }
             }
             let mut buf = Vec::new();
-            r.into_reader().take(64 * 1024 * 1024).read_to_end(&mut buf).unwrap_or(0);
+            let _ = r.into_reader().take(BODY_CAP as u64 + 1).read_to_end(&mut buf);
+            if buf.len() > BODY_CAP {
+                buf.truncate(BODY_CAP);
+                truncated = true;
+            }
             (status, hdrs, buf)
         }
         Err(ureq::Error::Status(code, r)) => {
             let mut buf = Vec::new();
-            r.into_reader().read_to_end(&mut buf).unwrap_or(0);
+            let _ = r.into_reader().take(BODY_CAP as u64 + 1).read_to_end(&mut buf);
+            if buf.len() > BODY_CAP {
+                buf.truncate(BODY_CAP);
+                truncated = true;
+            }
             (code, Vec::new(), buf)
         }
         Err(e) => {
@@ -492,7 +520,14 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
     for chunk in out.chunks(MAXP) {
         tx.send(frame(0x01, sid, chunk)).ok();
     }
-    tx.send(frame(0x02, sid, b"")).ok();
+    if truncated {
+        // #243 M7: the visitor must see a reset, not a "complete" 200 with
+        // a missing tail.
+        eprintln!("etunnel: stream {}: response exceeded the 64MiB buffer, sending RST", sid);
+        tx.send(frame(0x03, sid, b"")).ok();
+    } else {
+        tx.send(frame(0x02, sid, b"")).ok();
+    }
 }
 
 fn backoff_ms(attempt: u32) -> u64 {
@@ -604,7 +639,9 @@ fn main() {
                     resume = Some(t.resume_token.clone());
                 }
                 if !reconnect {
-                    loop { thread::sleep(std::time::Duration::from_secs(3600)); }
+                    // #243 L4: without reconnect there is nothing to wait
+                    // for - exit instead of sleeping forever.
+                    std::process::exit(0);
                 }
                 while !t.closed.load(Ordering::SeqCst) {
                     thread::sleep(std::time::Duration::from_millis(200));
