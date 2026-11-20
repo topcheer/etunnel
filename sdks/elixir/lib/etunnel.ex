@@ -398,8 +398,9 @@ defmodule Etunnel do
             hdrs =
               resp_headers
               |> Enum.reject(fn {k, _} -> to_string(k) |> String.downcase() |> then(&(&1 in @hop)) end)
-              |> Enum.map(fn {k, v} -> {to_string(k), [to_string(v)]} end)
-              |> Map.new()
+              # #243 M6: group_by keeps repeated headers (Set-Cookie) as
+              # arrays instead of Map.new keeping only the last value.
+              |> Enum.group_by(fn {k, _} -> to_string(k) end, fn {_, v} -> to_string(v) end)
 
             send(ws_pid, {:etunnel_send, {:text, Jason.encode!(%{type: "res", streamId: sid, status: status, headers: hdrs})}})
             send_chunks(ws_pid, sid, out || "", 0)

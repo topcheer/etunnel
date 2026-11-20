@@ -207,11 +207,19 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
         try:
             with urllib.request.urlopen(r, timeout=60) as resp:
                 status = resp.status
-                rh = {k: [v] for k, v in resp.getheaders() if k.lower() not in HOP}
+                rh: dict[str, list[str]] = {}
+                for k, v in resp.getheaders():  # #243 M6: aggregate - a dict comp drops duplicate keys (Set-Cookie)
+                    if k.lower() in HOP:
+                        continue
+                    rh.setdefault(k, []).append(v)
                 payload = resp.read()
         except urllib.error.HTTPError as e:
             status = e.code
-            rh = {k: [v] for k, v in e.headers.items() if k.lower() not in HOP}
+            rh = {}
+            for k, v in e.headers.items():  # #243 M6: items() yields every header line
+                if k.lower() in HOP:
+                    continue
+                rh.setdefault(k, []).append(v)
             payload = e.read()
         except Exception as e:  # noqa: BLE001
             with lock:

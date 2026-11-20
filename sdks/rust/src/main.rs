@@ -478,10 +478,12 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
         Ok(r) => {
             let status = r.status();
             let mut hdrs: Vec<(String, String)> = Vec::new();
+            // #243 M6: all(name) returns every value - header(name)
+            // returns only the first, losing repeated headers (Set-Cookie).
             for name in r.headers_names() {
                 if hop(&name) { continue; }
-                if let Some(v) = r.header(&name) {
-                    hdrs.push((name, v.to_string()));
+                for v in r.all(&name) {
+                    hdrs.push((name.clone(), v.to_string()));
                 }
             }
             let mut buf = Vec::new();
@@ -493,13 +495,22 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
             (status, hdrs, buf)
         }
         Err(ureq::Error::Status(code, r)) => {
+            // #243 M6: error responses keep their headers (they were
+            // dropped entirely before) and get the same full-value scan.
+            let mut hdrs: Vec<(String, String)> = Vec::new();
+            for name in r.headers_names() {
+                if hop(&name) { continue; }
+                for v in r.all(&name) {
+                    hdrs.push((name.clone(), v.to_string()));
+                }
+            }
             let mut buf = Vec::new();
             let _ = r.into_reader().take(BODY_CAP as u64 + 1).read_to_end(&mut buf);
             if buf.len() > BODY_CAP {
                 buf.truncate(BODY_CAP);
                 truncated = true;
             }
-            (code, Vec::new(), buf)
+            (code, hdrs, buf)
         }
         Err(e) => {
             tx.send(Message::Text(format!(

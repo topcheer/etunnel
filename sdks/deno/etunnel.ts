@@ -62,8 +62,11 @@ export interface Tunnel {
 function pickHostPort(local: string | number): { host: string; port: number } {
   if (/^\d+$/.test(String(local))) return { host: '127.0.0.1', port: Number(local) };
   const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(String(local));
-  if (m) return { host: m[1].replace(/[[\]]/g, ''), port: Number(m[2]) };
-  return { host: String(local), port: 80 };
+  // #243 L7: keep IPv6 brackets; wrap bare IPv6 literals.
+  if (m) return { host: m[1], port: Number(m[2]) };
+  const h = String(local);
+  if (h.includes(':') && !h.startsWith('[')) return { host: `[${h}]`, port: 80 };
+  return { host: h, port: 80 };
 }
 
 /**
@@ -116,6 +119,9 @@ export function routeFor(routes: Route[], pathAndQuery: string): { addr: string;
 }
 
 export async function connect(server: string, local: string | number, opts: Options = {}): Promise<Tunnel> {
+  // #243 L5: an explicit undefined/null local must not silently target
+  // 127.0.0.1:80 - fail like the node and python SDKs.
+  if (local === undefined || local === null) throw new Error('etunnel: local address is required');
   const routes = opts.routes ? normalizeRoutes(opts.routes) : null;
 
   const { host, port } = pickHostPort(local);
@@ -173,10 +179,10 @@ export async function connect(server: string, local: string | number, opts: Opti
 
   async function handle(st: { req: any; body: Uint8Array[] }, id: number) {
     const body = concat(st.body);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string | string[]> = {};
     for (const [k, vs] of Object.entries(st.req.headers || {})) {
       if (HOP.has(k.toLowerCase())) continue;
-      headers[k] = (vs as string[]).join(', ');
+      headers[k] = vs as string[]; // #243 M6: keep arrays - comma-joining corrupts multi-value headers
     }
     let resp: Response;
     try {
@@ -195,7 +201,9 @@ export async function connect(server: string, local: string | number, opts: Opti
       }
       resp = await fetch(`http://${dialAddr}${dialPath}`, {
         method: st.req.method,
-        headers,
+        // fetch accepts string[] header values; the DOM HeadersInit type
+        // does not know that yet (#243 M6).
+        headers: headers as unknown as Record<string, string>,
         // Copy into a Uint8Array<ArrayBuffer>: newer Deno lib.dom types only
         // accept that as BodyInit, while concat() returns the looser
         // Uint8Array<ArrayBufferLike>.

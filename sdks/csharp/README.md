@@ -79,3 +79,10 @@ byte-for-byte, an exact hit bottoms out at `/`; no matching route (only
 possible without a `/` fallback) answers `404` at the SDK edge.
 
 > Redirect note: with `strip`, a backend 302 to an absolute path (`/users/next`) lands on the fallback route on the next hop - backends should return relative redirects or keep the prefix (same as nginx `proxy_pass` with trailing slash; see #155).
+
+> Throughput note (#243 M9): the response header block, DATA and FIN for a
+> stream are sent while holding the tunnel's send gate, so one very large
+> response can delay other streams on the same tunnel (head-of-line). This
+> is a deliberate trade of the single-lock design (#54); the Go SDK and the
+> other per-stream-dispatch SDKs do not have this limitation. If you tunnel
+> large payloads alongside latency-sensitive traffic, prefer those SDKs.
