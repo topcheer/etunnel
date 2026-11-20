@@ -10,6 +10,12 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
+// Release version for etunnel-android: stamped by scripts/bump-release.py,
+// which keeps this line and the coordinates() version below in lockstep.
+// CI's sdk-packages publish-android job greps the coordinates() literal for
+// the version it idempotency-checks against Maven Central.
+version = "1.7.24"
+
 android {
     namespace = "dev.ggcode.etunnel"
     compileSdk = 35
@@ -46,7 +52,7 @@ dependencies {
 }
 
 mavenPublishing {
-    coordinates("dev.ggcode", "etunnel-android", "1.4.0")
+    coordinates("dev.ggcode", "etunnel-android", "1.7.24")
 
     pom {
         name.set("etunnel-android")

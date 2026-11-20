@@ -33,10 +33,19 @@ MANIFESTS = {
     "sdks/swift":                   ("tag",   None),  # SPM has no version field
     "sdks/c":                       ("tag",   None),
     "sdks/cpp":                     ("tag",   None),
+    "sdks/android/build.gradle.kts": ("gradle", None),  # see ANDROID_* patterns below
     "sdks/kotlin":                  ("jar",   None),  # ships the java artifact
     "sdks/scala":                   ("jar",   None),
     "sdk (go module)":              ("tag",   None),  # versioned by git tags
 }
+
+# Android AAR (#260): the release version lives in two places that must
+# agree - the Gradle project version line and the vanniktech coordinates()
+# literal. CI's sdk-packages publish-android job greps coordinates() for the
+# version it idempotency-checks against Maven Central, so both are stamped
+# in one pass; --check fails if either drifts.
+ANDROID_VERSION_LINE = r'(?m)^version = "[^"]*"'
+ANDROID_COORDS_LINE = r'(?m)coordinates\("dev\.ggcode", "etunnel-android", "[^"]*"\)'
 
 def read_current(path: pathlib.Path, kind, spec):
     if kind == "json":
@@ -51,6 +60,14 @@ def read_current(path: pathlib.Path, kind, spec):
         if not m: return None
         s = m.group(1).strip()
         return s if re.fullmatch(r"[\d.]+", s) else None
+    if kind == "gradle":
+        s = path.read_text()
+        got = []
+        for pat in (ANDROID_VERSION_LINE, ANDROID_COORDS_LINE):
+            m = re.search(pat, s)
+            if not m: return None
+            got.append(re.search(r"[\d]+\.[\d]+\.[\d]+", m.group(0)).group(0))
+        return got[0] if got[0] == got[1] else None
     return "tag"
 
 def stamp(path: pathlib.Path, kind, spec, v):
@@ -68,6 +85,13 @@ def stamp(path: pathlib.Path, kind, spec, v):
         m = re.search(re.escape(tag) + r"([^<]*)", s)
         if not m: return False
         path.write_text(s[:m.start()] + tag + v + s[m.end():]); return True
+    if kind == "gradle":
+        for pat in (ANDROID_VERSION_LINE, ANDROID_COORDS_LINE):
+            m = re.search(pat, s)
+            if not m: return False
+            new = re.sub(r"[\d]+\.[\d]+\.[\d]+", v, m.group(0), count=1)
+            s = s[:m.start()] + new + s[m.end():]
+        path.write_text(s); return True
     return True
 
 def bump(v):
