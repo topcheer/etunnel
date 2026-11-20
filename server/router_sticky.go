@@ -14,6 +14,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,8 @@ func (r *stickyRouter) Release(sub string) {
 }
 
 // Forward proxies to the owner (mixed-mode deployments; normally the LB does it).
+// Upgrade requests take the raw hijacked path: http.Client cannot carry a
+// 101 both ways (#235).
 func (r *stickyRouter) Forward(sub string, w http.ResponseWriter, req *http.Request) bool {
 	if req.Header.Get("X-Etunnel-Forward") != "" {
 		return false // loop guard
@@ -111,6 +114,9 @@ func (r *stickyRouter) Forward(sub string, w http.ResponseWriter, req *http.Requ
 	target := r.Lookup(sub)
 	if target == "" {
 		return false
+	}
+	if hasUpgrade(req.Header) {
+		return forwardUpgraded(target, w, req, "X-Etunnel-Forward", r.self)
 	}
 	out := req.Clone(req.Context())
 	out.URL.Scheme = "http"
@@ -122,7 +128,14 @@ func (r *stickyRouter) Forward(sub string, w http.ResponseWriter, req *http.Requ
 		return false
 	}
 	defer resp.Body.Close()
+	// #235: hop-by-hop headers (Connection, Transfer-Encoding, ...) are
+	// the transport's business; re-sending them verbatim corrupts the
+	// visitor response (double TE / wrong Content-Length).
+	tokens := connectionTokensFromMap(resp.Header)
 	for k, vs := range resp.Header {
+		if isHopHeader(k) || tokens[strings.ToLower(k)] {
+			continue
+		}
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
