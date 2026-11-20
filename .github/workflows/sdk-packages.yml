@@ -553,12 +553,15 @@ jobs:
           PASS=""
           if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
             JWT=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=central.sonatype.com" | jq -r '.value // empty')
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=central.sonatype.com" | jq -r '.value // empty' 2>/dev/null || true)
             if [ -n "$JWT" ]; then
               RESP=$(curl -sS -X POST https://central.sonatype.com/api/internal/trusted_publishing/exchange \
                 -H 'Content-Type: application/json' -d "{\"token\":\"$JWT\"}" || true)
-              USER=$(echo "$RESP" | jq -r '.username // empty')
-              PASS=$(echo "$RESP" | jq -r '.password // empty')
+              # Tolerate non-JSON responses (error pages): jq must never kill the
+              # script under `bash -e`, or the Portal-token fallback below stays
+              # unreachable (run 44762825839, exit 5).
+              USER=$(echo "$RESP" | jq -r '.username // empty' 2>/dev/null || true)
+              PASS=$(echo "$RESP" | jq -r '.password // empty' 2>/dev/null || true)
             fi
           fi
           if [ -z "$USER" ]; then
