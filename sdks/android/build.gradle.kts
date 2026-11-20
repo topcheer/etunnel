@@ -83,10 +83,13 @@ mavenPublishing {
         }
     }
 
-    // Central Portal target + signing; credentials come from
+    // Central Portal target (NOT the 0.30.0 default legacy S01 host — our
+    // Portal token only works on the Central Portal API, same channel as
+    // the java SDK's central-publishing-maven-plugin; S01 → 402, run
+    // 44770180246) + signing; credentials come from
     // mavenCentralUsername/mavenCentralPassword Gradle properties (env
     // ORG_GRADLE_PROJECT_* in CI). Publish tasks are only invoked by the
     // sdk-packages publish-android job on v* tags.
-    publishToMavenCentral()
+    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
 }
