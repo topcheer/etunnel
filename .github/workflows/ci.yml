@@ -1,0 +1,25 @@
+# Core CI (#213): every PR and every push to main runs the Go gate.
+# The SDK matrix (20 languages) stays in sdk-packages.yml on v* tags -
+# this workflow is deliberately fast so review has a signal within
+# minutes instead of only at release time.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test -count=1 ./...
