@@ -319,10 +319,18 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
-	// Ask live tunnels to hang up politely.
+	// Ask live tunnels to hang up politely. #220: close concurrently -
+	// serial close multiplies each session's worst-case backend stall
+	// (bounded to ~2s by the close path itself) by N sessions.
+	var wg sync.WaitGroup
 	for _, sess := range s.reg.Snapshot() {
-		sess.Close(protocol.ErrCodeServerShutdown)
+		wg.Add(1)
+		go func(sess *Session) {
+			defer wg.Done()
+			sess.Close(protocol.ErrCodeServerShutdown)
+		}(sess)
 	}
+	wg.Wait()
 	// #192: http.Server.Shutdown does not wait for hijacked (upgraded)
 	// connections, and Close above only enqueues the bye. Give sessions a
 	// bounded grace to flush in-flight streams before Run returns.
