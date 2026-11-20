@@ -317,6 +317,11 @@ func (r *meshRouter) Forward(sub string, w http.ResponseWriter, req *http.Reques
 		logfMesh("forward %s: no owner known", sub)
 		return false
 	}
+	if hasUpgrade(req.Header) {
+		// #235: upgrades need the raw hijacked pipe; http.Client turns a
+		// 101 into a one-way stream and corrupts the exchange.
+		return forwardUpgraded(target, w, req, r.fwdHdr, r.self)
+	}
 	url := *req.URL
 	url.Scheme = "http"
 	url.Host = target
@@ -334,7 +339,12 @@ func (r *meshRouter) Forward(sub string, w http.ResponseWriter, req *http.Reques
 		return false
 	}
 	defer resp.Body.Close()
+	// #235: never re-send hop-by-hop headers verbatim.
+	tokens := connectionTokensFromMap(resp.Header)
 	for k, vs := range resp.Header {
+		if isHopHeader(k) || tokens[strings.ToLower(k)] {
+			continue
+		}
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
