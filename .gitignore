@@ -35,6 +35,8 @@ __pycache__/
 # Java / JVM
 sdks/java/build/
 sdks/scala/build/
+sdks/kotlin/build/
+sdks/kotlin/.gradle/
 *.class
 
 # Perl
