@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.25 — 2026-11-20
+
+- sdks: HarmonyOS ArkTS SDK (@ohos.net.websocket, har packaging) (#260) (PR #273)
+
 ## v1.7.24 — 2026-11-20
 
 - sdks: Android AAR SDK, Kotlin+OkHttp3 (#260) (PR #271)

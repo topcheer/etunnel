@@ -19,7 +19,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 | Language / runtime | Kotlin (compiled to JVM bytecode, D8-desugared) |
 | Min SDK | 24 (Android 7.0) |
 | Compile SDK | 35 |
-| Artifact | `dev.ggcode:etunnel-android:1.4.0` (AAR) |
+| Artifact | `dev.ggcode:etunnel-android:1.7.25` (AAR) |
 | Transport | OkHttp3 4.12 WebSocket (`etunnel-v1` subprotocol) |
 | Body model | buffered per stream (32 KiB chunks) |
 | WebSocket (101) pass-through | no — use the [Go SDK](../../sdk/README.md) for that |
@@ -30,7 +30,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ```kotlin
 // build.gradle.kts of your app module
 dependencies {
-    implementation("dev.ggcode:etunnel-android:1.4.0")
+    implementation("dev.ggcode:etunnel-android:1.7.25")
 }
 ```
 
