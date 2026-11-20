@@ -1,0 +1,13 @@
+{
+  "name": "etunnel",
+  "version": "1.4.0",
+  "description": "etunnel HarmonyOS SDK: expose a local service on the public internet over one outbound WebSocket (ArkTS, @ohos.net.websocket)",
+  "main": "Etunnel.ets",
+  "keywords": ["etunnel", "tunnel", "websocket", "harmonyos", "ohpm"],
+  "homepage": "https://github.com/topcheer/etunnel",
+  "repository": "https://github.com/topcheer/etunnel",
+  "license": "MIT",
+  "author": "topcheer",
+  "dependencies": {},
+  "devDependencies": {}
+}

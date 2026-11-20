@@ -1,4 +1,4 @@
-# etunnel SDKs - 21 languages, one wire protocol
+# etunnel SDKs - 22 languages, one wire protocol
 
 [![protocol](https://img.shields.io/badge/protocol-1-informational)](../PROTOCOL.md)
 [![license](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
@@ -45,6 +45,7 @@ NAT.
 | C | single file (`make`) | `make && make install` | binary - spawn as child | [c/](c/README.md) |
 | C++ | single file (`cmake`) | `cmake -B build` | binary - spawn as child | [cpp/](cpp/README.md) |
 | Android (AAR) | `dev.ggcode:etunnel-android` | Maven Central | `Etunnel.connect(server, 3000)` | [android/](android/README.md) |
+| HarmonyOS (ArkTS) | `etunnel` (ohpm, see README) | source / ohpm local | `await connect(server, '3000')` | [harmonyos/](harmonyos/README.md) |
 
 > **Apple platforms**: the Swift SDK is an Apple-platform package (iOS 16+,
 > macOS 13+; `URLSessionWebSocketTask` under the hood). Add it with
@@ -53,8 +54,10 @@ NAT.
 > [swift/README.md](swift/README.md)). The Android SDK ships as an AAR from
 > `sdks/android` (`dev.ggcode:etunnel-android` on Maven Central, Kotlin +
 > OkHttp3, minSdk 24 - see [android/README.md](android/README.md), #260).
-> HarmonyOS (ArkTS) is still planned:
-> [#260](https://github.com/topcheer/etunnel/issues/260).
+> HarmonyOS (ArkTS) ships from `sdks/harmonyos` (single-file ArkTS on
+> `@ohos.net.websocket` - see [harmonyos/README.md](harmonyos/README.md),
+> #260; ohpm publishing pending Huawei developer account + review, install
+> from source meanwhile).
 
 Java coordinates:
 
@@ -75,6 +78,7 @@ Java coordinates:
 | Python | buffered per stream | no | library | thread per tunnel |
 | Java, Kotlin, Scala, Clojure | buffered per stream | no | library | JDK WebSocket callbacks |
 | Android (AAR) | buffered per stream | no | library | OkHttp WebSocket callbacks |
+| HarmonyOS (ArkTS) | buffered per stream | no | library | ArkTS event loop |
 | C#, Dart, Ruby, PHP, Perl, Swift | buffered per stream | no | library / single file | per client |
 | Elixir | buffered per stream | no | OTP child | per client |
 | Lua | buffered per stream | no | script | sequential (one request at a time) |
