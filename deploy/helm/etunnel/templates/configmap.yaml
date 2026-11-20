@@ -1,3 +1,11 @@
+{{- /* #246: without a shared SESSION_SECRET every replica derives its own
+     per-process key, so resume tokens and login cookies fail verification
+     on any other replica - cross-replica reconnects silently land on a new
+     random subdomain and paid logins flap by pod. Fail the install instead
+     of shipping a silently broken multi-replica cluster. */ -}}
+{{- if and (ne .Values.cluster.mode "single") (not .Values.cluster.sessionSecret) }}
+{{- fail "cluster.sessionSecret is REQUIRED when cluster.mode is mesh or sticky: resume tokens and OAuth cookies are per-process without it (cross-replica reconnects get new random subdomains). Generate one with: openssl rand -hex 32" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

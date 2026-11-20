@@ -1,0 +1,17 @@
+etunnel is being deployed in {{ .Values.cluster.mode }} mode with {{ .Values.replicaCount }} replica(s).
+
+{{- if eq .Values.cluster.mode "single" }}
+
+NOTE: single mode with replicaCount > 1 will split session state across
+replicas. Set cluster.mode to mesh (with cluster.sessionSecret and
+ETUNNEL_MESH_SECRET) or sticky (with cluster.sessionSecret and
+storage.redisURL) before scaling out.
+{{- else }}
+
+SESSION_SECRET is shared by all replicas: resume tokens and login cookies
+stay valid across pod restarts and hops. Rotating it logs everyone out and
+invalidates in-flight resume tokens by design - see AGENTS.md.
+{{- end }}
+
+Tunnels will be served at *.{{ .Values.domain }} once the ingress/LB in
+front of the service terminates TLS for that domain.
