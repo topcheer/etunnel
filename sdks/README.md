@@ -34,7 +34,7 @@ NAT.
 | Scala | `dev.ggcode:etunnel` | Maven Central | `Etunnel.connect(server, 3000)` | [scala/](scala/README.md) |
 | C# | `etunnel` / single file | `dotnet add package etunnel` | `Etunnel.Connect(server, "3000")` | [csharp/](csharp/README.md) |
 | Rust | `etunnel` (crates.io) | `cargo install etunnel` | binary - spawn as child | [rust/](rust/README.md) |
-| Swift | single file (Foundation) | SPM / copy | `try await Etunnel(...).connect()` | [swift/](swift/README.md) |
+| Swift | `etunnel` (SwiftPM package, **iOS 16+ / macOS 13+**) | SPM / copy | `try await Etunnel(...).connect()` | [swift/](swift/README.md) |
 | Dart | `etunnel` (pub.dev) | `dart pub add etunnel` | `Etunnel.connect(server, '3000')` | [dart/](dart/README.md) |
 | Ruby | `etunnel` (RubyGems) | `gem install etunnel` | `Etunnel.connect(server, 3000)` | [ruby/](ruby/README.md) |
 | PHP | `ggcode/etunnel` | `composer require ggcode/etunnel` | `Etunnel::connect(server, 3000)` | [php/](php/README.md) |
@@ -44,6 +44,13 @@ NAT.
 | Elixir | `etunnel` (Hex) | `{:etunnel, "~> 1.2"}` | `Etunnel.start_link(...)` | [elixir/](elixir/README.md) |
 | C | single file (`make`) | `make && make install` | binary - spawn as child | [c/](c/README.md) |
 | C++ | single file (`cmake`) | `cmake -B build` | binary - spawn as child | [cpp/](cpp/README.md) |
+
+> **Apple platforms**: the Swift SDK is an Apple-platform package (iOS 16+,
+> macOS 13+; `URLSessionWebSocketTask` under the hood). Add it with
+> `.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.22")`
+> (current tag `v1.7.22`; Linux is not supported by this SDK, see
+> [swift/README.md](swift/README.md)). Android (AAR) and HarmonyOS (ArkTS)
+> SDKs are planned: [#260](https://github.com/topcheer/etunnel/issues/260).
 
 Java coordinates:
 
