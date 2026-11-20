@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.26 — 2026-11-21
+
+- (fill in)
+
 ## v1.7.25 — 2026-11-20
 
 - sdks: HarmonyOS ArkTS SDK (@ohos.net.websocket, har packaging) (#260) (PR #273)
