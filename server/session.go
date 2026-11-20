@@ -56,7 +56,11 @@ type Session struct {
 
 	tier    *Tier
 	account *Account
-	expires time.Time // zero = no expiry
+	// ipCounter is the counter that granted this session's anonymous
+	// per-IP slot (#232): the shared counter normally, the local fallback
+	// while it is degraded. Close returns the slot to it.
+	ipCounter Counter
+	expires   time.Time // zero = no expiry
 	// started is the handshake completion time (issue #69): the session
 	// ledger's open/close journal lines and the duration column derive
 	// from it. Written once at build, read at close.
@@ -272,26 +276,23 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	// the keyspace, and without a TTL every accepted handshake leaves a
 	// Redis key with TTL=-1 that only a clean disconnect would remove. The
 	// TTL is refreshed on each accepted handshake from the same IP.
-	ipSlot := false // this handshake owns one slot of "ip:<ip>" until the session starts
+	// Per-IP limit for anonymous tunnels (#232): the decision lives in
+	// takeIPSlot; ipSlot is the counter that granted this handshake's slot
+	// (nil when none was needed), so releases always go back to the ledger
+	// that actually took them - the shared counter in the happy path, the
+	// local fallback while it is degraded.
+	var ipSlot Counter
 	releaseIPSlot := func() {
-		if ipSlot {
-			_ = s.counter.Decr(r.Context(), "ip:"+ip)
-			ipSlot = false
+		if ipSlot != nil {
+			_ = ipSlot.Decr(r.Context(), "ip:"+ip)
+			ipSlot = nil
 		}
 	}
 	if acct == nil && s.cfg.MaxTunnelsPerIP > 0 && s.counter != nil {
-		n, err := s.counter.Incr(r.Context(), "ip:"+ip, 1)
-		switch {
-		case err != nil:
-			s.logf("session %s: counter unavailable, per-IP limit not enforced: %v", ip, err)
-		case n > int64(s.cfg.MaxTunnelsPerIP):
-			_ = s.counter.Decr(r.Context(), "ip:"+ip)
+		if ipSlot = s.takeIPSlot(r.Context(), ip); ipSlot == nil {
 			s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
 				fmt.Sprintf("too many tunnels from %s", ip))
 			return
-		default:
-			_ = s.counter.SetTTL(r.Context(), "ip:"+ip, ipCounterTTL)
-			ipSlot = true
 		}
 	}
 
@@ -301,21 +302,22 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	_, _ = rand.Read(sid)
 	ctx, cancel := context.WithCancel(r.Context())
 	sess := &Session{
-		policy:  pol,
-		srv:     s,
-		ws:      ws,
-		ip:      ip,
-		remote:  r.RemoteAddr,
-		id:      hex.EncodeToString(sid),
-		tier:    tier,
-		account: acct,
-		ctx:     ctx,
-		cancel:  cancel,
-		out:     make(chan wsOut, 256),
-		closed:  make(chan struct{}),
-		streams: make(map[uint32]*Stream),
-		nextID:  1,
-		started: now,
+		policy:    pol,
+		srv:       s,
+		ws:        ws,
+		ip:        ip,
+		remote:    r.RemoteAddr,
+		id:        hex.EncodeToString(sid),
+		tier:      tier,
+		account:   acct,
+		ipCounter: ipSlot,
+		ctx:       ctx,
+		cancel:    cancel,
+		out:       make(chan wsOut, 256),
+		closed:    make(chan struct{}),
+		streams:   make(map[uint32]*Stream),
+		nextID:    1,
+		started:   now,
 	}
 	if tier.Bandwidth > 0 {
 		sess.limiter = rate.NewLimiter(rate.Limit(tier.Bandwidth/8), protocol.MaxPayload)
@@ -728,13 +730,13 @@ func (s *Session) Close(reason string) {
 		if s.srv != nil && s.srv.router != nil && s.sub != "" {
 			go s.srv.router.Release(s.sub)
 		}
-		// Cluster: drop the anonymous per-IP counter we took at handshake.
-		// #220: bounded deadline - a stalled Redis must never park the close
-		// (go-redis defaults alone can block for tens of seconds).
-		if s.srv != nil && s.srv.counter != nil && s.account == nil && s.ip != "" {
+		// Cluster: drop the anonymous per-IP slot this session owns, back to
+		// the counter that granted it (#232), with a bounded deadline so a
+		// stalled backend cannot park the close (#220).
+		if s.ipCounter != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.srv.counter.Decr(ctx, "ip:"+s.ip); err != nil {
-				s.srv.logf("session %s: per-IP counter decr failed: %v", s.id, err)
+			if err := s.ipCounter.Decr(ctx, "ip:"+s.ip); err != nil {
+				s.srv.logf("session %s: per-IP slot release failed: %v", s.id, err)
 			}
 			cancel()
 		}
