@@ -92,6 +92,20 @@ public sealed class Etunnel
 {
     const int MAXP = 32768;
 
+    // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+    // SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+    // the client: refuse streams over the cap with an RST, RST a stream whose
+    // buffered request body passes MaxStreamBody, drop the socket on a message
+    // above the read limit.
+    const int MaxStreams = 256;
+    const int MaxStreamBody = 16 * 1024 * 1024;
+    const int MaxWsMsg = 128 * 1024;
+    // #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+    // drop the tunnel when neither pongs nor traffic arrive for 150s; without
+    // it a NAT blackhole keeps the client believing the tunnel is alive.
+    static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(150);
+
     public sealed class Tunnel
     {
         public string Url { get; }
@@ -270,7 +284,9 @@ public sealed class Etunnel
         readonly string? _local;
         readonly Route[]? _routes; // null = single-target (pre-routes behaviour)
         readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
-        readonly Dictionary<uint, (JsonElement req, List<byte[]> body)> _streams = new();
+        readonly Dictionary<uint, (JsonElement req, List<byte[]> body, long size)> _streams = new();
+        long _lastPong = Environment.TickCount64; // #243 M3: last pong received
+        long _lastActivity = Environment.TickCount64; // #243 M3: last inbound ws message
 
         internal Runner(ClientWebSocket ws, Sender sender, string? local, Route[]? routes = null)
         {
@@ -284,6 +300,38 @@ public sealed class Etunnel
             // forever (#54 MED).
             try
             {
+                // #243 M3: keepalive loop - ping every 30s; when neither a pong
+                // nor any traffic has been seen for 150s the tunnel is dead
+                // (NAT blackhole) and the socket is torn down so the supervisor
+                // reconnects. It only runs while the socket is open, so it ends
+                // with the loop.
+                var pinger = Task.Run(async () =>
+                {
+                    while (_ws.State == WebSocketState.Open)
+                    {
+                        await Task.Delay(PingInterval);
+                        if (_ws.State != WebSocketState.Open) return;
+                        try
+                        {
+                            await _sender.Atomic(() => _sender.SendText(
+                                $"{{\"type\":\"ping\",\"ts\":{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}}}"));
+                        }
+                        catch { return; }
+                        var now = Environment.TickCount64;
+                        if (now - _lastPong > PingDeadline.TotalMilliseconds &&
+                            now - _lastActivity > PingDeadline.TotalMilliseconds)
+                        {
+                            Console.Error.WriteLine("[etunnel] ping timeout");
+                            try
+                            {
+                                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "ping timeout", cts.Token);
+                            }
+                            catch { /* already closing */ }
+                            return;
+                        }
+                    }
+                });
                 while (_ws.State == WebSocketState.Open)
             {
                 WebSocketMessageType kind;
@@ -293,6 +341,7 @@ public sealed class Etunnel
                     (kind, bytes) = await ReadMessage(_ws, CancellationToken.None);
                 }
                 catch (Exception e) { Console.Error.WriteLine($"[etunnel] loop error: {e}"); return; }
+                _lastActivity = Environment.TickCount64; // #243 M3
                 if (kind == WebSocketMessageType.Text)
                 {
                     try { await HandleText(Encoding.UTF8.GetString(bytes)); }
@@ -300,7 +349,7 @@ public sealed class Etunnel
                 }
                 else
                 {
-                    try { HandleBinary(bytes); }
+                    try { await HandleBinary(bytes); }
                     catch (Exception e) { Console.Error.WriteLine($"[etunnel] binary error: {e}"); }
                 }
                 }
@@ -318,11 +367,23 @@ public sealed class Etunnel
             switch (m.GetProperty("type").GetString())
             {
                 case "req":
-                    _streams[(uint)m.GetProperty("streamId").GetInt64()] = (m.Clone(), new List<byte[]>());
+                    var rsid = (uint)m.GetProperty("streamId").GetInt64();
+                    // #243 M2: refuse a replayed live id or a stream beyond the
+                    // cap (Go registerClientStream parity) and tell the server
+                    // with an RST.
+                    if (_streams.ContainsKey(rsid) || _streams.Count >= MaxStreams)
+                    {
+                        await _sender.Atomic(() => _sender.SendBinary(Frame(0x03, rsid, Array.Empty<byte>())));
+                        break;
+                    }
+                    _streams[rsid] = (m.Clone(), new List<byte[]>(), 0);
                     break;
                 case "ping":
                     long ts = m.TryGetProperty("ts", out var tse) ? tse.GetInt64() : 0;
                     await _sender.Atomic(() => _sender.SendText($"{{\"type\":\"pong\",\"ts\":{ts}}}"));
+                    break;
+                case "pong":
+                    _lastPong = Environment.TickCount64; // #243 M3
                     break;
                 case "bye":
                     await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "server closed", CancellationToken.None);
@@ -330,7 +391,7 @@ public sealed class Etunnel
             }
         }
 
-        void HandleBinary(byte[] b)
+        async Task HandleBinary(byte[] b)
         {
             if (b.Length < 9) return;
             int kind = b[0];
@@ -340,6 +401,16 @@ public sealed class Etunnel
             switch (kind)
             {
                 case 0x01:
+                    // #243 M2: bound the buffered request body; over the limit
+                    // the stream is refused with an RST instead of buffering
+                    // the server into our RAM.
+                    st.size += Math.Min(9 + n, b.Length) - 9;
+                    if (st.size > MaxStreamBody)
+                    {
+                        _streams.Remove(sid);
+                        await _sender.Atomic(() => _sender.SendBinary(Frame(0x03, sid, Array.Empty<byte>())));
+                        return;
+                    }
                     st.body.Add(b[9..Math.Min(9 + n, b.Length)]);
                     _streams[sid] = st;
                     break;
@@ -535,6 +606,10 @@ the tunnel stays connected and keeps retrying for you.</div>
             var r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), ct);
             if (r.MessageType == WebSocketMessageType.Close) throw new IOException("closed");
             ms.Write(buf, 0, r.Count);
+            // #243 M2: 128KiB read limit (Go SetReadLimit parity) - bound the
+            // accumulation buffer itself so a hostile server cannot stream an
+            // unbounded ws message into our RAM.
+            if (ms.Length > MaxWsMsg) throw new IOException("etunnel: read limit exceeded");
             if (r.EndOfMessage) return (r.MessageType, ms.ToArray());
         }
     }

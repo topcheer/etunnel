@@ -9,6 +9,20 @@ import 'dart:typed_data';
 
 const int MAXP = 32768;
 
+// #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+// SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+// the client: refuse streams over the cap with an RST, RST a stream whose
+// buffered request body passes maxStreamBody, drop the socket on a message
+// above the read limit.
+const int maxStreams = 256;
+const int maxStreamBody = 16 * 1024 * 1024;
+const int maxWsMsg = 128 * 1024;
+// #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+// drop the tunnel when neither pongs nor traffic arrive for 150s; without it
+// a NAT blackhole keeps the client believing the tunnel is alive.
+const Duration pingInterval = Duration(seconds: 30);
+const Duration pingDeadline = Duration(seconds: 150);
+
 Uint8List frame(int kind, int id, List<int> payload) {
   final b = BytesBuilder();
   b.addByte(kind);
@@ -40,16 +54,41 @@ class Etunnel {
   final List<Route>? routes;
   final _streams = <int, _StreamBuf>{};
   final _url = Completer<String>();
+  bool _closed = false;
+  DateTime _lastPong = DateTime.now(); // #243 M3: last pong from the server
+  DateTime _lastActivity = DateTime.now(); // #243 M3: last inbound ws message
+  Timer? _pinger; // #243 M3: keepalive timer
 
   Etunnel._(this.ws, this.host, this.port, this.routes) {
     // onError: a decode/desync failure used to surface as an unhandled async
     // error and kill the isolate; log it and drop the connection instead
     // (#53 LOW).
-    ws.listen(_onMessage, onDone: () {}, onError: (Object e) {
+    ws.listen(_onMessage, onDone: () {
+      _closed = true;
+      _pinger?.cancel();
+    }, onError: (Object e) {
       stderr.writeln('etunnel: connection error: $e');
+      _closed = true;
+      _pinger?.cancel();
       try {
         ws.close();
       } catch (_) {/* already closed */}
+    });
+    // #243 M3: keepalive loop - ping every 30s; when neither a pong nor any
+    // traffic has been seen for 150s the tunnel is dead (NAT blackhole) and
+    // the socket is torn down so the supervisor can reconnect.
+    _pinger = Timer.periodic(pingInterval, (_) {
+      if (_closed) {
+        _pinger?.cancel();
+        return;
+      }
+      _send(jsonEncode({'type': 'ping', 'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000}));
+      final now = DateTime.now();
+      if (now.difference(_lastPong) > pingDeadline &&
+          now.difference(_lastActivity) > pingDeadline) {
+        stderr.writeln('etunnel: ping timeout');
+        close('ping timeout');
+      }
     });
   }
 
@@ -132,7 +171,18 @@ class Etunnel {
   String? resumeToken;
 
   void _onMessage(Object? msg) {
+    _lastActivity = DateTime.now(); // #243 M3
     if (msg is String) {
+      // #243 M2: 128KiB read limit - control JSON is small and frames cap at
+      // 32KiB, so a bigger ws message is a protocol violation (Go tears the
+      // socket down via SetReadLimit).
+      if (msg.length > maxWsMsg) {
+        stderr.writeln('etunnel: read limit exceeded, dropping connection');
+        _closed = true;
+        _pinger?.cancel();
+        ws.close();
+        return;
+      }
       // #243 M1: malformed text frames are ignored (Go parity), never
       // crash the isolate with an unhandled jsonDecode error.
       final Map<String, dynamic> m;
@@ -153,15 +203,34 @@ class Etunnel {
             _url.completeError('etunnel: ${m['code']}: ${m['message'] ?? ''}');
           }
         case 'req':
-          _streams[m['streamId'] as int] = _StreamBuf(m);
+          final sid = m['streamId'] as int;
+          // #243 M2: refuse a replayed live id or a stream beyond the cap
+          // (Go registerClientStream parity) and tell the server with an RST.
+          if (_streams.containsKey(sid) || _streams.length >= maxStreams) {
+            _send(frame(0x03, sid, []));
+            return;
+          }
+          _streams[sid] = _StreamBuf(m);
         case 'ping':
           _send(jsonEncode({'type': 'pong', 'ts': m['ts'] ?? 0}));
+        case 'pong':
+          _lastPong = DateTime.now(); // #243 M3
         case 'bye':
+          _closed = true;
+          _pinger?.cancel();
           ws.close();
       }
       return;
     }
     final b = msg is List<int> ? Uint8List.fromList(msg) : msg as Uint8List;
+    // #243 M2: 128KiB read limit (see the text-frame branch above).
+    if (b.length > maxWsMsg) {
+      stderr.writeln('etunnel: read limit exceeded, dropping connection');
+      _closed = true;
+      _pinger?.cancel();
+      ws.close();
+      return;
+    }
     if (b.length < 9) return;
     final kind = b[0];
     final sid = (b[1] << 24) | (b[2] << 16) | (b[3] << 8) | b[4];
@@ -173,7 +242,17 @@ class Etunnel {
     final st = _streams[sid];
     if (st == null) return;
     switch (kind) {
-      case 0x01: st.body.add(payload);
+      case 0x01:
+        // #243 M2: bound the buffered request body; over the limit the
+        // stream is refused with an RST instead of buffering the server
+        // into our RAM.
+        st.size += payload.length;
+        if (st.size > maxStreamBody) {
+          _streams.remove(sid);
+          _send(frame(0x03, sid, []));
+          return;
+        }
+        st.body.add(payload);
       case 0x02:
         _streams.remove(sid);
         _serve(st, sid);
@@ -283,8 +362,11 @@ the tunnel stays connected and keeps retrying for you.</div>
 </main></body></html>''';
   }
 
-  void close() {
-    _send(jsonEncode({'type': 'bye', 'reason': 'client closed'}));
+  void close([String reason = 'client closed']) {
+    if (_closed) return;
+    _closed = true;
+    _pinger?.cancel();
+    _send(jsonEncode({'type': 'bye', 'reason': reason}));
     ws.close();
     http.close(); // the client and its sockets must not outlive the tunnel (#53 MED)
   }
@@ -293,6 +375,7 @@ the tunnel stays connected and keeps retrying for you.</div>
 class _StreamBuf {
   final Map<String, dynamic> req;
   final BytesBuilder body = BytesBuilder();
+  int size = 0; // #243 M2: buffered request-body byte count
   _StreamBuf(this.req);
 }
 

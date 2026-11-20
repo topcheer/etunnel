@@ -21,6 +21,20 @@ const MAXP: usize = 32768;
 /// before the loop drains outbound messages (#53).
 const READ_TICK_MS: u64 = 200;
 
+// #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+// SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+// the client: refuse streams over the cap with an RST, RST a stream whose
+// buffered request body passes MAX_STREAM_BODY, drop the socket on a single
+// ws message above the read limit.
+const MAX_STREAMS: usize = 256;
+const MAX_STREAM_BODY: usize = 16 * 1024 * 1024;
+const MAX_WS_MSG: usize = 128 * 1024;
+// #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+// drop the tunnel when neither pongs nor traffic arrive for 150s; without it
+// a NAT blackhole keeps the client believing the tunnel is alive.
+const PING_INTERVAL_SECS: u64 = 30;
+const PING_DEADLINE_SECS: u64 = 150;
+
 pub struct Options {
     pub token: Option<String>,
     pub subdomain: Option<String>,
@@ -165,6 +179,7 @@ struct StreamBuf {
     path: String,
     headers: HashMap<String, Vec<String>>,
     body: Vec<u8>,
+    size: usize, // #243 M2: buffered request-body byte count
 }
 
 pub fn connect(server: &str, local_port: u16, token: Option<&str>, subdomain: Option<&str>) -> Result<Tunnel, String> {
@@ -197,10 +212,13 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
         "Sec-WebSocket-Protocol",
         "etunnel-v1".parse().unwrap(),
     );
-    let cfg = WebSocketConfig::default();
-
-    let _ = cfg;
-    let (ws, _resp) = tungstenite::connect(request)
+    // #243 M2: enforce the 128KiB read limit at the transport - a single ws
+    // message above it is a protocol violation and the read errors out,
+    // tearing the tunnel down (Go SetReadLimit parity).
+    let cfg = WebSocketConfig::default()
+        .max_message_size(Some(MAX_WS_MSG))
+        .max_frame_size(Some(MAX_WS_MSG));
+    let (ws, _resp) = tungstenite::client::connect_with_config(request, Some(cfg), 3)
         .map_err(|e| format!("etunnel: connect: {}", e))?;
 
     // Bound every blocking read so the reader periodically releases the
@@ -277,6 +295,10 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     let ws2 = Arc::clone(&ws);
     let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
+    // #243 M3: liveness bookkeeping shared by the reader (updates) and the
+    // keepalive thread (checks).
+    let last_pong = Arc::new(Mutex::new(std::time::Instant::now()));
+    let last_activity = Arc::new(Mutex::new(std::time::Instant::now()));
     // Welcome received: arm the read tick for the steady-state reader (#242).
     // It handles WouldBlock/TimedOut by design (drops the lock, flushes), so
     // the #53 anti-head-of-line guarantee is preserved from here on.
@@ -284,6 +306,8 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     // The reader thread gets its own clone; the original stays with the
     // Tunnel so close() can enqueue the bye (#243 M8).
     let reader_tx = out_tx.clone();
+    let pong_ref = Arc::clone(&last_pong);
+    let act_ref = Arc::clone(&last_activity);
     thread::spawn(move || {
         let mut streams: HashMap<u32, StreamBuf> = HashMap::new();
         let mut out_rx = out_rx;
@@ -303,20 +327,30 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             };
             drain_outbox(&ws2, &mut out_rx);
             let Some(msg) = msg else { continue };
+            *act_ref.lock().unwrap_or_else(|p| p.into_inner()) = std::time::Instant::now(); // #243 M3
             match msg {
                 Message::Text(t) => {
                     let t = t.as_str().to_string();
                     if t.contains("\"type\":\"req\"") {
                         let sid = extract_num(&t, "streamId").unwrap_or(0.0) as u32;
-                        streams.insert(sid, StreamBuf {
-                            method: extract_str(&t, "method").unwrap_or_else(|| "GET".into()),
-                            path: extract_str(&t, "path").unwrap_or_else(|| "/".into()),
-                            headers: extract_headers(&t),
-                            body: Vec::new(),
-                        });
+                        // #243 M2: refuse a replayed live id or a stream beyond
+                        // the cap (Go registerClientStream parity) with an RST.
+                        if streams.contains_key(&sid) || streams.len() >= MAX_STREAMS {
+                            reader_tx.send(frame(0x03, sid, b"")).ok();
+                        } else {
+                            streams.insert(sid, StreamBuf {
+                                method: extract_str(&t, "method").unwrap_or_else(|| "GET".into()),
+                                path: extract_str(&t, "path").unwrap_or_else(|| "/".into()),
+                                headers: extract_headers(&t),
+                                body: Vec::new(),
+                                size: 0,
+                            });
+                        }
                     } else if t.contains("\"type\":\"ping\"") {
                         let ts = extract_num(&t, "ts").unwrap_or(0.0) as i64;
                         reader_tx.send(Message::Text(format!("{{\"type\":\"pong\",\"ts\":{}}}", ts).into())).ok();
+                    } else if t.contains("\"type\":\"pong\"") {
+                        *pong_ref.lock().unwrap_or_else(|p| p.into_inner()) = std::time::Instant::now(); // #243 M3
                     } else if t.contains("\"type\":\"bye\"") {
                         break;
                     }
@@ -329,7 +363,19 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                     let payload = &b[9..(9 + n).min(b.len())];
                     let Some(st) = streams.get_mut(&sid) else { continue };
                     match kind {
-                        0x01 => st.body.extend_from_slice(payload),
+                        0x01 => {
+                            // #243 M2: bound the buffered request body; over
+                            // the limit the stream is dropped and refused with
+                            // an RST instead of buffering the server into our
+                            // RAM.
+                            st.size += payload.len();
+                            if st.size > MAX_STREAM_BODY {
+                                streams.remove(&sid);
+                                reader_tx.send(frame(0x03, sid, b"")).ok();
+                            } else {
+                                st.body.extend_from_slice(payload);
+                            }
+                        }
                         0x02 => {
                             let st = streams.remove(&sid).unwrap();
                             let tx3 = reader_tx.clone();
@@ -346,6 +392,46 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
         }
         closed2.store(true, Ordering::SeqCst);
     });
+
+    // #243 M3: client keepalive (Go pingLoop parity): ping every 30s through
+    // the outbound relay; when neither a pong nor any traffic has been seen
+    // for 150s the tunnel is dead (NAT blackhole) - send a Close so the
+    // reader tears the socket down and the supervisor reconnects.
+    {
+        let ping_tx = out_tx.clone();
+        let ping_closed = Arc::clone(&closed);
+        let pong_ref = Arc::clone(&last_pong);
+        let act_ref = Arc::clone(&last_activity);
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(PING_INTERVAL_SECS));
+            if ping_closed.load(Ordering::SeqCst) {
+                return;
+            }
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if ping_tx
+                .send(Message::Text(format!("{{\"type\":\"ping\",\"ts\":{}}}", ts).into()))
+                .is_err()
+            {
+                return; // reader gone: nothing left to keep alive
+            }
+            let now = std::time::Instant::now();
+            let pong_idle = now
+                .duration_since(*pong_ref.lock().unwrap_or_else(|p| p.into_inner()))
+                > Duration::from_secs(PING_DEADLINE_SECS);
+            let act_idle = now
+                .duration_since(*act_ref.lock().unwrap_or_else(|p| p.into_inner()))
+                > Duration::from_secs(PING_DEADLINE_SECS);
+            if pong_idle && act_idle {
+                eprintln!("etunnel: ping timeout");
+                ping_tx.send(Message::Close(None)).ok();
+                ping_closed.store(true, Ordering::SeqCst);
+                return;
+            }
+        });
+    }
 
     Ok(Tunnel { url, resume_token, closed, out: Some(out_tx) })
 }

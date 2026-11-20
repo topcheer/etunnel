@@ -11,6 +11,20 @@
 
 const MAXP = 32768;
 
+// #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+// SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+// the client: refuse streams over the cap with an RST, RST a stream whose
+// buffered request body passes MAX_STREAM_BODY, drop the socket on a single
+// ws message above the read limit.
+const MAX_STREAMS = 256;
+const MAX_STREAM_BODY = 16 * 1024 * 1024;
+const MAX_WS_MSG = 128 * 1024;
+// #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+// drop the tunnel when neither pongs nor traffic arrive for 150s; without it
+// a NAT blackhole keeps the client believing the tunnel is alive.
+const PING_INTERVAL = 30 * 1000;
+const PING_DEADLINE = 150 * 1000;
+
 function frame(kind, id, payload) {
   const p = payload || Buffer.alloc(0);
   const b = Buffer.alloc(9 + p.length);
@@ -85,17 +99,46 @@ async function connect(server, local, opts = {}) {
   const state = { url: info.url, closed: false, streams: new Map() };
   const send = (o) => ws.send(typeof o === 'string' ? o : o);
   const sendBin = (buf) => ws.send(buf);
+  let lastPong = Date.now(); // #243 M3: last pong received from the server
+  let lastActivity = Date.now(); // #243 M3: last inbound ws message of any kind
+
+  // #243 M3: single teardown path shared by explicit close() and the ping
+  // timeout below, so the pinger never outlives the socket.
+  let pinger = null;
+  function closeTunnel(reason) {
+    if (state.closed) return;
+    state.closed = true;
+    if (pinger) clearInterval(pinger);
+    try { send(JSON.stringify({ type: 'bye', reason })); } catch {}
+    try { ws.close(); } catch {}
+    if (opts.onClose) opts.onClose(reason);
+  }
 
   ws.onmessage = (ev) => {
+    // #243 M2: 128KiB read limit - control JSON is small and frames cap at
+    // 32KiB, so a bigger ws message is a protocol violation (Go tears the
+    // socket down via SetReadLimit).
+    const size = typeof ev.data === 'string' ? Buffer.byteLength(ev.data) : ev.data.byteLength;
+    if (size > MAX_WS_MSG) { closeTunnel('read limit exceeded'); return; }
+    lastActivity = Date.now();
     if (typeof ev.data === 'string') {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; } // #243 M1: ignore malformed frames
       if (m.type === 'req') {
-        state.streams.set(m.streamId, { req: m, body: [] });
+        // #243 M2: refuse a replayed live id or a stream beyond the cap
+        // (Go registerClientStream parity) and tell the server with an RST.
+        if (state.streams.has(m.streamId) || state.streams.size >= MAX_STREAMS) {
+          trySend(frame(0x03, m.streamId));
+          return;
+        }
+        state.streams.set(m.streamId, { req: m, body: [], size: 0 });
       } else if (m.type === 'ping') {
         send(JSON.stringify({ type: 'pong', ts: m.ts }));
+      } else if (m.type === 'pong') {
+        lastPong = Date.now(); // #243 M3
       } else if (m.type === 'bye') {
         state.closed = true;
+        if (pinger) clearInterval(pinger);
         if (opts.onClose) opts.onClose(m.reason);
         try { ws.close(); } catch {}
       }
@@ -107,10 +150,26 @@ async function connect(server, local, opts = {}) {
     const payload = b.subarray(9, 9 + b.readUInt32BE(5));
     const st = state.streams.get(id);
     if (!st) return;
-    if (kind === 0x01) st.body.push(payload);
+    if (kind === 0x01) {
+      // #243 M2: bound the buffered request body; over the limit the stream
+      // is refused with an RST instead of buffering the server into our RAM.
+      st.size += payload.length;
+      if (st.size > MAX_STREAM_BODY) { state.streams.delete(id); trySend(frame(0x03, id)); return; }
+      st.body.push(payload);
+    }
     else if (kind === 0x02) { state.streams.delete(id); handle(st, id).catch(() => trySend(frame(0x03, id))); }
     else if (kind === 0x03) state.streams.delete(id);
   };
+
+  // #243 M3: keepalive loop - ping every 30s; when neither a pong nor any
+  // traffic has been seen for 150s the tunnel is dead (NAT blackhole) and
+  // the socket is torn down so the supervisor can reconnect.
+  pinger = setInterval(() => {
+    if (state.closed) { clearInterval(pinger); return; }
+    try { send(JSON.stringify({ type: 'ping', ts: Math.floor(Date.now() / 1000) })); } catch { return; }
+    if (Date.now() - lastPong > PING_DEADLINE && Date.now() - lastActivity > PING_DEADLINE) closeTunnel('ping timeout');
+  }, PING_INTERVAL);
+  if (pinger.unref) pinger.unref(); // keep the process exitable
 
   async function handle(st, id) {
     const body = Buffer.concat(st.body);
@@ -163,13 +222,7 @@ async function connect(server, local, opts = {}) {
     subdomain: info.subdomain,
     resumeToken: info.resumeToken || '',
     plan: info.plan || '',
-    close(reason = 'client closed') {
-      if (state.closed) return;
-      state.closed = true;
-      try { send(JSON.stringify({ type: 'bye', reason })); } catch {}
-      try { ws.close(); } catch {}
-      if (opts.onClose) opts.onClose(reason);
-    },
+    close(reason = 'client closed') { closeTunnel(reason); },
   };
 }
 

@@ -21,6 +21,20 @@ defmodule Etunnel do
   @hop ~w(connection transfer-encoding keep-alive upgrade proxy-connection te trailer content-length host)
   @url_timeout 10_000
 
+  # #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+  # SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+  # the client: refuse streams over the cap with an RST, RST a stream whose
+  # buffered request body passes @max_stream_body, drop the connection on a
+  # ws message above the read limit.
+  @max_streams 256
+  @max_stream_body 16 * 1024 * 1024
+  @max_ws_msg 128 * 1024
+  # #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+  # drop the tunnel when neither pongs nor traffic arrive for 150s; without
+  # it a NAT blackhole keeps the client believing the tunnel is alive.
+  @ping_interval_ms 30_000
+  @ping_deadline_ms 150_000
+
   # Fixed atom set: the server-controlled method string must never reach
   # String.to_atom/1 (atom table exhaustion). Unknown methods get a 501.
   @http_methods %{
@@ -182,11 +196,23 @@ defmodule Etunnel do
   @impl true
   def handle_connect(_conn, state) do
     send(self(), :etunnel_hello)
-    {:ok, state}
+    # #243 M3: arm the keepalive timer and start the liveness clocks.
+    Process.send_after(self(), :etunnel_ping, @ping_interval_ms)
+    now = System.monotonic_time(:millisecond)
+    {:ok, %{state | last_pong: now, last_activity: now}}
+  end
+
+  # #243 M2: 128KiB read limit - control JSON is small (frames cap at 32KiB),
+  # so a bigger ws message is a protocol violation and the tunnel is torn
+  # down (Go SetReadLimit parity).
+  def handle_frame({:text, msg}, state) when byte_size(msg) > @max_ws_msg do
+    IO.puts(:stderr, "etunnel: read limit exceeded, dropping connection")
+    {:stop, :read_limit_exceeded, state}
   end
 
   @impl true
   def handle_frame({:text, msg}, state) do
+    state = %{state | last_activity: System.monotonic_time(:millisecond)} # #243 M3
     case Jason.decode(msg) do
       {:ok, %{"type" => "welcome"} = w} ->
         IO.puts("TUNNEL_URL: #{w["url"]}")
@@ -208,10 +234,19 @@ defmodule Etunnel do
         {:stop, {:error, e}, %{state | url_waiter: nil}}
 
       {:ok, %{"type" => "req", "streamId" => sid} = req} ->
-        {:ok, put_in(state, [:streams, sid], %{req: req, body: []})}
+        # #243 M2: refuse a replayed live id or a stream beyond the cap
+        # (Go registerClientStream parity) and tell the server with an RST.
+        if Map.has_key?(state.streams, sid) or map_size(state.streams) >= @max_streams do
+          {:reply, {:binary, frame(0x03, sid, "")}, state}
+        else
+          {:ok, put_in(state, [:streams, sid], %{req: req, body: [], size: 0})}
+        end
 
       {:ok, %{"type" => "ping"} = p} ->
         {:reply, {:text, Jason.encode!(%{type: "pong", ts: p["ts"] || 0})}, state}
+
+      {:ok, %{"type" => "pong"}} ->
+        {:ok, %{state | last_pong: System.monotonic_time(:millisecond)}} # #243 M3
 
       {:ok, %{"type" => "bye"}} ->
         {:ok, state}
@@ -221,7 +256,14 @@ defmodule Etunnel do
     end
   end
 
+  # #243 M2: 128KiB read limit (see the text-frame guard above).
+  def handle_frame({:binary, bin}, state) when byte_size(bin) > @max_ws_msg do
+    IO.puts(:stderr, "etunnel: read limit exceeded, dropping connection")
+    {:stop, :read_limit_exceeded, state}
+  end
+
   def handle_frame({:binary, bin}, state) do
+    state = %{state | last_activity: System.monotonic_time(:millisecond)} # #243 M3
     case bin do
       <<kind, sid::big-32, n::big-32, rest::binary>> ->
         payload = binary_part(rest, 0, min(n, byte_size(rest)))
@@ -231,7 +273,18 @@ defmodule Etunnel do
             case kind do
               # Bodies accumulate as reversed iodata (O(1) per chunk), not
               # appended binaries (O(n) per chunk, O(n^2) per request).
-              1 -> {:ok, update_in(state, [:streams, sid, :body], &[payload | &1])}
+              # #243 M2: bound the buffered request body; over the limit the
+              # stream is refused with an RST instead of buffering the server
+              # into our RAM.
+              1 ->
+                new_size = st.size + byte_size(payload)
+                if new_size > @max_stream_body do
+                  state = update_in(state, [:streams], &Map.delete(&1, sid))
+                  {:reply, {:binary, frame(0x03, sid, "")}, state}
+                else
+                  state = update_in(state, [:streams, sid, :body], &[payload | &1])
+                  {:ok, update_in(state, [:streams, sid, :size], &(&1 + byte_size(payload)))}
+                end
               2 ->
                 state = update_in(state, [:streams], &Map.delete(&1, sid))
                 body = st.body |> Enum.reverse() |> IO.iodata_to_binary()
@@ -265,6 +318,20 @@ defmodule Etunnel do
 
   def handle_info({:etunnel_send, frame}, state) do
     {:reply, frame, state}
+  end
+
+  # #243 M3: keepalive tick - ping the server; when neither a pong nor any
+  # traffic has been seen for 150s the tunnel is dead (NAT blackhole) and the
+  # process is stopped so the supervisor can reconnect.
+  def handle_info(:etunnel_ping, state) do
+    Process.send_after(self(), :etunnel_ping, @ping_interval_ms)
+    now = System.monotonic_time(:millisecond)
+    if now - state.last_pong > @ping_deadline_ms and now - state.last_activity > @ping_deadline_ms do
+      IO.puts(:stderr, "etunnel: ping timeout")
+      {:stop, :ping_timeout, state}
+    else
+      {:reply, {:text, Jason.encode!(%{type: "ping", ts: System.system_time(:second)})}, state}
+    end
   end
 
   # Raw GenServer.call interception (see url/1): WebSockex routes unknown

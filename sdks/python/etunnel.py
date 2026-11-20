@@ -25,6 +25,20 @@ import websocket  # pip install websocket-client
 
 MAXP = 32768
 
+# #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
+# SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
+# the client: refuse streams over the cap with an RST, RST a stream whose
+# buffered request body passes MAX_STREAM_BODY, drop the socket on a message
+# above the read limit.
+MAX_STREAMS = 256
+MAX_STREAM_BODY = 16 * 1024 * 1024
+MAX_WS_MSG = 128 * 1024
+# #243 M3: client-side keepalive (Go pingLoop parity) - ping every 30s and
+# drop the tunnel when neither pongs nor traffic arrive for 150s; without it
+# a NAT blackhole keeps the client believing the tunnel is alive.
+PING_INTERVAL = 30.0
+PING_DEADLINE = 150.0
+
 HOP = {
     "connection", "proxy-connection", "keep-alive", "proxy-authenticate",
     "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
@@ -234,18 +248,47 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                 ws.send_binary(_frame(KIND_DATA, sid, payload[i:i + MAXP]))
             ws.send_binary(_frame(KIND_FIN, sid))
 
+    def close(reason: str = "client closed") -> None:
+        if state["closed"]:
+            return
+        state["closed"] = True
+        try:
+            with lock:
+                ws.send(json.dumps({"type": "bye", "reason": reason}))
+        except Exception:
+            pass
+        ws.close()
+        if opts.get("on_close"):
+            opts["on_close"](reason)
+
     def reader() -> None:
         try:
             while True:
                 m = ws.recv()
+                state["last_activity"] = time.monotonic()  # #243 M3
                 if isinstance(m, str):
-                    msg = json.loads(m)
+                    if len(m) > MAX_WS_MSG:  # #243 M2: 128KiB read limit
+                        close("read limit exceeded")
+                        return
+                    try:  # #243 M1 parity: malformed control frames are ignored
+                        msg = json.loads(m)
+                    except ValueError:
+                        continue
                     t = msg.get("type")
                     if t == "req":
-                        streams[msg["streamId"]] = {"req": msg, "body": []}
+                        sid = msg.get("streamId")
+                        # #243 M2: refuse a replayed live id or a stream beyond
+                        # the cap (Go registerClientStream parity) with an RST.
+                        if sid in streams or len(streams) >= MAX_STREAMS:
+                            with lock:
+                                ws.send_binary(_frame(KIND_RST, sid))
+                            continue
+                        streams[sid] = {"req": msg, "body": [], "size": 0}
                     elif t == "ping":
                         with lock:
                             ws.send(json.dumps({"type": "pong", "ts": msg.get("ts", 0)}))
+                    elif t == "pong":
+                        state["last_pong"] = time.monotonic()  # #243 M3
                     elif t == "bye":
                         state["closed"] = True
                         if opts.get("on_close"):
@@ -253,11 +296,23 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                         ws.close()
                         return
                 else:
+                    if len(m) > MAX_WS_MSG:  # #243 M2: 128KiB read limit
+                        close("read limit exceeded")
+                        return
                     kind, sid, payload = _parse_frame(m)
                     st = streams.get(sid)
                     if not st:
                         continue
                     if kind == KIND_DATA:
+                        # #243 M2: bound the buffered request body; over the
+                        # limit the stream is refused with an RST instead of
+                        # buffering the server into our RAM.
+                        st["size"] += len(payload)
+                        if st["size"] > MAX_STREAM_BODY:
+                            streams.pop(sid, None)
+                            with lock:
+                                ws.send_binary(_frame(KIND_RST, sid))
+                            continue
                         st["body"].append(payload)
                     elif kind == KIND_FIN:
                         streams.pop(sid, None)
@@ -270,19 +325,29 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
             if opts.get("on_close"):
                 opts["on_close"]("read closed")
 
-    threading.Thread(target=reader, daemon=True).start()
+    def pinger() -> None:
+        # #243 M3: keepalive loop - ping every 30s; when neither a pong nor
+        # any traffic has been seen for 150s the tunnel is dead (NAT
+        # blackhole) and the socket is torn down so the supervisor reconnects.
+        while not state["closed"]:
+            time.sleep(PING_INTERVAL)
+            if state["closed"]:
+                return
+            try:
+                with lock:
+                    ws.send(json.dumps({"type": "ping", "ts": int(time.time())}))
+            except Exception:
+                return
+            now = time.monotonic()
+            if (now - state["last_pong"] > PING_DEADLINE
+                    and now - state["last_activity"] > PING_DEADLINE):
+                close("ping timeout")
+                return
 
-    def close(reason: str = "client closed") -> None:
-        if state["closed"]:
-            return
-        state["closed"] = True
-        try:
-            ws.send(json.dumps({"type": "bye", "reason": reason}))
-        except Exception:
-            pass
-        ws.close()
-        if opts.get("on_close"):
-            opts["on_close"](reason)
+    state["last_pong"] = time.monotonic()
+    state["last_activity"] = time.monotonic()
+    threading.Thread(target=reader, daemon=True).start()
+    threading.Thread(target=pinger, daemon=True).start()
 
     return {
         "url": info["url"],
