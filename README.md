@@ -30,7 +30,8 @@ no router configuration, no firewall rule, no signup.
 - **20 SDKs, one protocol** - embed the tunnel in your own process (Go, Node,
   Python, Java, Kotlin, Scala, C#, Rust, Swift, Dart, Ruby, PHP, Perl, Lua,
   Clojure, Elixir, Deno, TypeScript, C, C++). The Swift SDK ships as a
-  SwiftPM package for **iOS 16+ / macOS 13+** apps; Android (AAR) and
+  SwiftPM package for **iOS 16+ / macOS 13+** apps (visionOS and Mac
+  Catalyst are not tested); Android (AAR) and
   HarmonyOS (ArkTS) SDKs are planned ([#260](https://github.com/topcheer/etunnel/issues/260)).
 - **Self-hostable** - the server is a single Go binary with ACME built in.
 - **WebSocket pass-through** - the Go SDK relays 101 upgrades as a raw byte
