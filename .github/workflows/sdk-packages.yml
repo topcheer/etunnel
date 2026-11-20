@@ -552,13 +552,18 @@ jobs:
           USER=""
           PASS=""
           if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            # Every step below is best-effort: under `bash -e` a failing
+            # pipeline (e.g. the token endpoint answering with an HTML error
+            # page -> jq parse error exit 5) killed the whole job BEFORE the
+            # Portal-token fallback could engage - v1.7.24's publish-android
+            # failed twice exactly this way (task board: task-1).
             JWT=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=central.sonatype.com" | jq -r '.value // empty')
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=central.sonatype.com" | jq -r '.value // empty') || true
             if [ -n "$JWT" ]; then
               RESP=$(curl -sS -X POST https://central.sonatype.com/api/internal/trusted_publishing/exchange \
                 -H 'Content-Type: application/json' -d "{\"token\":\"$JWT\"}" || true)
-              USER=$(echo "$RESP" | jq -r '.username // empty')
-              PASS=$(echo "$RESP" | jq -r '.password // empty')
+              USER=$(echo "$RESP" | jq -r '.username // empty') || true
+              PASS=$(echo "$RESP" | jq -r '.password // empty') || true
             fi
           fi
           if [ -z "$USER" ]; then
