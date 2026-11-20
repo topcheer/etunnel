@@ -46,6 +46,8 @@ type Server struct {
 	waInst   *webauthn.WebAuthn
 	waFlow   *waSessions
 	counter  Counter        // per-IP / per-account tunnel limits (mem or redis)
+	memOnce  sync.Once      // guards mem (#232)
+	mem      Counter        // local fallback while the shared counter is unavailable
 	ledger   *sessionLedger // session audit rows in PG (nil = journal-only, #69)
 	router   Router         // cluster routing (nil = single node)
 	draining atomic.Bool
