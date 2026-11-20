@@ -108,7 +108,15 @@ class Etunnel {
       if (resume != null && resume.isNotEmpty) 'resume': resume,
       'client': 'etunnel-dart/1.0',
     }));
-    await et._url.future.timeout(const Duration(seconds: 15));
+    // #243 M4: a failed handshake must not leave a zombie socket behind:
+    // the listener is already installed, so an unclosed ws keeps serving
+    // a tunnel the caller believes failed.
+    try {
+      await et._url.future.timeout(const Duration(seconds: 15));
+    } catch (e) {
+      try { await ws.close(); } catch (_) {}
+      rethrow;
+    }
     return et;
   }
 
@@ -125,12 +133,21 @@ class Etunnel {
 
   void _onMessage(Object? msg) {
     if (msg is String) {
-      final m = jsonDecode(msg) as Map<String, dynamic>;
+      // #243 M1: malformed text frames are ignored (Go parity), never
+      // crash the isolate with an unhandled jsonDecode error.
+      final Map<String, dynamic> m;
+      try {
+        m = jsonDecode(msg) as Map<String, dynamic>;
+      } catch (_) {
+        return;
+      }
       switch (m['type']) {
         case 'welcome':
           url = m['url'] as String;
           resumeToken = (m['resumeToken'] as String?) ?? resumeToken;
-          _url.complete(url!);
+          // #243 M4: a late welcome after a timeout used to hit an already
+          // completed completer and throw StateError.
+          if (!_url.isCompleted) _url.complete(url!);
         case 'error':
           if (!_url.isCompleted) {
             _url.completeError('etunnel: ${m['code']}: ${m['message'] ?? ''}');

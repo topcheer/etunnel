@@ -60,9 +60,19 @@ async function connect(server, local, opts = {}) {
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.6.12', resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
-    const to = setTimeout(() => rej(Object.assign(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome'), { code: 'sdk_timeout' })), 15000);
+    const to = setTimeout(() => {
+      // #243 M4: a timed-out handshake must not leave a zombie socket
+      // behind - close it before rejecting.
+      try { ws.close(); } catch {}
+      rej(Object.assign(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome'), { code: 'sdk_timeout' }));
+    }, 15000);
     ws.onmessage = (ev) => {
-      const m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString());
+      // #243 M1: malformed text frames are ignored (Go DecodeControl
+      // parity); a bare parse would crash the process.
+      let m;
+      try {
+        m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString());
+      } catch { return; }
       if (m.type === 'welcome') { clearTimeout(to); res(m); }
       else if (m.type === 'error') { clearTimeout(to); rej(Object.assign(new Error(`etunnel: server rejected: ${m.code}: ${m.message || ''}`), { code: m.code })); }
     };
@@ -74,7 +84,8 @@ async function connect(server, local, opts = {}) {
 
   ws.onmessage = (ev) => {
     if (typeof ev.data === 'string') {
-      const m = JSON.parse(ev.data);
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1: ignore malformed frames
       if (m.type === 'req') {
         state.streams.set(m.streamId, { req: m, body: [] });
       } else if (m.type === 'ping') {
