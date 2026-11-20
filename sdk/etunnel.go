@@ -547,6 +547,15 @@ func (t *Tunnel) readLoop() {
 			select {
 			case st.frames <- f:
 			case <-st.done:
+			default:
+				// #230: this stream's local consumer stalled (its frames
+				// queue is full). Never park the tunnel's only reader on
+				// one stream: reset the stalled stream and keep the tunnel
+				// - and every other stream on it - alive. This mirrors the
+				// server-side HOL policy (PROTOCOL.md: a stream that stops
+				// making progress is reset instead of stalling the tunnel).
+				_ = t.sendRst(f.StreamID)
+				st.abort()
 			}
 		}
 	}
