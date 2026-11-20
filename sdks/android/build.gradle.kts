@@ -90,6 +90,6 @@ mavenPublishing {
     // mavenCentralUsername/mavenCentralPassword Gradle properties (env
     // ORG_GRADLE_PROJECT_* in CI). Publish tasks are only invoked by the
     // sdk-packages publish-android job on v* tags.
-    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, true)
     signAllPublications()
 }
