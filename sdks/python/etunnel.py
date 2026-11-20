@@ -158,14 +158,23 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
         "client": opts.get("client", "etunnel-python/1.0"),
     }))
 
-    while True:
-        m = json.loads(ws.recv())
-        if m.get("type") == "welcome":
-            info = m
-            break
-        if m.get("type") == "error":
-            ws.close()
-            raise RuntimeError(f"etunnel: {m.get('code')}: {m.get('message', '')}")
+    # #243 M4: a handshake timeout/transport error must not leave a zombie
+    # socket behind; #243 M1: malformed text frames are ignored (Go parity).
+    try:
+        while True:
+            try:
+                m = json.loads(ws.recv())
+            except ValueError:
+                continue
+            if m.get("type") == "welcome":
+                info = m
+                break
+            if m.get("type") == "error":
+                ws.close()
+                raise RuntimeError(f"etunnel: {m.get('code')}: {m.get('message', '')}")
+    except Exception:
+        ws.close()
+        raise
 
     # The 15s connect timeout above stays on the socket after the handshake
     # (#241): the server pings every 30s, so an idle tunnel always hit the

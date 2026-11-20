@@ -130,9 +130,18 @@ export async function connect(server: string, local: string | number, opts: Opti
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-deno/1.6.11', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
-    const to = setTimeout(() => rej(Object.assign(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome'), { code: 'sdk_timeout' })), 15000);
+    const to = setTimeout(() => {
+      // #243 M4: a timed-out handshake must not leave a zombie socket.
+      try { ws.close(); } catch { /* gone */ }
+      rej(Object.assign(new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome'), { code: 'sdk_timeout' }));
+    }, 15000);
     ws.onmessage = (ev) => {
-      const m = JSON.parse(String(ev.data));
+      // #243 M1: malformed text frames are ignored (Go DecodeControl
+      // parity); a bare parse would crash the process.
+      let m: any;
+      try {
+        m = JSON.parse(String(ev.data));
+      } catch { return; }
       if (m.type === 'welcome') { clearTimeout(to); res(m); }
       else if (m.type === 'error') { clearTimeout(to); rej(Object.assign(new Error(`etunnel: server rejected: ${m.code}: ${m.message || ''}`), { code: m.code })); }
     };
@@ -143,7 +152,8 @@ export async function connect(server: string, local: string | number, opts: Opti
 
   ws.onmessage = (ev) => {
     if (typeof ev.data === 'string') {
-      const m = JSON.parse(ev.data);
+      let m: any;
+      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1: ignore malformed frames
       if (m.type === 'req') streams.set(m.streamId, { req: m, body: [] });
       else if (m.type === 'ping') ws.send(JSON.stringify({ type: 'pong', ts: m.ts }));
       else if (m.type === 'bye') { closed = true; opts.onClose?.(m.reason); try { ws.close(); } catch { /* gone */ } }
@@ -247,19 +257,19 @@ async function connectWatched(
   local: string | number,
   opts: Options,
 ): Promise<{ tunnel: Tunnel; ws: WebSocket | null }> {
+  // #243 M5: capture the socket through the documented wsFactory hook
+  // instead of patching the global WebSocket, which races when several
+  // connects share one event loop (node already made this move).
   const box: { ws: WebSocket | null } = { ws: null };
-  const Real = globalThis.WebSocket as unknown as new (...args: unknown[]) => WebSocket;
-  const Watch = function (...args: unknown[]): WebSocket {
-    const s = new Real(...args);
-    box.ws = s;
-    return s;
+  const watched: Options = {
+    ...opts,
+    wsFactory: (u: string) => {
+      const s = opts.wsFactory ? opts.wsFactory(u) : new WebSocket(u, 'etunnel-v1');
+      box.ws = s;
+      return s;
+    },
   };
-  (globalThis as unknown as { WebSocket: unknown }).WebSocket = Watch;
-  try {
-    return { tunnel: await connect(server, local, opts), ws: box.ws };
-  } finally {
-    (globalThis as unknown as { WebSocket: unknown }).WebSocket = Real;
-  }
+  return { tunnel: await connect(server, local, watched), ws: box.ws };
 }
 
 // Resolve once the session is over: explicit close(), server bye, or a drop.
