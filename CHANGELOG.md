@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.24 — 2026-11-20
+
+- sdks: Android AAR SDK, Kotlin+OkHttp3 (#260) (PR #271)
+
 ## v1.7.23 — 2026-11-20
 
 - sdks: cross-SDK stream caps and client ping (#243 M2/M3) (PR #262)
