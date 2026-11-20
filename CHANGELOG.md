@@ -2,7 +2,7 @@
 
 ## v1.7.26 — 2026-11-21
 
-- (fill in)
+- sdks: republish Android AAR (1.7.25 upload stalled as a Portal draft; Central Portal automaticRelease now enabled) (#260)
 
 ## v1.7.25 — 2026-11-20
 
