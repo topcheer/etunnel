@@ -2,11 +2,24 @@
 
 ## v1.7.22 — 2026-11-20
 
-- (fill in)
+- auth: only trust provider-verified emails in the OAuth callback (#215) (PR #247)
+- proxy: release the request-body pump when the stream finishes (#217) (PR #248)
+- sdk: reset a stalled stream instead of parking the whole tunnel (#230) (PR #249)
+- cluster: carry WebSocket upgrades through router Forward via hijacked pipes (#235) (PR #250)
+- helm: fail the install when mesh/sticky lack SESSION_SECRET (#246) (PR #251)
+- server: stop blocking Session.Close on cluster backends (#220) (PR #252)
+- server: keep the per-IP tunnel limit enforced and un-lockable (#232) (PR #253)
+- cluster: stop swallowing sticky routing-table errors (#236) (PR #254)
+- ci: run the Go gate on every PR and push to main (#213) (PR #255)
+- kotlin sdk: upgrade the Kotlin plugin to 2.2.0 and make the build real (#214) (PR #256)
+- sdks (js/dart/python): handshake and frame robustness fixes (#243 M1/M4/M5) (PR #257)
+- rust sdk: honest truncation, a real close(), dial error prefixes (#243 M7/M8/L1/L4) (PR #258)
+- sdks: header fidelity, IPv6 locals, required-local guards (#243 M6/M9/L5/L7) (PR #259)
+- chore: ignore kotlin gradle build outputs
 
 ## v1.7.21 — 2026-11-19
 
-- (fill in)
+- republish: version-manifest bump only, no code changes since v1.7.20
 
 ## v1.7.20 — 2026-11-19
 
