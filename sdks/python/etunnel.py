@@ -321,6 +321,12 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                     elif kind == KIND_RST:
                         streams.pop(sid, None)
         except Exception:
+            # #267: close() (or a server bye) may already have ended the
+            # tunnel and fired the user callback with the real reason; this
+            # except branch must not double-fire with a contradicting
+            # "read closed" (supervisors would double-spawn reconnects).
+            if state["closed"]:
+                return
             state["closed"] = True
             if opts.get("on_close"):
                 opts["on_close"]("read closed")

@@ -340,7 +340,17 @@ public sealed class Etunnel
                 {
                     (kind, bytes) = await ReadMessage(_ws, CancellationToken.None);
                 }
-                catch (Exception e) { Console.Error.WriteLine($"[etunnel] loop error: {e}"); return; }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine($"[etunnel] loop error: {e}");
+                    // #267: abort immediately so Tunnel.State flips to
+                    // Aborted/Closed at once - previously the socket stayed
+                    // "Open" for up to 150s (supervisor saw a healthy tunnel,
+                    // requests went unanswered) before the pinger's
+                    // misleading "ping timeout" tore it down.
+                    try { _ws.Abort(); } catch { /* already gone */ }
+                    return;
+                }
                 _lastActivity = Environment.TickCount64; // #243 M3
                 if (kind == WebSocketMessageType.Text)
                 {

@@ -40,6 +40,30 @@ pub struct Options {
     pub subdomain: Option<String>,
 }
 
+/// #263: broadcasts tunnel termination (server bye, ping-timeout, reader
+/// transport error) to every registered receiver - Go `Done()` parity so
+/// embedding apps can observe tunnel death without polling.
+#[derive(Default)]
+pub struct DoneBroadcaster {
+    txs: std::sync::Mutex<Vec<mpsc::Sender<()>>>,
+}
+
+impl DoneBroadcaster {
+    pub fn new() -> Self {
+        Self { txs: std::sync::Mutex::new(Vec::new()) }
+    }
+    /// Register a sender; it receives `()` when the tunnel ends.
+    pub fn register(&self, tx: mpsc::Sender<()>) {
+        self.txs.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
+    }
+    /// Signal every registered receiver and drain the registry.
+    pub fn signal(&self) {
+        for tx in self.txs.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
+            let _ = tx.send(());
+        }
+    }
+}
+
 pub struct Tunnel {
     pub url: String,
     /// Server-signed resume token: pass it back on reconnect to reclaim the
@@ -51,6 +75,9 @@ pub struct Tunnel {
     /// Outbound relay handle for close() (#243 M8): sending a bye here is
     /// flushed by the reader loop, which owns the socket lock.
     out: Option<mpsc::Sender<Message>>,
+    /// Termination broadcaster (#263): fired by the reader thread (bye,
+    /// transport error) and the keepalive thread (ping timeout).
+    done: Arc<DoneBroadcaster>,
 }
 
 impl Tunnel {
@@ -66,6 +93,24 @@ impl Tunnel {
             .ok();
         }
         self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// done() returns a receiver that fires when the tunnel ends - server
+    /// bye, keepalive ping-timeout, or reader transport error (Go Done()
+    /// parity, #263). Register before the tunnel ends; several receivers
+    /// are fine, and a receiver taken after the end fires immediately.
+    pub fn done(&self) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        if self.closed.load(Ordering::SeqCst) {
+            let _ = tx.send(());
+            return rx;
+        }
+        self.done.register(tx.clone());
+        // Narrow race: the tunnel ended between the check and registration.
+        if self.closed.load(Ordering::SeqCst) {
+            let _ = tx.send(());
+        }
+        rx
     }
 }
 
@@ -292,9 +337,11 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     }
 
     let closed = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(DoneBroadcaster::new());
     let ws2 = Arc::clone(&ws);
     let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
+    let done2 = Arc::clone(&done);
     // #243 M3: liveness bookkeeping shared by the reader (updates) and the
     // keepalive thread (checks).
     let last_pong = Arc::new(Mutex::new(std::time::Instant::now()));
@@ -391,8 +438,10 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             }
         }
         closed2.store(true, Ordering::SeqCst);
+        done2.signal(); // #263: tunnel death is observable
     });
 
+    let done3 = Arc::clone(&done);
     // #243 M3: client keepalive (Go pingLoop parity): ping every 30s through
     // the outbound relay; when neither a pong nor any traffic has been seen
     // for 150s the tunnel is dead (NAT blackhole) - send a Close so the
@@ -428,12 +477,13 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                 eprintln!("etunnel: ping timeout");
                 ping_tx.send(Message::Close(None)).ok();
                 ping_closed.store(true, Ordering::SeqCst);
+                done3.signal(); // #263: tunnel death is observable
                 return;
             }
         });
     }
 
-    Ok(Tunnel { url, resume_token, closed, out: Some(out_tx) })
+    Ok(Tunnel { url, resume_token, closed, done, out: Some(out_tx) })
 }
 
 /// Reader-side flush of the outbound relay: sends every queued message on the

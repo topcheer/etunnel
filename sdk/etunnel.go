@@ -104,6 +104,7 @@ type Tunnel struct {
 	closed      chan struct{}
 	closeOnce   sync.Once
 	closeReason atomic.Value // string
+	closeErr    atomic.Value // error: terminal transport error (#266)
 
 	mu      sync.Mutex
 	streams map[uint32]*clientStream
@@ -360,11 +361,58 @@ func (t *Tunnel) ExpiresAt() time.Time { return t.expiresAt }
 func (t *Tunnel) Done() <-chan struct{} { return t.closed }
 
 // CloseReason returns why the tunnel ended ("" while running).
+//
+// #266: transport-level ends no longer collapse to "read closed" - when the
+// read loop recorded a terminal error, the reason names the peer close
+// code/reason (server policy closes like 4403) or the transport failure.
 func (t *Tunnel) CloseReason() string {
 	if v, ok := t.closeReason.Load().(string); ok {
+		if v == "read closed" {
+			if err := t.Err(); err != nil {
+				var ce *websocket.CloseError
+				if errors.As(err, &ce) {
+					reason := ce.Reason
+					if reason == "" {
+						reason = "no reason"
+					}
+					return fmt.Sprintf("closed by peer (code=%d %s)", ce.Code, reason)
+				}
+				if errors.Is(err, t.ctx.Err()) && t.ctx.Err() != nil {
+					return "context canceled"
+				}
+				return "transport error: " + err.Error()
+			}
+		}
 		return v
 	}
 	return ""
+}
+
+// Err returns the terminal error that ended the tunnel: nil while running
+// or after a caller-initiated Close. WebSocket close frames surface as a
+// *websocket.CloseError with Code/Reason; anything else is the transport
+// failure the read loop hit (#266).
+func (t *Tunnel) Err() error {
+	if v, ok := t.closeErr.Load().(error); ok {
+		// coder/websocket wraps close frames in its own error type without an
+		// Unwrap() back to CloseError, so synthesize the CloseError from the
+		// library's CloseStatus/CloseReason helpers (#266).
+		if code := websocket.CloseStatus(v); code >= 0 {
+			// this coder/websocket version has no CloseReason helper; the
+			// close frame reason is embedded in the error text as
+			// `reason = "..."` - parse it out (empty when absent).
+			reason := ""
+			if s := v.Error(); strings.Contains(s, `reason = "`) {
+				rest := s[strings.Index(s, `reason = "`)+len(`reason = "`):]
+				if j := strings.Index(rest, `"`); j >= 0 {
+					reason = rest[:j]
+				}
+			}
+			return &websocket.CloseError{Code: code, Reason: reason}
+		}
+		return v
+	}
+	return nil
 }
 
 // Close shuts the tunnel down.
@@ -504,6 +552,9 @@ func (t *Tunnel) readLoop() {
 	for {
 		typ, rd, err := t.ws.Reader(t.ctx)
 		if err != nil {
+			// #266: keep the cause - CloseReason()/Err() surface close codes
+			// (policy closes, control-message-too-large) vs network faults.
+			t.closeErr.Store(err)
 			return
 		}
 		t.lastActivity.Store(time.Now().UnixNano())
@@ -511,6 +562,7 @@ func (t *Tunnel) readLoop() {
 		case websocket.MessageText:
 			b, err := io.ReadAll(io.LimitReader(rd, 64*1024))
 			if err != nil {
+				t.closeErr.Store(err)
 				return
 			}
 			msg, err := protocol.DecodeControl(b)
@@ -536,6 +588,7 @@ func (t *Tunnel) readLoop() {
 		case websocket.MessageBinary:
 			f, err := protocol.ReadFrame(rd)
 			if err != nil {
+				t.closeErr.Store(err) // #266
 				return
 			}
 			t.mu.Lock()
