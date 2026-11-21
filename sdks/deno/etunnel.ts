@@ -4,6 +4,8 @@
 // const t = await connect('wss://t.etun.uk/tunnel', 3000);
 // console.log(t.url);
 
+import { brotliCompressSync, brotliDecompressSync, deflateSync, gzipSync } from 'node:zlib';
+
 const MAXP = 32768;
 
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
@@ -31,6 +33,29 @@ function frame(kind: number, id: number, payload: Uint8Array): Uint8Array {
 }
 
 const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+
+// #286 helpers: does `buf` still carry `coding`, or did fetch hand us the
+// plain entity while the header still declares the coding?
+function bodyIsPlain(coding: string, buf: Uint8Array): boolean {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return !(buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b);
+    if (coding === 'deflate') return !(buf.length >= 1 && buf[0] === 0x78); // zlib wrapper
+    if (coding === 'br') { brotliDecompressSync(buf); return true; }        // decoded OK => plain
+  } catch { /* malformed as `coding` => it is still coded */ }
+  return false;
+}
+
+// Recompress a plain entity back into the coding the local service declared.
+// Returns null when we cannot honor the coding - the caller then drops the
+// Content-Encoding header instead of shipping a mismatch.
+function restoreCoded(coding: string, buf: Uint8Array): Uint8Array | null {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return gzipSync(buf);
+    if (coding === 'deflate') return deflateSync(buf);
+    if (coding === 'br') return brotliCompressSync(buf);
+  } catch { /* fall through: caller drops the declaration */ }
+  return null;
+}
 
 /**
  * Options for {@linkcode connect}.
@@ -282,8 +307,21 @@ export async function connect(server: string, local: string | number, opts: Opti
     }
     const rh: Record<string, string[]> = {};
     resp.headers.forEach((v, k) => { if (!HOP.has(k.toLowerCase())) (rh[k] = rh[k] || []).push(v); });
+    // #286: Deno fetch decompresses gzip/deflate/br transparently yet still
+    // exposes Content-Encoding on resp.headers - keep the declared coding
+    // and the replayed entity consistent (PROTOCOL.md §2 identity-body
+    // invariant); restore the coding, or drop the declaration if we cannot.
+    let buf: Uint8Array = new Uint8Array(await resp.arrayBuffer());
+    const ceKey = Object.keys(rh).find((k) => k.toLowerCase() === 'content-encoding');
+    if (ceKey && buf.length > 0) {
+      const coding = (rh[ceKey][rh[ceKey].length - 1] || '').split(',')[0].trim().toLowerCase();
+      if (bodyIsPlain(coding, buf)) {
+        const restored = restoreCoded(coding, buf);
+        if (restored) buf = restored;
+        else delete rh[ceKey];
+      }
+    }
     ws.send(JSON.stringify({ type: 'res', streamId: id, status: resp.status, headers: rh }));
-    const buf = new Uint8Array(await resp.arrayBuffer());
     for (let i = 0; i < buf.length; i += MAXP) ws.send(frame(0x01, id, buf.subarray(i, Math.min(i + MAXP, buf.length))));
     ws.send(frame(0x02, id, new Uint8Array(0)));
   }

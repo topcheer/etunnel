@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const zlib = require('node:zlib');
 // etunnel SDK for Node.js (>= 22, built-in WebSocket, zero dependencies).
 // Buffer-based protocol client: request/response bodies are buffered per
 // stream (fine for typical webhooks and demos; WebSocket upgrades are not
@@ -37,6 +38,31 @@ function frame(kind, id, payload) {
 
 const { normalizeRoutes, routeFor } = require('./route');
 const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+
+// #286 helpers: does `buf` still carry `coding`, or did undici hand us the
+// plain entity while the header still declares the coding?
+function bodyIsPlain(coding, buf) {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return !(buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b);
+    if (coding === 'deflate') return !(buf.length >= 1 && buf[0] === 0x78); // zlib wrapper
+    if (coding === 'br') { zlib.brotliDecompressSync(buf); return true; }   // decoded OK => plain
+    if (coding === 'zstd' && typeof zlib.zstdDecompressSync === 'function') { zlib.zstdDecompressSync(buf); return true; }
+  } catch { /* malformed as `coding` => it is still coded */ }
+  return false;
+}
+
+// Recompress a plain entity back into the coding the local service declared.
+// Returns null when we cannot honor the coding - the caller then drops the
+// Content-Encoding header instead of shipping a mismatch.
+function restoreCoded(coding, buf) {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return Buffer.from(zlib.gzipSync(buf));
+    if (coding === 'deflate') return Buffer.from(zlib.deflateSync(buf));
+    if (coding === 'br') return Buffer.from(zlib.brotliCompressSync(buf));
+    if (coding === 'zstd' && typeof zlib.zstdCompressSync === 'function') return Buffer.from(zlib.zstdCompressSync(buf));
+  } catch { /* fall through: caller drops the declaration */ }
+  return null;
+}
 
 function pickHostPort(local) {
   if (/^\d+$/.test(String(local))) return { host: '127.0.0.1', port: Number(local) };
@@ -208,8 +234,21 @@ async function connect(server, local, opts = {}) {
     }
     const rh = {};
     resp.headers.forEach((v, k) => { const lk = k.toLowerCase(); if (!HOP.has(lk)) (rh[k] = rh[k] || []).push(v); });
+    // #286: undici decompresses gzip/deflate/br transparently yet still
+    // exposes Content-Encoding on resp.headers - keep the declared coding
+    // and the replayed entity consistent (PROTOCOL.md §2 identity-body
+    // invariant); restore the coding, or drop the declaration if we cannot.
+    let buf = Buffer.from(await resp.arrayBuffer());
+    const ceKey = Object.keys(rh).find((k) => k.toLowerCase() === 'content-encoding');
+    if (ceKey && buf.length > 0) {
+      const coding = (rh[ceKey][rh[ceKey].length - 1] || '').split(',')[0].trim().toLowerCase();
+      if (bodyIsPlain(coding, buf)) {
+        const restored = restoreCoded(coding, buf);
+        if (restored) buf = restored;
+        else delete rh[ceKey];
+      }
+    }
     send(JSON.stringify({ type: 'res', streamId: id, status: resp.status, headers: rh }));
-    const buf = Buffer.from(await resp.arrayBuffer());
     for (let i = 0; i < buf.length; i += MAXP) sendBin(frame(0x01, id, buf.subarray(i, Math.min(i + MAXP, buf.length))));
     sendBin(frame(0x02, id));
   }

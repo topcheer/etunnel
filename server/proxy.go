@@ -35,6 +35,33 @@ func isHopHeader(k string) bool {
 	return false
 }
 
+// isHexDigit reports whether c is an ASCII hexadecimal digit.
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// looksChunkedFramed reports whether b opens with an HTTP/1.1 chunk-size
+// line (RFC 9112 §7.1: 1*HEXDIGIT [;ext] CRLF). Diagnostic only (#286):
+// it never mutates the stream - an identity body that merely begins with
+// hex digits is at worst logged once.
+func looksChunkedFramed(b []byte) bool {
+	i := 0
+	for i < len(b) && i < 10 && isHexDigit(b[i]) {
+		i++
+	}
+	if i == 0 || i >= len(b) {
+		return false // no hexdigits, or they ran to the end of the buffer
+	}
+	if b[i] == ';' {
+		return true // chunk extension after the size
+	}
+	if b[i] != '\r' {
+		return false
+	}
+	i++
+	return i < len(b) && b[i] == '\n'
+}
+
 func connectionTokens(h http.Header) map[string]bool {
 	tokens := make(map[string]bool)
 	for _, v := range h.Values("Connection") {
@@ -203,7 +230,7 @@ func (s *Server) serveTunnelRequest(w http.ResponseWriter, r *http.Request, sess
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
 		return
 	}
-	s.streamTunnelBody(w, r, sess, st)
+	s.streamTunnelBody(w, r, sess, st, res)
 }
 
 // serveTunnelResErr maps a waitRes failure to the visitor response. Reset
@@ -249,12 +276,32 @@ func (s *Server) writeTunnelResponseHeaders(w http.ResponseWriter, r *http.Reque
 // bandwidth limiter. A mid-body failure after headers forces the connection
 // closed (panic ErrAbortHandler) so the client sees a truncated - not
 // silently valid - body; EOF finishes the stream cleanly.
-func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *Session, st *Stream) {
+func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *Session, st *Stream, res *protocol.Res) {
 	rc := http.NewResponseController(w)
+	// #286: the wire contract (PROTOCOL.md §2) is that res DATA frames carry
+	// the identity entity body - the replay stack's HTTP client owns the
+	// transfer coding, so chunk-size lines never cross the tunnel. When the
+	// response declares no length and no framing while the bytes open with a
+	// chunk-size line, a replay stack forwarded the local service's
+	// transfer-framed bytes verbatim; behind h2/CDN the outer framing is
+	// invisible and the visitor gunzips framing+payload (browser content
+	// decode errors, burrow 2026-11-21). The proxy must not second-guess
+	// payload bytes, so the body is relayed untouched - but the contract
+	// violation gets a pointed trace here instead of surfacing only as a
+	// broken page on the visitor side.
+	sniffFraming := len(res.Headers["Content-Length"]) == 0 &&
+		len(res.Headers["Transfer-Encoding"]) == 0
+	sniffed := false
 	buf := make([]byte, protocol.MaxPayload)
 	for {
 		n, rerr := st.bodyPr.Read(buf)
 		if n > 0 {
+			if !sniffed {
+				sniffed = true
+				if sniffFraming && looksChunkedFramed(buf[:n]) {
+					s.logf("proxy: %s %s%s: response body starts with chunk-size framing but headers declare no framing - tunnel client replay leaked transfer-framed bytes (identity-body contract: PROTOCOL.md §2, #286)", r.Method, r.Host, r.URL.RequestURI())
+				}
+			}
 			if sess.limiter != nil {
 				if werr := sess.limiter.WaitN(r.Context(), n); werr != nil {
 					panic(http.ErrAbortHandler)

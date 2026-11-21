@@ -199,6 +199,29 @@ The client executes the request against the local service and answers:
 
 followed by `DATA` frames with the response body and `FIN` at the end.
 
+**The `res` body on the wire is always the identity entity body** (#286).
+`DATA` payloads carry exactly the bytes the visitor should decode against
+the declared headers - transfer codings never cross the tunnel.
+`Transfer-Encoding` is hop-by-hop and never forwarded; `Content-Length` is
+forwarded only when the local service declared it for the same entity. When
+neither is present the server's own outbound hop re-frames the stream
+(Go chunked-encodes HTTP/1.1; HTTP/2 frames are implicit), so any framing
+bytes inside `DATA` reach the visitor as *undeclared* frames - gzip payloads
+then fail gunzip with browser content-decode errors (the framed bytes end up
+in front of the gzip stream, invisible behind the h2/CDN outer hop).
+
+Every SDK replay stack must therefore obtain the response body through an
+HTTP client that has already removed the transport framing (framing-aware
+clients such as net/http / OkHttp / fetch / URLSession do this by
+construction) or use `Connection: close` semantics so the local service
+never chunks in the first place - and must not forward `Transfer-Encoding`
+or a stale `Content-Length` in `res` headers. A replay stack that copies the
+local response bytes verbatim (raw socket, no de-chunking) violates this
+contract; the server detects the signature (framed bytes under headers that
+declare no framing) and logs it, but relays bytes untouched. SDK test suites
+pin the invariant with a gzip+chunked local fixture and assert the `DATA`
+bytes equal the pure gzip stream.
+
 Timeouts: the server waits ~30s for `res` (then answers the visitor with 504);
 if the tunnel dies mid-exchange the visitor gets 502. A stream that stops
 making progress is reset on its own (`RST`) instead of stalling the whole
