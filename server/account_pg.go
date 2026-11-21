@@ -134,7 +134,13 @@ func (s *pgAccountStore) loadAll(ctx context.Context) error {
 			a.LapsedAt = *lap
 		}
 		if len(pkJSON) > 0 {
-			_ = json.Unmarshal(pkJSON, &a.Passkeys)
+			// #265: corrupt passkey JSON must not silently turn into "no
+			// passkeys" - the user's login method would vanish without a
+			// trace. Keep the empty list (the row stays usable) but log the
+			// row key loudly.
+			if err := json.Unmarshal(pkJSON, &a.Passkeys); err != nil {
+				log.Printf("accounts: pg row %s: corrupt passkeys JSON dropped (%v)", a.Email, err)
+			}
 		}
 		byKey[a.APIKey] = a
 		byMail[a.Email] = a
@@ -153,7 +159,11 @@ func (s *pgAccountStore) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = s.loadAll(ctx)
+			// #265: a PG outage must not be invisible - the server would
+			// indefinitely serve stale account data with zero signal.
+			if err := s.loadAll(ctx); err != nil {
+				log.Printf("accounts: pg poll loadAll failed (serving stale data): %v", err)
+			}
 		}
 	}
 }

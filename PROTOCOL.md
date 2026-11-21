@@ -32,6 +32,9 @@ sequenceDiagram
 
     E->>S: ping (every 30s)
     S->>E: pong
+    S->>E: ping (every 30s, M3 client keepalive)
+    E->>S: pong
+    note over S,E: either side drops the tunnel when no pong and no traffic\narrive for ~150s (NAT blackhole detection)
     E->>S: bye {reason} (on TTL expiry / shutdown)
 ```
 
@@ -283,7 +286,9 @@ tunnel (`ping_timeout`) if neither pongs nor traffic are seen for ~150s.
 
 Either side sends `{"type":"bye","reason":"ttl_expired"}` best-effort before
 closing the socket. Notable reasons: `ttl_expired`, `ping_timeout`,
-`server_shutdown`, `client closed`, `read closed`.
+`server_shutdown`, `client closed`, `read closed`, `read limit exceeded`
+(M2: node/TS/deno/python clients send this bye before dropping the socket
+when a single WS message exceeds the 128 KiB read limit).
 
 Reasons a server ends a tunnel proactively:
 

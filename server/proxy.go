@@ -557,6 +557,15 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 	}()
 
 	<-done
+	// #264: the first direction to exit (usually the visitor hanging up on
+	// a silent push-only app) cannot wake the other goroutine parked in
+	// bodyPr.Read - only a pump write, finish or abort can. Abort the
+	// stream so that read drains (finish also removes the stream slot),
+	// close the hijacked conn for good measure, then wait for the splice
+	// to wind down. Without this, serveUpgrade parks on the second <-done
+	// forever and leaks the handler goroutine, the tunnel->external
+	// goroutine and one MaxStreamsPerTunnel slot per visitor early exit.
+	st.abort()
 	_ = conn.Close()
 	<-done
 }

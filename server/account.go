@@ -389,7 +389,12 @@ func (s *AccountStore) DowngradeToFree(email string) bool {
 	if a.LapsedAt.IsZero() {
 		a.LapsedAt = time.Now() // keep the first lapse; do not overwrite
 	}
-	_ = s.saveLocked()
+	// #265: a lost downgrade write resurrects the paid tier (quota and
+	// entitlements) on the next restart - surface the failure through the
+	// store's standard onSaveErr channel instead of discarding it.
+	if err := s.saveLocked(); err != nil {
+		s.reportSaveErr(err)
+	}
 	return true
 }
 
