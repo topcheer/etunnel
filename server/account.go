@@ -64,6 +64,11 @@ type Account struct {
 	// (free tier, or an account granted a tier manually). The reaper in
 	// Server.startTierReaper downgrades expired accounts to free.
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	// SessionEpoch invalidates browser sessions when bumped (logout,
+	// API-key reset): the session-cookie MAC folds it in (#295). Accounts
+	// created before the field existed carry 0, so the rollout does not
+	// force a global re-login.
+	SessionEpoch int64 `json:"sessionEpoch,omitempty"`
 	// PaidShort is the purchased entitlement to register 1-3 character
 	// subdomains (one-time purchase per subscription period; Free accounts
 	// can hold one without a paid tier).

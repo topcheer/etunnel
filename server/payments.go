@@ -391,7 +391,10 @@ func (s *Server) handleBillingSuccess(w http.ResponseWriter, r *http.Request) {
 	tier, _ := meta["tier"].(string)
 	key, err := s.activate(email, tier)
 	if err != nil {
-		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
+		// #295: activation errors carry internal detail - log specifics,
+		// answer the buyer generically.
+		s.logf("billing: stripe success activation failed: %v", err)
+		http.Error(w, "activation failed; the webhook will retry", http.StatusInternalServerError)
 		return
 	}
 	s.writeSuccessKeyPage(w, r, tier, email, key)
@@ -433,7 +436,10 @@ func (s *Server) handlePayPalReturn(w http.ResponseWriter, r *http.Request) {
 	}
 	key, err := s.activate(email, tier)
 	if err != nil {
-		http.Error(w, "activation failed: "+err.Error(), http.StatusInternalServerError)
+		// #295: activation errors carry internal detail - log specifics,
+		// answer the buyer generically.
+		s.logf("billing: paypal return activation failed: %v", err)
+		http.Error(w, "activation failed; the webhook will retry", http.StatusInternalServerError)
 		return
 	}
 	s.writeSuccessKeyPage(w, r, tier, email, key)
@@ -754,6 +760,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		Data struct {
 			Object struct {
 				PaymentStatus string `json:"payment_status"`
+				ReceiptEmail  string `json:"receipt_email"`
 				Metadata      struct {
 					Email string `json:"email"`
 					Tier  string `json:"tier"`
@@ -779,6 +786,25 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		} else {
 			markPaymentEvent("stripe:" + ev.ID)
+		}
+	}
+	// #295: refunds and chargebacks roll the entitlement back exactly like
+	// the tier reaper does - the money is gone, the paid quota must go too.
+	if ev.Type == "charge.refunded" || ev.Type == "charge.dispute.created" {
+		email := ev.Data.Object.Metadata.Email
+		if email == "" {
+			email = strings.ToLower(strings.TrimSpace(ev.Data.Object.ReceiptEmail))
+		}
+		switch {
+		case email == "":
+			s.logf("billing: stripe %s (%s) has no attributable email; no rollback", ev.Type, ev.ID)
+		case paymentEventSeen("stripe:" + ev.ID):
+			s.logf("billing: stripe webhook replay suppressed (event %s)", ev.ID)
+		default:
+			s.accounts.DowngradeToFree(email)
+			s.revokeShortDomainEntitlement(email)
+			markPaymentEvent("stripe:" + ev.ID)
+			s.logf("billing: stripe %s - %s rolled back to free", ev.Type, email)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1120,7 +1146,10 @@ func (s *Server) handleCryptoSuccess(w http.ResponseWriter, r *http.Request) {
 				}
 				key, aerr := s.activate(email, tier)
 				if aerr != nil {
-					http.Error(w, "activation failed: "+aerr.Error(), http.StatusInternalServerError)
+					// #295: activation errors carry internal detail - log
+					// specifics, answer the provider generically.
+					s.logf("billing: crypto success activation failed: %v", aerr)
+					http.Error(w, "activation failed", http.StatusInternalServerError)
 					return
 				}
 				s.writeSuccessKeyPage(w, r, tier, email, key)
@@ -1336,6 +1365,28 @@ func (s *Server) reapExpiredShortDomains(now time.Time) {
 		})
 		s.logf("billing: short-domain entitlement expired for %s (names released)", email)
 	}
+}
+
+// revokeShortDomainEntitlement clears one account's paid short-subdomain
+// entitlement immediately (#295): refunds/chargebacks revoke it before its
+// natural expiry, mirroring the reaper's reclaim (names >3 chars stay - they
+// belong to the tier quota, not the entitlement).
+func (s *Server) revokeShortDomainEntitlement(email string) {
+	a, ok := s.accounts.LookupEmail(email)
+	if !ok || a.PaidShort == nil {
+		return
+	}
+	s.accounts.Mutate(email, func(a *Account) {
+		kept := make([]string, 0, len(a.Domains))
+		for _, d := range a.Domains {
+			if len(d) > 3 {
+				kept = append(kept, d)
+			}
+		}
+		a.Domains = kept
+		a.PaidShort = nil
+	})
+	s.logf("billing: short-domain entitlement revoked for %s (names released)", email)
 }
 
 // humanTTL renders a tier lifetime compactly: 720h0m0s reads as "30d".

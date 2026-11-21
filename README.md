@@ -275,6 +275,12 @@ localized governing-language note.
 
 ## Multi-instance (cluster)
 
+> #295 deployment note: the CLI login authorization-code table and the
+> WebAuthn ceremony table are per-node (in-memory). Single-node deployments
+> are unaffected; multi-node deployments should pin `/auth/cli/*` and
+> `/auth/passkey/*` traffic to one node (LB affinity) until a cluster-safe
+> store lands.
+
 ### Mesh mode requires `ETUNNEL_MESH_SECRET`
 
 `ETUNNEL_CLUSTER=mesh` refuses to start unless `ETUNNEL_MESH_SECRET` is set to

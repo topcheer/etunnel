@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -182,7 +183,29 @@ func (r *stickyRouter) Release(sub string) {
 // Forward proxies to the owner (mixed-mode deployments; normally the LB does it).
 // Upgrade requests take the raw hijacked path: http.Client cannot carry a
 // 101 both ways (#235).
+// isInternalPeer reports whether the TCP peer address is on an internal
+// network (loopback or RFC1918) - cluster peers and the LB live there;
+// internet visitors do not (#295).
+func isInternalPeer(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate()
+}
+
 func (r *stickyRouter) Forward(sub string, w http.ResponseWriter, req *http.Request) bool {
+	// #295: the loop-guard header is set by cluster peers (internal
+	// network). A public-internet visitor forging it could force a
+	// selective 404; strip untrusted values before the check. Internal
+	// peers (loopback / RFC1918 behind the LB) are trusted to set it.
+	if req.Header.Get("X-Etunnel-Forward") != "" && !isInternalPeer(req.RemoteAddr) {
+		req.Header.Del("X-Etunnel-Forward")
+	}
 	if req.Header.Get("X-Etunnel-Forward") != "" {
 		return false // loop guard
 	}

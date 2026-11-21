@@ -71,6 +71,10 @@ func (u waUser) WebAuthnCredentials() []webauthn.Credential {
 }
 
 // waSessions holds in-flight ceremony state keyed by an opaque cookie value.
+//
+// #295: process-local by design - multi-node deployments must pin WebAuthn
+// ceremonies to one node (or share the table) until a cluster-safe store
+// lands; a ceremony started on node A cannot complete on node B.
 type waSessions struct {
 	mu    sync.Mutex
 	m     map[string]*webauthn.SessionData

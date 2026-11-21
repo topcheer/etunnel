@@ -34,6 +34,8 @@ type Server struct {
 	// than process-global: two Servers in one process (tests, embedders) must
 	// not share one bucket, which made repeated runs fail with 429.
 	regLimiter   *registerLimiter
+	adminFailsMu sync.Mutex
+	adminFails   map[string]*adminFailState
 	adminMux     *http.ServeMux
 	handler      http.Handler
 	adminHandler http.Handler
@@ -80,6 +82,7 @@ func New(cfg Config) (*Server, error) {
 		accounts:   accounts,
 		metrics:    &metrics{startedAt: time.Now()},
 		regLimiter: &registerLimiter{seen: make(map[string]time.Time)},
+		adminFails: make(map[string]*adminFailState),
 	}
 	// #93: persistence failures must reach the operator log, not vanish.
 	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }

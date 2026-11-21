@@ -35,6 +35,7 @@ var reservedSubdomains = map[string]bool{
 	"support": true, "help": true, "cdn": true, "assets": true, "media": true,
 	"auth": true, "login": true, "sso": true, "billing": true, "pay": true,
 	"register": true, "account": true, "accounts": true, "metrics": true, "stats": true,
+	"me": true, // #295: me.<domain> is a phishing lookalike of the portal host
 }
 
 // ErrBadSubdomain is returned by ValidateSubdomain.
