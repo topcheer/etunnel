@@ -76,10 +76,14 @@ Client → server:
 - `token` is the API key from `/api/register`
 - `resume` is the `resumeToken` from a **previous** `welcome`. When valid the
   server hands back the **same subdomain** the client had before the
-  disconnect, skipping plan gating (the token itself is the grant). Rejected
-  (tampered/expired) tokens fall through to the normal allocation path, so an
-  old client that never sends it is unaffected. This is what makes a
-  reconnect — including after a server restart — keep the hostname that was
+  disconnect. #292: the token is bound to the identity that received it
+  (account, or client IP for anonymous tunnels), resumed sessions keep their
+  original TTL (resume never extends lifetime), and requested subdomains
+  re-pass the same ownership/quota gates as a fresh `subdomain` request.
+  Rejected (tampered/expired/foreign-identity) tokens fall through to the
+  normal allocation path, so an old client that never sends it is unaffected.
+  This is what makes a reconnect — including after a server restart — keep
+  the hostname that was
   already shared with other people.
 - `policy` (optional object) declares per-tunnel edge protection. The server
   evaluates it on every visitor request **before** opening a stream:
@@ -117,14 +121,23 @@ Server → client (success):
 `expiresAt` is unix seconds (0/absent = no TTL limit).
 
 `resumeToken` is an **opaque, self-validating** token: the server signs
-`subdomain|expiry` with HMAC-SHA256 keyed by `SESSION_SECRET`, so no
-server-side session state is needed and the token survives a server restart
-(client SDKs must treat it as a black box). Default TTL is 30 minutes —
-enough to cover a restart plus several backoff rounds. **Operational
-requirement:** a server that wants resume-across-restarts must run with a
-stable `SESSION_SECRET`; without it the key is generated per process and
-every token dies with the process (the reconnect then falls back to a fresh
-random subdomain).
+`subdomain|expiry|owner|sessionExpiry|custom` with HMAC-SHA256 keyed by
+`SESSION_SECRET`, so no server-side session state is needed and the token
+survives a server restart (client SDKs must treat it as a black box). The
+signature binds the token to the identity that received it — the account
+behind the tunnel, or the client IP for anonymous tunnels — so a leaked
+token cannot be replayed by a different identity (#292). The signed session
+expiry caps a chain of resume handshakes: resuming keeps the original TTL
+instead of resetting it, and a token never outlives its session. Default
+resume window is 30 minutes — enough to cover a restart plus several
+backoff rounds. **Operational requirement:** a server that wants
+resume-across-restarts must run with a stable `SESSION_SECRET`; without it
+the key is generated per process and every token dies with the process (the
+reconnect then falls back to a fresh random subdomain). **Migration (#292):**
+tokens issued before the identity binding (payload `subdomain|expiry`) fail
+verification and the reconnect falls back to a fresh subdomain — clients
+holding a static subdomain simply re-request it via `subdomain`; no protocol
+version bump needed.
 
 Server → client (failure):
 
