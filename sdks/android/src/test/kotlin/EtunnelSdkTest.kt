@@ -501,4 +501,74 @@ class EtunnelSdkTest {
             ss.close()
         }
     }
+
+    @Test
+    fun rawChunkedReplayStaysIdentity() {
+        // #286 blind-spot hardening: same identity invariant as
+        // gzipChunkedReplayStaysIdentity, but the local backend is a raw
+        // byte-for-byte responder - it never reads the request head and
+        // writes ONE prebuilt wire buffer (three chunks, multi-digit hex
+        // sizes, last-chunk octets). A raw parser/replayer that copied the
+        // chunked framing verbatim onto DATA would fail the byte-identity
+        // assertion below: chunk-size lines and the "0\r\n\r\n" terminator
+        // would sit inside the replayed body (PROTOCOL.md §2).
+        val original = "etunnel #286 raw-socket identity payload - ".repeat(37).toByteArray()
+        val gzBuf = java.io.ByteArrayOutputStream()
+        java.util.zip.GZIPOutputStream(gzBuf).use { it.write(original) }
+        val gz = gzBuf.toByteArray()
+
+        val parts = listOf(
+            gz.copyOfRange(0, gz.size / 3),
+            gz.copyOfRange(gz.size / 3, 2 * gz.size / 3),
+            gz.copyOfRange(2 * gz.size / 3, gz.size),
+        )
+        val rawWire = java.io.ByteArrayOutputStream().also { buf ->
+            buf.write("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: text/html; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n".toByteArray())
+            for (p in parts) {
+                buf.write((p.size.toString(16) + "\r\n").toByteArray())
+                buf.write(p)
+                buf.write("\r\n".toByteArray())
+            }
+            buf.write("0\r\n\r\n".toByteArray())
+        }.toByteArray()
+
+        val ss = ServerSocket(0, 64, InetAddress.getLoopbackAddress())
+        val acceptor = Thread {
+            val s = try { ss.accept() } catch (_: Exception) { return@Thread }
+            try {
+                s.getOutputStream().write(rawWire) // raw: the request is never read
+                s.getOutputStream().flush()
+            } catch (_: Exception) { /* test teardown races are fine */ }
+        }
+        acceptor.isDaemon = true
+        acceptor.start()
+        try {
+            val h = Etunnel.Companion.Handler(ss.localPort.toString())
+            val ws = RecordingWebSocket()
+            h.ws = ws
+            h.open = true
+            h.handleText("""{"type":"req","streamId":11,"method":"GET","path":"/raw","headers":{"Accept-Encoding":["gzip"]}}""")
+            h.handleBinary(ctlFrame(0x02, 11)) // FIN: schedules the replay
+            assertTrue(awaitUntil(5000) {
+                synchronized(ws.bin) { ws.bin.any { it.size == 9 && (it[0].toInt() and 0xFF) == 0x02 && frameSid(it) == 11 } }
+            })
+
+            val resJson: String = synchronized(ws.texts) { ws.texts.firstOrNull { it.contains("\"type\":\"res\"") } }
+                ?: throw AssertionError("no res sent")
+            assertTrue(resJson.contains("\"status\":200"))
+            assertFalse("Transfer-Encoding must never cross the wire (#286)", resJson.contains("Transfer-Encoding"))
+            assertFalse("Content-Length must never cross the wire (#286)", resJson.contains("Content-Length"))
+
+            val body = synchronized(ws.bin) {
+                ws.bin.filter { it.size > 9 && (it[0].toInt() and 0xFF) == 0x01 && frameSid(it) == 11 }
+                    .flatMap { f -> f.toList().drop(9) }
+                    .toByteArray()
+            }
+            assertArrayEquals("raw chunked backend: replayed DATA must be the pure gzip entity (#286)", gz, body)
+            // belt-and-braces: chunk framing artifacts would break byte identity
+            assertFalse(String(body, Charsets.ISO_8859_1).contains("\r\n0\r\n"))
+        } finally {
+            ss.close()
+        }
+    }
 }
