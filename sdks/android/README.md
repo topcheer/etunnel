@@ -97,6 +97,56 @@ Etunnel.connect(cfg2.server, cfg2.localPort, cfg2.token, cfg2.subdomain)
 | `ETUNNEL_SUBDOMAIN` | requested subdomain (paid plans) | random |
 | `ETUNNEL_RECONNECT` | `0` = single-shot, anything else = reconnect loop | reconnect |
 
+## Cleartext to localhost (Android 9+)
+
+The tunnel replays requests to your local service over **plain HTTP**
+(`http://127.0.0.1:<port>`). Since `targetSdk >= 28`, Android blocks all
+cleartext traffic by default — **including loopback** — so on a modern host
+app every replay fails with `Cleartext HTTP traffic to 127.0.0.1 not
+permitted` and the visitor sees a 502 page. The SDK logs a targeted hint the
+first time this happens (see `Etunnel.onLog` below).
+
+Pick one app-side fix:
+
+**Preferred — network-security-config scoped to loopback.**
+
+`res/xml/network_security_config.xml`:
+
+```xml
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
+</network-security-config>
+```
+
+and reference it in your `AndroidManifest.xml`:
+
+```xml
+<application android:networkSecurityConfig="@xml/network_security_config" ... >
+```
+
+Note: `<domain-config>` entries match hostnames; some Android versions do not
+match raw IP literals against `<domain>` entries. If replays still fail with
+this config, use the app-wide fallback below.
+
+**Fallback — allow cleartext app-wide** (blunt; only for apps whose security
+posture already permits it):
+
+```xml
+<application android:usesCleartextTraffic="true" ... >
+```
+
+**Detect it at runtime** — wire the SDK's log hook early; it emits a targeted
+hint the first time a replay is blocked:
+
+```kotlin
+Etunnel.onLog = { Log.w("etunnel", it) }
+```
+
 ## Doze and foreground services
 
 Android aggressively suspends apps in the background, which will sever or

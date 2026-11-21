@@ -1,7 +1,18 @@
 // Pure-JVM unit tests for the etunnel Android SDK: no Android runtime, no
-// network. Covers the cross-SDK parity seams: ETUNNEL_* env mapping, JSON,
-// routes, binary frame layout (protocol/frame.go 9-byte header).
+// network dependency beyond loopback sockets. Covers the cross-SDK parity
+// seams (ETUNNEL_* env mapping, JSON, routes, 9-byte frames) and the #282
+// review fixes: #1 replay off the WS reader thread, #2 multi-value headers,
+// #3 M2 caps with RST.
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.WebSocket
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -15,6 +26,47 @@ private fun frameLen(f: ByteArray): Int =
     ((f[5].toInt() and 0xFF) shl 24) or ((f[6].toInt() and 0xFF) shl 16) or
         ((f[7].toInt() and 0xFF) shl 8) or (f[8].toInt() and 0xFF)
 
+/** Test double for the OkHttp WebSocket: records sends/closes. */
+private class RecordingWebSocket : WebSocket {
+    val texts = ArrayList<String>()
+    val bin = ArrayList<ByteArray>()
+    @Volatile var closed = false
+    @Volatile var closeCode = 0
+    override fun request(): Request = Request.Builder().url("http://127.0.0.1/").build()
+    override fun queueSize(): Long = 0
+    override fun send(text: String): Boolean { synchronized(texts) { texts.add(text) }; return true }
+    override fun send(bytes: okio.ByteString): Boolean { synchronized(bin) { bin.add(bytes.toByteArray()) }; return true }
+    override fun close(code: Int, reason: String?): Boolean { closed = true; closeCode = code; return true }
+    override fun cancel() {}
+}
+
+/** Loopback server factory: each connection handled on its own daemon thread. */
+private fun tinyHttpServer(responder: (Socket) -> Unit): ServerSocket {
+    val ss = ServerSocket(0, 64, InetAddress.getLoopbackAddress())
+    val acceptor = Thread {
+        while (!ss.isClosed) {
+            val s = try { ss.accept() } catch (e: Exception) { return@Thread }
+            Thread { responder(s) }.apply { isDaemon = true }.start()
+        }
+    }
+    acceptor.isDaemon = true
+    acceptor.start()
+    return ss
+}
+
+private fun awaitUntil(timeoutMs: Long, cond: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+        if (cond()) return true
+        Thread.sleep(20)
+    }
+    return cond()
+}
+
+private fun rstSids(ws: RecordingWebSocket): List<Int> = synchronized(ws.bin) {
+    ws.bin.filter { it.size == 9 && (it[0].toInt() and 0xFF) == 0x03 }.map { frameSid(it) }
+}
+
 class EtunnelSdkTest {
 
     // ---- ETUNNEL_* env contract (configFromEnv) ----
@@ -23,7 +75,7 @@ class EtunnelSdkTest {
     fun envDefaults() {
         val c = configFromEnv(emptyMap())
         assertEquals("wss://t.etun.uk/tunnel", c.server)
-        assertEquals(3000, c.localPort)
+        assertEquals("3000", c.local)
         assertNull(c.token)
         assertNull(c.subdomain)
         assertTrue(c.reconnect) // reconnect is the default
@@ -40,23 +92,29 @@ class EtunnelSdkTest {
             )
         )
         assertEquals("wss://example.com/tunnel", c.server)
-        assertEquals(8080, c.localPort)
+        assertEquals("8080", c.local)
         assertEquals("tok123", c.token)
         assertEquals("my-sub", c.subdomain)
         assertTrue(c.reconnect)
     }
 
     @Test
+    fun hostPortLocalAccepted() {
+        // #282-5: "host:port" is contract-legal, not an error.
+        assertEquals("localhost:8080", configFromEnv(mapOf("ETUNNEL_LOCAL" to "localhost:8080")).local)
+        assertEquals("myhost", configFromEnv(mapOf("ETUNNEL_LOCAL" to "myhost")).local)
+        assertEquals("[::1]:9000", configFromEnv(mapOf("ETUNNEL_LOCAL" to "[::1]:9000")).local)
+    }
+
+    @Test
     fun reconnectZeroDisables() {
         assertTrue(!configFromEnv(mapOf("ETUNNEL_RECONNECT" to "0")).reconnect)
-        // any other value keeps reconnecting (parity with the kotlin/node SDKs)
         assertTrue(configFromEnv(mapOf("ETUNNEL_RECONNECT" to "1")).reconnect)
         assertTrue(configFromEnv(mapOf("ETUNNEL_RECONNECT" to "")).reconnect)
     }
 
     @Test
     fun blankValuesFallBack() {
-        // Android apps often inject empty strings; blanks must behave as unset.
         val c = configFromEnv(
             mapOf(
                 "ETUNNEL_SERVER" to "",
@@ -66,14 +124,15 @@ class EtunnelSdkTest {
             )
         )
         assertEquals("wss://t.etun.uk/tunnel", c.server)
-        assertEquals(3000, c.localPort)
+        assertEquals("3000", c.local)
         assertNull(c.token)
         assertNull(c.subdomain)
     }
 
     @Test
-    fun invalidLocalPortRejected() {
-        for (bad in listOf("abc", "0", "65536", "-1")) {
+    fun invalidLocalRejected() {
+        // #282-5: bare "-1" is a bare-host form now (port 80, TS parity) - valid
+        for (bad in listOf("0", "65536", "abc:70000", "abc:notaport")) {
             try {
                 configFromEnv(mapOf("ETUNNEL_LOCAL" to bad))
                 fail("ETUNNEL_LOCAL $bad must be rejected")
@@ -95,6 +154,23 @@ class EtunnelSdkTest {
     }
 
     @Test
+    fun jsonLiterals() {
+        // #282-7: null/true/false are parsed, not turned into ""
+        val m = Json.read("""{"a":null,"b":true,"c":false}""")
+        assertTrue(m.containsKey("a"))
+        assertNull(m["a"])
+        assertEquals(true, m["b"])
+        assertEquals(false, m["c"])
+    }
+
+    @Test
+    fun jsonGarbageDoesNotStall() {
+        // unknown tokens skip one char - parsing must always terminate
+        val m = Json.read("""{"a":%zz}""")
+        assertEquals("", m["a"])
+    }
+
+    @Test
     fun jsonEscapesDecode() {
         val m = Json.read("""{"token":"a\"b\n\u0041"}""")
         assertEquals("a\"b\nA", m["token"])
@@ -105,6 +181,12 @@ class EtunnelSdkTest {
         val raw = "he said \"hi\"" + "\n" + "line2"
         val json = """{"msg":"""" + Json.esc(raw) + """"}"""
         assertEquals(raw, (Json.read(json)["msg"] as String))
+    }
+
+    @Test
+    fun jsonEscControlChars() {
+        // #282-6: raw control characters must be escaped, not emitted verbatim
+        assertEquals("a\\tb\\r\\nc\\u0001", Json.esc("a\tb\r\nc\u0001"))
     }
 
     // ---- route table (same semantics table as sdks/node/route.js) ----
@@ -140,9 +222,9 @@ class EtunnelSdkTest {
     @Test
     fun routeValidation() {
         val errs = listOf(
-            { Etunnel.normalizeRoutes(listOf(Route("/", ""))) },            // addr required
-            { Etunnel.normalizeRoutes(listOf(Route("api", "a:1"))) },       // must start with /
-            { Etunnel.normalizeRoutes(listOf(Route("/api", "a:1"), Route("/api/", "a:2"))) } // duplicate
+            { Etunnel.normalizeRoutes(listOf(Route("/", ""))) },
+            { Etunnel.normalizeRoutes(listOf(Route("api", "a:1"))) },
+            { Etunnel.normalizeRoutes(listOf(Route("/api", "a:1"), Route("/api/", "a:2"))) }
         )
         errs.forEach { fn ->
             try {
@@ -174,43 +256,184 @@ class EtunnelSdkTest {
         assertEquals(0x02, fin[0].toInt() and 0xFF)
         assertEquals(7, frameSid(fin))
         assertEquals(0, frameLen(fin))
-        val rst = ctlFrame(0x03, -1) // sid 0xFFFFFFFF round trip
+        val rst = ctlFrame(0x03, -1)
         assertEquals(-1, frameSid(rst))
     }
 
     @Test
     fun frameHeaderConstantMatchesProtocol() {
-        // protocol/frame.go: 9-byte header (kind + uint32 sid + uint32 len)
         assertEquals(9, ET_FRAME_HEADER)
     }
 
-    // ---- handler dispatch of unknown/reset streams (no network) ----
+    // ---- host:port resolution (#282-5) ----
+
+    @Test
+    fun pickHostPortForms() {
+        assertEquals("127.0.0.1" to 3000, Etunnel.pickHostPort("3000"))
+        assertEquals("localhost" to 8080, Etunnel.pickHostPort("localhost:8080"))
+        assertEquals("[::1]" to 9000, Etunnel.pickHostPort("[::1]:9000"))
+        assertEquals("example.com" to 80, Etunnel.pickHostPort("example.com"))
+        assertEquals("[2001:db8::1]" to 80, Etunnel.pickHostPort("2001:db8::1"))
+    }
+
+    // ---- handler dispatch (no network) ----
+
+    private fun handlerWithWs(local: String = "3000", maxStreams: Int = Etunnel.MAX_STREAMS,
+                              maxStreamBody: Int = Etunnel.MAX_STREAM_BODY): Pair<Etunnel.Companion.Handler, RecordingWebSocket> {
+        val h = Etunnel.Companion.Handler(local, maxStreams = maxStreams, maxStreamBody = maxStreamBody)
+        val ws = RecordingWebSocket()
+        h.ws = ws
+        h.open = true
+        return h to ws
+    }
 
     @Test
     fun unknownStreamIgnored() {
-        val h = Etunnel.Companion.Handler(3000)
-        h.handleBinary(ctlFrame(0x03, 999)) // rst for a stream we never saw
+        val (h, ws) = handlerWithWs()
+        h.handleBinary(ctlFrame(0x03, 999))
+        assertTrue(ws.bin.isEmpty())
         assertTrue(h.streams.isEmpty())
     }
 
     @Test
     fun reqStreamRegisteredAndReset() {
-        val h = Etunnel.Companion.Handler(3000)
+        val (h, ws) = handlerWithWs()
         h.handleText("""{"type":"req","streamId":5,"method":"GET","path":"/x","headers":{}}""")
         assertTrue(h.streams.containsKey(5))
-        h.handleBinary(ctlFrame(0x03, 5)) // rst cancels the stream
+        h.handleBinary(ctlFrame(0x03, 5))
         assertTrue(h.streams.isEmpty())
+        assertTrue(ws.bin.isEmpty())
     }
 
     @Test
-    fun pingAnsweredAsPongText() {
-        // The ping branch answers over the socket (attached in production by
-        // onOpen); in a unit test only the parse path runs - the lateinit ws
-        // access surfaces as UninitializedPropertyAccessException, which is
-        // fine. The error branch must record the message without a socket.
-        val h = Etunnel.Companion.Handler(3000)
-        try { h.handleText("""{"type":"ping","ts":123}""") } catch (_: kotlin.UninitializedPropertyAccessException) {}
-        h.handleText("""{"type":"error","code":"invalid_token","message":"x"}""")
-        assertEquals("invalid_token: x", h.error)
+    fun pingTsGuard() {
+        // #282-7: only numeric ts reaches the wire; literals/absence -> 0
+        val (h, ws) = handlerWithWs()
+        h.handleText("""{"type":"ping","ts":123}""")
+        h.handleText("""{"type":"ping","ts":null}""")
+        h.handleText("""{"type":"ping"}""")
+        synchronized(ws.texts) {
+            assertEquals(listOf("123", "0", "0"), ws.texts.map { it.substringAfter("\"ts\":").removeSuffix("}") })
+        }
+    }
+
+    @Test
+    fun oversizeMessageDropsSocket() {
+        // #282-3: message over MAX_WS_MSG -> socket dropped with 1009
+        val (h, ws) = handlerWithWs()
+        h.handleText("x".repeat(Etunnel.MAX_WS_MSG + 1))
+        assertTrue(ws.closed)
+        assertEquals(1009, ws.closeCode)
+        assertFalse(h.open)
+    }
+
+    @Test
+    fun bodyOverCapGetsRst() {
+        // #282-3: buffered body over the cap -> RST, stream dropped
+        val (h, ws) = handlerWithWs(maxStreamBody = 64)
+        h.handleText("""{"type":"req","streamId":1,"method":"POST","path":"/","headers":{}}""")
+        h.handleBinary(dataFrame(1, ByteArray(100), 0, 100))
+        assertEquals(listOf(1), rstSids(ws))
+        assertFalse(h.streams.containsKey(1))
+    }
+
+    @Test
+    fun onLogHookReceivesErrors() {
+        // #282-8: swallowed errors are surfaced through the log hook
+        val logs = ArrayList<String>()
+        Etunnel.onLog = { logs.add(it) }
+        try {
+            val (h, _) = handlerWithWs()
+            h.handleText("not json")
+            assertTrue(awaitUntil(2000) { logs.any { it.contains("handleText") } })
+        } finally {
+            Etunnel.onLog = null
+        }
+    }
+
+    // ---- #282-3: stream caps refuse with RST ----
+
+    @Test
+    fun overCapStreamGetsRst() {
+        val (h, ws) = handlerWithWs(maxStreams = 2)
+        h.handleText("""{"type":"req","streamId":1,"method":"GET","path":"/","headers":{}}""")
+        h.handleText("""{"type":"req","streamId":2,"method":"GET","path":"/","headers":{}}""")
+        // replayed live streamId -> RST instead of silent overwrite
+        h.handleText("""{"type":"req","streamId":1,"method":"GET","path":"/","headers":{}}""")
+        // beyond the cap -> RST
+        h.handleText("""{"type":"req","streamId":3,"method":"GET","path":"/","headers":{}}""")
+        assertEquals(listOf(1, 3), rstSids(ws))
+        assertEquals(2, h.streams.size)
+    }
+
+    // ---- #282-1: replay must not run on the caller (WS reader) thread ----
+
+    @Test
+    fun slowReplayDoesNotBlockReader() {
+        // local server accepts but never answers: replay stalls until the
+        // injected client's callTimeout (500ms) fires
+        val ss = tinyHttpServer { s -> Thread.sleep(5000); s.close() }
+        try {
+            val slowClient = OkHttpClient.Builder()
+                .proxy(Proxy.NO_PROXY)
+                .connectTimeout(2, TimeUnit.SECONDS)
+                .callTimeout(500, TimeUnit.MILLISECONDS)
+                .build()
+            val h = Etunnel.Companion.Handler(ss.localPort.toString(), client = slowClient)
+            val ws = RecordingWebSocket()
+            h.ws = ws
+            h.open = true
+            h.handleText("""{"type":"req","streamId":1,"method":"GET","path":"/","headers":{}}""")
+
+            val t0 = System.currentTimeMillis()
+            h.handleBinary(ctlFrame(0x02, 1)) // FIN: schedules the replay
+            val elapsed = System.currentTimeMillis() - t0
+            assertTrue("handleBinary blocked ${elapsed}ms on the replay - reader thread starves (#282-1)", elapsed < 200)
+
+            // the offloaded replay eventually completes and answers 502
+            assertTrue(awaitUntil(5000) {
+                synchronized(ws.texts) { ws.texts.any { it.contains("\"status\":502") } }
+            })
+            // and the slow replay must NOT have torn the tunnel down
+            assertFalse("slow replay must not kill the tunnel (#282-1)", ws.closed)
+            assertTrue(h.open)
+        } finally {
+            ss.close()
+        }
+    }
+
+    // ---- #282-2: multi-value request headers preserved ----
+
+    @Test
+    fun multiValueRequestHeadersPreserved() {
+        val seen = java.util.Collections.synchronizedList(ArrayList<String>())
+        val ss = tinyHttpServer { s ->
+            try {
+                val reader = s.getInputStream().bufferedReader()
+                val lines = ArrayList<String>()
+                var line = reader.readLine()
+                while (line != null && line.isNotEmpty()) {
+                    lines.add(line)
+                    line = reader.readLine()
+                }
+                seen.addAll(lines.filter { it.startsWith("X-Multi:") })
+                s.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray())
+                s.close()
+            } catch (_: Exception) { /* test teardown races are fine */ }
+        }
+        try {
+            val h = Etunnel.Companion.Handler(ss.localPort.toString())
+            val ws = RecordingWebSocket()
+            h.ws = ws
+            h.open = true
+            h.handleText("""{"type":"req","streamId":7,"method":"POST","path":"/x","headers":{"X-Multi":["a","b"],"X-Once":["z"]}}""")
+            h.handleBinary(ctlFrame(0x02, 7))
+            assertTrue(awaitUntil(5000) {
+                synchronized(ws.texts) { ws.texts.any { it.contains("\"status\":200") } }
+            })
+            assertEquals(listOf("X-Multi: a", "X-Multi: b"), seen.toList())
+        } finally {
+            ss.close()
+        }
     }
 }
