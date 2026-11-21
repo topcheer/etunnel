@@ -389,7 +389,12 @@ func (s *AccountStore) DowngradeToFree(email string) bool {
 	if a.LapsedAt.IsZero() {
 		a.LapsedAt = time.Now() // keep the first lapse; do not overwrite
 	}
-	_ = s.saveLocked()
+	// #265: DowngradeToFree must not pretend success when the save fails -
+	// a restart would resurrect the paid tier (quota/capabilities derive
+	// from it). Same reporting convention as every other mutator.
+	if err := s.saveLocked(); err != nil {
+		s.reportSaveErr(err)
+	}
 	return true
 }
 

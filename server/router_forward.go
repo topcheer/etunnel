@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -34,19 +35,27 @@ func forwardUpgraded(target string, w http.ResponseWriter, req *http.Request, fw
 
 	peer, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
-		return false
+		// #268: the visitor connection is already hijacked - a bare return
+		// makes the caller write to a hijacked ResponseWriter (rejected by
+		// net/http) and the visitor sees a bare TCP close. Answer 502 here.
+		fmt.Fprintf(visitor, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nowner node unreachable for upgrade\n")
+		return true
 	}
 	defer peer.Close()
 
 	req.Header.Set(fwdHeader, self) // loop guard survives the raw hop
 	if err := req.Write(peer); err != nil {
-		return false
+		// #268: post-hijack failure - answer 502 on the visitor conn.
+		fmt.Fprintf(visitor, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nupgrade forward failed\n")
+		return true
 	}
 
 	br := bufio.NewReader(peer)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return false
+		// #268: post-hijack failure - answer 502 on the visitor conn.
+		fmt.Fprintf(visitor, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nupgrade forward failed\n")
+		return true
 	}
 	defer resp.Body.Close()
 
@@ -54,6 +63,14 @@ func forwardUpgraded(target string, w http.ResponseWriter, req *http.Request, fw
 	// and upgrade headers must reach the visitor exactly as the owner sent
 	// them, so net/http's own header handling must not re-encode them.
 	fmt.Fprintf(visitor, "HTTP/1.1 %s\r\n", resp.Status)
+	// #268: http.ReadResponse strips the framing headers (Content-Length /
+	// Transfer-Encoding) from resp.Header. Recompute Content-Length when the
+	// owner declared a known length; otherwise the body stays
+	// close-delimited (deliberate: the visitor connection is hijacked, so
+	// connection close bounds the body).
+	if resp.ContentLength > 0 {
+		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+	}
 	if err := resp.Header.Write(visitor); err != nil {
 		return true
 	}

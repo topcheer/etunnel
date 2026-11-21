@@ -30,8 +30,10 @@ sequenceDiagram
     S->>E: DATA frames + FIN (response body)
     E-->>V: HTTP response
 
-    E->>S: ping (every 30s)
+    E->>S: ping (client: every 30s, 150s without pong = dead)
     S->>E: pong
+    S->>E: ping (server-side liveness; client answers pong)
+    E->>S: pong
     E->>S: bye {reason} (on TTL expiry / shutdown)
 ```
 
@@ -270,7 +272,8 @@ tunnel (`ping_timeout`) if neither pongs nor traffic are seen for ~150s.
 
 Either side sends `{"type":"bye","reason":"ttl_expired"}` best-effort before
 closing the socket. Notable reasons: `ttl_expired`, `ping_timeout`,
-`server_shutdown`, `client closed`, `read closed`.
+`server_shutdown`, `client closed`, `read closed`, `read limit exceeded`
+(the 128KiB per-message cap closes the tunnel with this reason).
 
 Reasons a server ends a tunnel proactively:
 

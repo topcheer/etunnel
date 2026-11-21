@@ -492,9 +492,14 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 			n, rerr := st.bodyPr.Read(buf)
 			if n > 0 {
 				if _, werr := brw.Write(buf[:n]); werr != nil {
+					// #264: visitor gone - free the stream slot and unblock the
+					// external->tunnel direction instead of pumping into a dead
+					// connection until the tunnel client hangs up.
+					st.abort()
 					break
 				}
 				if ferr := brw.Flush(); ferr != nil {
+					st.abort()
 					break
 				}
 			}
@@ -516,18 +521,28 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 			if n > 0 {
 				if sess.limiter != nil {
 					if lerr := sess.limiter.WaitN(sess.ctx, n); lerr != nil {
+						// #264: symmetric teardown - free the stream slot and
+						// unblock the tunnel->external direction.
+						st.abort()
 						_ = conn.Close()
 						return
 					}
 				}
 				if serr := sess.sendData(st.id, buf[:n]); serr != nil {
+					// #264: symmetric teardown (same as above).
+					st.abort()
 					_ = conn.Close()
 					return
 				}
 				s.metrics.bytesIn.Add(int64(n))
 			}
 			if rerr != nil {
+				// #264: symmetric teardown - RST the SDK side AND free the stream
+				// slot / unblock the tunnel->external goroutine (bodyPr close),
+				// which would otherwise stay parked until the tunnel client hangs
+				// up (session-lifetime goroutine + slot leak).
 				_ = sess.sendRst(st.id)
+				st.abort()
 				_ = conn.Close()
 				return
 			}

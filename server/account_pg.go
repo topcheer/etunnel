@@ -53,6 +53,17 @@ type pgAccountStore struct {
 	pool   *pgxpool.Pool
 	poll   time.Duration
 	cancel context.CancelFunc
+	// #265: surfaced persistence/deserialization failures (nil = no-op,
+	// e.g. tests).
+	onErr func(error)
+}
+
+// reportErr surfaces background account-sync failures through the injected
+// hook (mirror of AccountStore.reportSaveErr).
+func (s *pgAccountStore) reportErr(err error) {
+	if s.onErr != nil {
+		s.onErr(err)
+	}
 }
 
 func newPgAccountStore(dsn string) (*pgAccountStore, error) {
@@ -134,7 +145,11 @@ func (s *pgAccountStore) loadAll(ctx context.Context) error {
 			a.LapsedAt = *lap
 		}
 		if len(pkJSON) > 0 {
-			_ = json.Unmarshal(pkJSON, &a.Passkeys)
+			// #265: corrupt passkey JSON must not silently drop the user's
+			// login method without a diagnostic trace.
+			if err := json.Unmarshal(pkJSON, &a.Passkeys); err != nil {
+				s.reportErr(fmt.Errorf("account %s: passkeys json: %w", a.Email, err))
+			}
 		}
 		byKey[a.APIKey] = a
 		byMail[a.Email] = a
@@ -153,7 +168,11 @@ func (s *pgAccountStore) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = s.loadAll(ctx)
+			// #265: a failing PG poll must not be silent - the server would
+			// serve stale account data indefinitely with zero signal.
+			if err := s.loadAll(ctx); err != nil {
+				s.reportErr(fmt.Errorf("account poll: %w", err))
+			}
 		}
 	}
 }
