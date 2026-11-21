@@ -83,7 +83,7 @@ func TestFaviconEncodesFragments(t *testing.T) {
 	if strings.Contains(portalFavicon, "fill='#") || strings.Contains(portalFavicon, "stroke='#") {
 		t.Fatal("favicon contains raw # - browsers treat it as a fragment and the icon breaks")
 	}
-	for _, part := range []string{"%230d1117", "%23e6edf3", "%233fb950"} {
+	for _, part := range []string{"%23242b21", "%23f6efdd", "%234a8f6a"} {
 		if !strings.Contains(portalFavicon, part) {
 			t.Fatalf("expected encoded color %s in the favicon", part)
 		}
