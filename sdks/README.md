@@ -82,7 +82,7 @@ Java coordinates:
 | C#, Dart, Ruby, PHP, Perl, Swift | buffered per stream | no | library / single file | per client |
 | Elixir | buffered per stream | no | OTP child | per client |
 | Lua | buffered per stream | no | script | sequential (one request at a time) |
-| Rust, C, C++ | buffered per stream | no | binary | per client |
+| Rust, C, C++ | buffered per stream | no | Rust: library (Tunnel::done() fires on tunnel end, #263) / binary; C, C++: binary | per client |
 
 "Buffered" means the request body is collected before it is forwarded and the
 response body is collected before it is returned: correct for webhooks, JSON
