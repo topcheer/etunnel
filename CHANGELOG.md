@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.7.27 — 2026-11-21
+
+- **security**: resume tokens are now bound to the issuing identity, re-gated through auth on resume, and capped by TTL - a leaked or cross-account token can no longer resume someone else's tunnel (#292) (PR #296)
+- **security**: /me actions and passkey removal now require same-origin CSRF protection - cross-site request forgeries are rejected (#293) (PR #297)
+- **security**: upgrade responses meter their downlink and every proxied body write carries a per-write deadline - slow clients can no longer pin workers or bypass quota (#294) (PR #299)
+- site: warm paper redesign - sunlit garden replaces GitHub dark (#290)
+- site: one-click AI agent integration prompt block on the landing page (#298)
+- tunnel: keep wire body identity end to end - declare what travels (#286) (PR #287)
+- android sdk: replay threading, header fidelity, caps, cleartext and parity lows from review (#282) (PR #284)
+- harmonyos sdk: welcome zombie socket, cancellable supervise, method passthrough from review (#283) (PR #285)
+- test(android): raw-socket chunked-gzip replay identity anchor for the #286 blind spot (PR #289)
+- ops: etunneld deploy runbook, deploy records for warm paper / agent block / the SEC batch, and the CSRF + resume-transition evidence archive (#288, #300, #301, #302)
+
 ## v1.7.26 — 2026-11-21
 
 - sdks: republish Android AAR (1.7.25 upload stalled as a Portal draft; Central Portal automaticRelease now enabled) (#260)
