@@ -297,7 +297,10 @@ func (t *Tunnel) sendLocalError(st *clientStream, msg string) {
 		StreamID: st.id,
 		Status:   http.StatusBadGateway,
 		Headers: map[string][]string{
-			"Content-Type": {"text/plain; charset=utf-8"},
+			// #render: localErrorPage is a full themed HTML document (same
+			// page as the TS SDK serves) - declare text/html so browsers
+			// render it instead of showing the source.
+			"Content-Type": {"text/html; charset=utf-8"},
 		},
 	})
 	_ = t.sendData(st.id, []byte(body))
