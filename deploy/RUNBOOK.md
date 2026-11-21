@@ -69,3 +69,4 @@ systemctl restart etunneld
 | 时间 (CST) | 版本 | sha256 | 验证 | 结果 |
 | --- | --- | --- | --- | --- |
 | 2026-11-21 13:06 | 7fc001a | 48e5be13dfc484cb365bd47b79918a4e71520c5897574df539e5135b9358a871 | 四件全过：is-active / 443:80 监听 / 本机 `-k` 200 / 公网 t.etun.uk 200；60s err 观测无新增 | 成功，会话恢复正常 |
+| 2026-11-21 16:29 | e899c0d (main, PR #290) | 98bea90c74afd9e416ec8893ba026cbaa96eb0a9380cde767e77392b5faa047a | 四件全过：is-active / 443:80 监听（pid 3472742）/ 本机 `-k` 200 / 公网 t.etun.uk 200；皮肤验收：home f8f3e7×4 + /login f8f3e7×2，旧色 0b0e14×0；60s err 观测无新增；守卫测试 `TestReconnectKeepsSubdomainAcrossServerRestart` PASS | 成功，warm paper 皮肤上线，备份 `etunneld.bak-pre291-20261121`，现有会话无缝续接 |
