@@ -341,17 +341,27 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		case tok.custom && !containsStr(acct.Domains, sub):
 			// #292: ownership gate, same as the request path.
 			s.logf("session %s: resume of %s rejected: name not in the account domain list (#292)", sess.id, sub)
-		case tok.custom && s.reg.countCustomForAccount(acct) >= tier.CustomDomains:
-			// #292: quota gate, same as the request path. The sub is not yet
-			// acquired, so the count reflects the other live custom tunnels -
-			// concurrent double-resume cannot exceed the plan quota.
-			s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292)", sess.id, sub, tier.Name, tier.CustomDomains)
 		case tok.custom && protocol.ValidateSubdomain(sub) != nil:
 			s.logf("session %s: resume of %s rejected: invalid subdomain (#292)", sess.id, sub)
 		default:
 			// A random subdomain has no ownership record; the identity binding
 			// inside the token is the proof of entitlement.
-			if aerr := s.reg.Acquire(sub, sess); aerr == nil {
+			var aerr error
+			if tok.custom {
+				// #312: count and acquire share the registry lock
+				// (AcquireCustom), so concurrent resumes of different custom
+				// names - e.g. a supervisor replaying several tokens after a
+				// restart - cannot each pass a pre-check and exceed the plan
+				// quota. Quota failure falls through like any other rejection.
+				aerr = s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains)
+				if errors.Is(aerr, ErrAccountQuota) {
+					s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292/#312)", sess.id, sub, tier.Name, tier.CustomDomains)
+					break
+				}
+			} else {
+				aerr = s.reg.Acquire(sub, sess)
+			}
+			if aerr == nil {
 				sess.sub = sub
 				sess.custom = tok.custom
 				resumed = sub
