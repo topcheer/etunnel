@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -292,6 +293,11 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 	sniffFraming := len(res.Headers["Content-Length"]) == 0 &&
 		len(res.Headers["Transfer-Encoding"]) == 0
 	sniffed := false
+	// #294 F2: refreshed before every write, so healthy long transfers keep
+	// moving while a stalled visitor (TCP zero window) cannot pin the
+	// stream, its goroutine and the local connection indefinitely - exactly
+	// the per-write deadline config.go documents for StreamIdleTimeout.
+	deadlineSupported := true
 	buf := make([]byte, protocol.MaxPayload)
 	for {
 		n, rerr := st.bodyPr.Read(buf)
@@ -307,8 +313,21 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 					panic(http.ErrAbortHandler)
 				}
 			}
+			// Unsupported writers (httptest recorders in unit tests) simply
+			// run without a deadline.
+			if deadlineSupported {
+				if derr := rc.SetWriteDeadline(time.Now().Add(s.cfg.StreamIdleTimeout)); derr != nil {
+					deadlineSupported = false
+				}
+			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				st.abort()
+				if errors.Is(werr, os.ErrDeadlineExceeded) {
+					// #294 F2: the visitor stalled past StreamIdleTimeout -
+					// abort with the usual mid-body semantics (truncated,
+					// never silently valid).
+					panic(http.ErrAbortHandler)
+				}
 				return
 			}
 			_ = rc.Flush()
@@ -488,12 +507,22 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 		for {
 			n, rerr := st.bodyPr.Read(buf)
 			if n > 0 {
+				// #294 F1: the downlink direction meters and bills exactly
+				// like the uplink below and streamTunnelBody - tier.Bandwidth
+				// applies to upgraded streams too. WaitN cancelled (session
+				// gone / over limit) stops delivery, mirroring the uplink.
+				if sess.limiter != nil {
+					if lerr := sess.limiter.WaitN(sess.ctx, n); lerr != nil {
+						break
+					}
+				}
 				if _, werr := brw.Write(buf[:n]); werr != nil {
 					break
 				}
 				if ferr := brw.Flush(); ferr != nil {
 					break
 				}
+				s.metrics.bytesOut.Add(int64(n))
 			}
 			if rerr != nil {
 				break
