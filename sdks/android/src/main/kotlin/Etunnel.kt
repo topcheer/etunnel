@@ -11,6 +11,8 @@ import java.io.ByteArrayOutputStream
 import java.net.Proxy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import okhttp3.MediaType.Companion.toMediaType
@@ -80,9 +82,21 @@ object Json {
             }
             else -> {
                 val j = pos[0]
-                while (pos[0] < s.length && "+-.0123456789eE".indexOf(s[pos[0]]) >= 0) pos[0]++
-                val num = s.substring(j, pos[0])
-                num.toLongOrNull() ?: num.toDoubleOrNull() ?: num
+                when {
+                    // #282-7: bare JSON literals parsed as-is, not empty strings
+                    s.startsWith("null", j) -> { pos[0] = j + 4; null }
+                    s.startsWith("true", j) -> { pos[0] = j + 4; true }
+                    s.startsWith("false", j) -> { pos[0] = j + 5; false }
+                    else -> {
+                        while (pos[0] < s.length && "+-.0123456789eE".indexOf(s[pos[0]]) >= 0) pos[0]++
+                        val num = s.substring(j, pos[0])
+                        if (num.isEmpty()) {
+                            // unknown token: skip one char so parsing can never stall
+                            pos[0] = j + 1
+                            ""
+                        } else num.toLongOrNull() ?: num.toDoubleOrNull() ?: num
+                    }
+                }
             }
         }
     }
@@ -91,7 +105,23 @@ object Json {
         while (pos[0] < s.length && s[pos[0]].isWhitespace()) pos[0]++
     }
 
-    fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+    // #282-6: escape every control character - a raw \t (or any char < 0x20)
+    // inside a value produced invalid JSON and the server tore the session.
+    fun esc(s: String): String {
+        val b = StringBuilder(s.length + 8)
+        for (c in s) {
+            when {
+                c == '\\' -> b.append("\\\\")
+                c == '"' -> b.append("\\\"")
+                c == '\n' -> b.append("\\n")
+                c == '\r' -> b.append("\\r")
+                c == '\t' -> b.append("\\t")
+                c < ' ' -> b.append("\\u%04x".format(c.code))
+                else -> b.append(c)
+            }
+        }
+        return b.toString()
+    }
 }
 
 /** The standard ETUNNEL_* environment contract, parsed from a string map
@@ -99,23 +129,40 @@ object Json {
  *  are rarely populated). Mirrors every other SDK's CLI config. */
 data class EtunnelConfig(
     val server: String,
-    val localPort: Int,
+    /** Port number or "host:port" (contract allows both, AGENTS.md). */
+    val local: String,
     val token: String?,
     val subdomain: String?,
     val reconnect: Boolean,
 )
 
+/** "3000", "host:port", "[v6]:port" or a bare host (port 80, TS parity). */
+internal fun validateLocal(local: String) {
+    if (local.matches(Regex("\\d+"))) {
+        val port = local.toInt()
+        require(port in 1..65535) { "etunnel: ETUNNEL_LOCAL $port out of range 1..65535" }
+        return
+    }
+    if (local.contains(':')) {
+        // any colon form must be a well-formed host:port with a numeric port
+        val m = Regex("^(\\[[^]]+\\]|[^:]+):(\\d+)$").find(local)
+            ?: throw IllegalArgumentException("etunnel: ETUNNEL_LOCAL \"$local\" is not host:port")
+        val port = m.groupValues[2].toInt()
+        require(port in 1..65535) { "etunnel: ETUNNEL_LOCAL \"$local\" port out of range 1..65535" }
+    }
+    // bare host (no colon): valid, port defaults to 80 (TS parity)
+}
+
 /** Parse the parity contract (AGENTS.md): ETUNNEL_SERVER / ETUNNEL_LOCAL /
  *  ETUNNEL_TOKEN / ETUNNEL_SUBDOMAIN / ETUNNEL_RECONNECT. Throws
- *  IllegalArgumentException on a non-numeric ETUNNEL_LOCAL. */
+ *  IllegalArgumentException on a malformed ETUNNEL_LOCAL (#282-5: "host:port"
+ *  is contract-legal, not an error). */
 fun configFromEnv(env: Map<String, String?>): EtunnelConfig {
     val localRaw = env["ETUNNEL_LOCAL"]?.takeIf { it.isNotBlank() } ?: "3000"
-    val port = localRaw.toIntOrNull()
-        ?: throw IllegalArgumentException("etunnel: ETUNNEL_LOCAL \"$localRaw\" is not a port number")
-    require(port in 1..65535) { "etunnel: ETUNNEL_LOCAL $port out of range 1..65535" }
+    validateLocal(localRaw)
     return EtunnelConfig(
         server = env["ETUNNEL_SERVER"]?.takeIf { it.isNotBlank() } ?: "wss://t.etun.uk/tunnel",
-        localPort = port,
+        local = localRaw,
         token = env["ETUNNEL_TOKEN"]?.takeIf { it.isNotBlank() },
         subdomain = env["ETUNNEL_SUBDOMAIN"]?.takeIf { it.isNotBlank() },
         // "0" opts out of the reconnect loop; anything else reconnects (parity).
@@ -156,6 +203,20 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
     companion object {
         const val MAXP = 32768
 
+        // #282-3: #243 M2 resource caps (sdk/stream.go parity). A hostile or
+        // buggy server must not be able to OOM the client.
+        internal const val MAX_WS_MSG = 128 * 1024
+        internal const val MAX_STREAMS = 256
+        internal const val MAX_STREAM_BODY = 16 * 1024 * 1024
+
+        // #282-8: optional sink for otherwise-swallowed errors (no logging
+        // framework, Go SDK OnLog parity). Null by default: fully silent.
+        @Volatile var onLog: ((String) -> Unit)? = null
+        internal fun logMsg(msg: String) { onLog?.invoke("etunnel: $msg") }
+        internal fun logError(where: String, e: Exception) {
+            onLog?.invoke("etunnel: $where: ${e.message ?: e.toString()}")
+        }
+
         // Process-level shared clients. LOCAL_HTTP never goes through a system
         // proxy (Proxy.NO_PROXY) - 127.0.0.1 is always direct, and an Android
         // app-level HTTP proxy (VPN/escape hatch apps) must not swallow the
@@ -184,16 +245,36 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
         @Volatile var lastHandler: Handler? = null
 
         class Handler(
-            private val port: Int,
+            local: String,
             private val routes: List<Route>? = null,
             private val hello: String = "",
+            // Injectable so unit tests can bound replay latency (#282 test 1).
+            private val client: OkHttpClient = LOCAL_HTTP,
+            // #282-3: caps are parameters so unit tests can shrink them;
+            // production defaults are the #243 M2 values.
+            internal val maxStreams: Int = MAX_STREAMS,
+            internal val maxStreamBody: Int = MAX_STREAM_BODY,
         ) : WebSocketListener() {
+            private val hostPort: Pair<String, Int> = pickHostPort(local)
+            // #282-1: dedicated single-thread replay executor - ordering kept,
+            // the WS reader thread only enqueues; daemon so it never blocks exit.
+            private val replayPool: ExecutorService = Executors.newSingleThreadExecutor { r ->
+                Thread(r, "etunnel-replay").apply { isDaemon = true }
+            }
             val welcome = CountDownLatch(1)
             @Volatile var info: Map<String, Any?>? = null
             @Volatile var error: String? = null
             @Volatile var open = false
             val streams = ConcurrentHashMap<Int, Pair<Map<String, Any?>, ByteArrayOutputStream>>()
             @Volatile lateinit var ws: WebSocket
+
+            /** #282-3: protocol-violation path - drop the socket (code 1009)
+             *  so the supervisor reconnects instead of limping on poisoned state. */
+            fun failSocket(reason: String) {
+                open = false
+                logMsg("socket dropped: $reason")
+                try { ws.close(1009, reason) } catch (e: Exception) { logError("failSocket", e) }
+            }
 
             override fun onOpen(ws: WebSocket, response: okhttp3.Response) {
                 this.ws = ws
@@ -202,11 +283,11 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                try { handleText(text) } catch (_: Exception) {}
+                handleText(text)
             }
 
             override fun onMessage(ws: WebSocket, bytes: okio.ByteString) {
-                try { handleBinary(bytes.toByteArray()) } catch (_: Exception) {}
+                handleBinary(bytes.toByteArray())
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
@@ -221,31 +302,70 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
             }
 
             fun handleText(msg: String) {
-                val m = Json.read(msg)
-                when (m["type"]) {
-                    "welcome" -> { info = m; welcome.countDown() }
-                    "error" -> { error = "${m["code"]}: ${m["message"] ?: ""}"; welcome.countDown() }
-                    "req" -> {
-                        val sid = (m["streamId"] as Number).toInt()
-                        streams[sid] = m to ByteArrayOutputStream()
+                // #282-3: a single message over the read limit drops the socket
+                // (Go SetReadLimit parity; control JSON is far below this).
+                if (msg.length > MAX_WS_MSG) { failSocket("read limit exceeded"); return }
+                try {
+                    val m = Json.read(msg)
+                    when (m["type"]) {
+                        "welcome" -> { info = m; welcome.countDown() }
+                        "error" -> { error = "${m["code"]}: ${m["message"] ?: ""}"; welcome.countDown() }
+                        "req" -> {
+                            val sid = (m["streamId"] as Number).toInt()
+                            // #282-3: a replayed live streamId or a stream beyond
+                            // the cap is refused with RST - never silently
+                            // overwrite an in-flight stream.
+                            if (streams.containsKey(sid) || streams.size >= maxStreams) {
+                                ctl(0x03, sid); return
+                            }
+                            streams[sid] = m to ByteArrayOutputStream()
+                        }
+                        "ping" -> {
+                            // literal-proof ts guard (#282-7): only numbers on the wire
+                            val ts = (m["ts"] as? Number)?.toLong() ?: 0
+                            ws.send("{\"type\":\"pong\",\"ts\":$ts}")
+                        }
+                        "bye" -> ws.close(1000, "server closed")
                     }
-                    "ping" -> ws.send("{\"type\":\"pong\",\"ts\":${m["ts"] ?: 0}}")
-                    "bye" -> ws.close(1000, "server closed")
+                } catch (e: Exception) {
+                    logError("handleText", e) // #282-8: no silent swallow
                 }
             }
 
             fun handleBinary(b: ByteArray) {
                 if (b.size < ET_FRAME_HEADER) return
-                val kind = b[0].toInt() and 0xFF
-                val sid = ((b[1].toInt() and 0xFF) shl 24) or ((b[2].toInt() and 0xFF) shl 16) or
-                    ((b[3].toInt() and 0xFF) shl 8) or (b[4].toInt() and 0xFF)
-                val len = ((b[5].toInt() and 0xFF) shl 24) or ((b[6].toInt() and 0xFF) shl 16) or
-                    ((b[7].toInt() and 0xFF) shl 8) or (b[8].toInt() and 0xFF)
-                val st = streams[sid] ?: return
-                when (kind) {
-                    0x01 -> st.second.write(b, ET_FRAME_HEADER, minOf(len, b.size - ET_FRAME_HEADER))
-                    0x02 -> { streams.remove(sid); serve(st.first, st.second.toByteArray(), sid) }
-                    0x03 -> streams.remove(sid)
+                if (b.size > MAX_WS_MSG) { failSocket("read limit exceeded"); return }
+                try {
+                    val kind = b[0].toInt() and 0xFF
+                    val sid = ((b[1].toInt() and 0xFF) shl 24) or ((b[2].toInt() and 0xFF) shl 16) or
+                        ((b[3].toInt() and 0xFF) shl 8) or (b[4].toInt() and 0xFF)
+                    val len = ((b[5].toInt() and 0xFF) shl 24) or ((b[6].toInt() and 0xFF) shl 16) or
+                        ((b[7].toInt() and 0xFF) shl 8) or (b[8].toInt() and 0xFF)
+                    val st = streams[sid] ?: return
+                    when (kind) {
+                        0x01 -> {
+                            val n = minOf(len, b.size - ET_FRAME_HEADER)
+                            if (n > 0) st.second.write(b, ET_FRAME_HEADER, n)
+                            // #282-3: buffered body over the cap -> RST, drop stream
+                            if (st.second.size() > maxStreamBody) {
+                                streams.remove(sid); ctl(0x03, sid)
+                            }
+                        }
+                        0x02 -> {
+                            streams.remove(sid)
+                            val req = st.first
+                            val body = st.second.toByteArray()
+                            // #282-1: the replay runs on the dedicated executor,
+                            // never on the WS reader thread - a slow local app
+                            // must not starve pong processing (pingInterval=30s)
+                            // or the server sees a dead tunnel and tears it down
+                            // mid-request. Single thread keeps replay order.
+                            replayPool.execute { serve(req, body, sid) }
+                        }
+                        0x03 -> streams.remove(sid)
+                    }
+                } catch (e: Exception) {
+                    logError("handleBinary", e) // #282-8: no silent swallow
                 }
             }
 
@@ -254,7 +374,7 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
                 try {
                     val method = req["method"] as String
                     var path = req["path"] as? String ?: "/"
-                    var target = "http://127.0.0.1:$port"
+                    var target = "http://${hostPort.first}:${hostPort.second}" // #282-5: host:port, not just 127.0.0.1
                     if (routes != null) {
                         val hit = routeFor(routes, path) ?: run { notFound(sid); return }
                         target = "http://${hit.first}"
@@ -264,7 +384,10 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
                     (req["headers"] as? Map<String, List<String>>)?.forEach { (k, vs) ->
                         val lk = k.lowercase()
                         if (lk != null && !HOP.contains(lk)) {
-                            vs.forEach { rb.header(k, it) }
+                            // #282-2: addHeader appends; header() would replace and
+                            // drop all but the last value of multi-value headers
+                            // (Cookie/X-Forwarded-For), which the TS baseline keeps.
+                            vs.forEach { rb.addHeader(k, it) }
                         }
                     }
                     val noBody = method == "GET" || method == "HEAD"
@@ -272,8 +395,13 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
                         if (noBody) null else body.toRequestBody(JSON))
                     val resp: okhttp3.Response
                     try {
-                        resp = LOCAL_HTTP.newCall(rb.build()).execute()
+                        resp = client.newCall(rb.build()).execute()
                     } catch (e: Exception) {
+                        // #282-4: targetSdk>=28 hosts block cleartext to 127.0.0.1
+                        // by default - surface a targeted hint through the log hook.
+                        if ((e.message ?: "").contains("Cleartext")) {
+                            logMsg("cleartext replay blocked by network security policy - allow it for 127.0.0.1 (see README 'Cleartext to localhost')")
+                        }
                         localError(sid, e.message ?: "error")
                         return
                     }
@@ -296,8 +424,9 @@ internal class Etunnel(val url: String, val resumeToken: String, private val ws:
                         }
                         ws.send(ctlFrame(0x02, sid).toByteString())
                     }
-                } catch (_: Exception) {
-                    try { ws.send(ctlFrame(0x03, sid).toByteString()) } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    logError("replay sid=$sid", e) // #282-8
+                    try { ws.send(ctlFrame(0x03, sid).toByteString()) } catch (e2: Exception) { logError("rst sid=$sid", e2) }
                 }
             }
 
@@ -361,6 +490,15 @@ the tunnel stays connected and keeps retrying for you.</div>
             fun ctl(kind: Byte, sid: Int) { ws.send(ctlFrame(kind, sid).toByteString()) }
         }
 
+        /** #282-5: "port" | "host:port" | "[v6]:port" | bare host (port 80). */
+        internal fun pickHostPort(local: String): Pair<String, Int> {
+            if (local.matches(Regex("\\d+"))) return "127.0.0.1" to local.toInt()
+            val m = Regex("^(\\[[^]]+\\]|[^:]+):(\\d+)$").find(local)
+            if (m != null) return m.groupValues[1] to m.groupValues[2].toInt()
+            if (local.contains(':') && !local.startsWith("[")) return "[$local]" to 80
+            return local to 80
+        }
+
         /** Validate + compile a route table: trims trailing slashes ("/" stays),
          *  rejects duplicates and malformed prefixes, sorts longest-first. */
         fun normalizeRoutes(routes: List<Route>): List<Route> {
@@ -395,6 +533,14 @@ the tunnel stays connected and keeps retrying for you.</div>
 
         fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null,
                     resume: String? = null, routes: List<Route>? = null): Etunnel {
+            validateLocal(localPort.toString())
+            return connect(server, localPort.toString(), token, subdomain, resume, routes)
+        }
+
+        /** `local` is a port number or "host:port" / "[v6]:port" (#282-5, the
+         *  AGENTS.md contract allows host:port; bare host defaults to port 80). */
+        fun connect(server: String, local: String, token: String? = null, subdomain: String? = null,
+                    resume: String? = null, routes: List<Route>? = null): Etunnel {
             val norm = routes?.let { normalizeRoutes(it) }
             if (norm != null && norm.isEmpty()) throw IllegalArgumentException("etunnel: routes must not be empty")
             val hello = buildString {
@@ -406,7 +552,7 @@ the tunnel stays connected and keeps retrying for you.</div>
                 resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
                 append(",\"client\":\"etunnel-android/1.4\"}")
             }
-            val h = Handler(localPort, norm, hello)
+            val h = Handler(local, norm, hello)
             // Subprotocol selection: OkHttp has no builder API for it, but it
             // honours a request Sec-WebSocket-Protocol header (and rejects the
             // handshake if the server picks an unrequested subprotocol).
@@ -445,13 +591,19 @@ fun main(args: Array<String>) {
     if (!cfg.reconnect) {
         // original single-shot behavior
         try {
-            val t = Etunnel.connect(cfg.server, cfg.localPort, cfg.token, cfg.subdomain)
+            val t = Etunnel.connect(cfg.server, cfg.local, cfg.token, cfg.subdomain)
             println("TUNNEL_URL: ${t.url}")
         } catch (e: Exception) {
             System.err.println("etunnel: ${e.message}")
             kotlin.system.exitProcess(1)
         }
-        Thread.currentThread().join()
+        // #282-9: self-join parked the main thread forever, even after the
+        // tunnel dropped. Watch the live socket instead and exit when the
+        // session ends (same liveness poll the reconnect loop uses).
+        val h = Etunnel.lastHandler
+        while (h != null && h.open) {
+            try { Thread.sleep(200) } catch (ie: InterruptedException) { break }
+        }
         return
     }
 
@@ -463,7 +615,7 @@ fun main(args: Array<String>) {
     while (!stopped.get()) {
         var t: Etunnel? = null
         try {
-            t = Etunnel.connect(cfg.server, cfg.localPort, cfg.token, cfg.subdomain, resume.ifEmpty { null })
+            t = Etunnel.connect(cfg.server, cfg.local, cfg.token, cfg.subdomain, resume.ifEmpty { null })
         } catch (e: Exception) {
             System.err.println("etunnel: ${e.message ?: e.toString()}")
         }
