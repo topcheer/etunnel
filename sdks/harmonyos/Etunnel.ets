@@ -43,6 +43,8 @@ export interface Options {
   /** Server-signed token from a previous session: reclaim the same subdomain. */
   resume?: string;
   onClose?: (reason: string) => void;
+  /** Override the 15s welcome timeout (diagnostic/test hook). */
+  welcomeTimeoutMs?: number;
 }
 
 export interface Tunnel {
@@ -192,6 +194,13 @@ export function utf8Decode(bytes: Uint8Array): string {
   return s;
 }
 
+/** #283-2: HTTP method passthrough - unknown verbs (PROPFIND, REPORT,
+ *  TRACE, custom) must reach the local service verbatim, not be silently
+ *  rewritten to GET (TS fetch and the Android SDK both pass through). */
+export function httpMethodFor(method: string): string {
+  return method;
+}
+
 // --- ETUNNEL_* contract (AGENTS.md parity) ------------------------------
 // HarmonyOS apps have no process environment: the standard variables are
 // resolved from a plain string map the embedder provides (preferences,
@@ -330,11 +339,21 @@ export async function connect(server: string, local: string, opts: Options = {})
   let pinger = 0;
   const handshakeTimer = setTimeout(() => {
     if (!handshakeDone) {
-      const e = new Error('etunnel: welcome timeout (15s) - server accepted the socket but never sent welcome');
+      // #283-1: a timed-out handshake must not leave a zombie socket (TS
+      // #243 M4 parity) - drop every listener and close, or supervise()
+      // re-dials accumulate fds and server session slots without bound.
+      const types: string[] = ['open', 'message', 'close', 'error'];
+      for (const t of types) {
+        ws.off(t);
+      }
+      try {
+        ws.close(1000, 'welcome timeout');
+      } catch (e) { /* gone */ }
+      const e = new Error('etunnel: welcome timeout - server accepted the socket but never sent welcome');
       if (openReject) openReject(e);
       if (welcomeReject) welcomeReject(e);
     }
-  }, 15000);
+  }, opts.welcomeTimeoutMs ? opts.welcomeTimeoutMs : 15000);
 
   function trySend(data: string | ArrayBuffer): void {
     try {
@@ -440,7 +459,10 @@ export async function connect(server: string, local: string, opts: Options = {})
       st.body.push(payload);
     } else if (f.kind === 0x02) {
       streams.delete(f.id);
-      handle(st, f.id);
+      // fire-and-forget: a crashing replay must not take the reader down
+      handle(st, f.id).catch((e: Error) => {
+        console.error('etunnel: replay sid=' + f.id + ' crashed: ' + (e && e.message ? e.message : String(e)));
+      });
     } else if (f.kind === 0x03) {
       streams.delete(f.id);
     }
@@ -501,86 +523,89 @@ export async function connect(server: string, local: string, opts: Options = {})
   }
 
   // Local replay through @ohos.net.http (bodies buffered per stream).
+  // #283-4: the whole path is wrapped - every send failure is caught and
+  // answered with a best-effort RST, and the per-request http client is
+  // destroyed on every path so no descriptor leaks.
   async function handle(st: StreamState, id: number): Promise<void> {
-    const total = st.size;
-    const body = new Uint8Array(total);
-    let off = 0;
-    for (const chunk of st.body) {
-      body.set(chunk, off);
-      off += chunk.byteLength;
-    }
-    const headerObj: Record<string, string> = {};
-    const reqHeaders = st.req.headers;
-    if (reqHeaders) {
-      const keys = Object.keys(reqHeaders);
-      for (const k of keys) {
-        if (isHop(k)) continue;
-        // #243 M6: keep multi-value headers; the OHOS http stack joins
-        // duplicates for us, comma-joining is the wire-accurate option here.
-        headerObj[k] = reqHeaders[k].join(', ');
-      }
-    }
-    let dialAddr = hp.host + ':' + hp.port;
-    let dialPath: string = st.req.path;
-    if (routes !== null) {
-      const hit = routeFor(routes, dialPath);
-      if (hit === null) {
-        const notFound = '404 page not found (no route matches this path)\n';
-        sendRes(id, 404, { 'Content-Type': ['text/plain; charset=utf-8'] });
-        trySend(frame(0x01, id, utf8Encode(notFound)));
-        trySend(ctlFrame(0x02, id));
-        return;
-      }
-      dialAddr = hit.addr;
-      dialPath = hit.path;
-    }
     const client = http.createHttp();
-    let resp: http.HttpResponse | null = null;
     try {
+      const total = st.size;
+      const body = new Uint8Array(total);
+      let off = 0;
+      for (const chunk of st.body) {
+        body.set(chunk, off);
+        off += chunk.byteLength;
+      }
+      const headerObj: Record<string, string> = {};
+      const reqHeaders = st.req.headers;
+      if (reqHeaders) {
+        const keys = Object.keys(reqHeaders);
+        for (const k of keys) {
+          if (isHop(k)) continue;
+          // #283-5 (documented limitation): the OHOS http header map is
+          // single-valued, so multi-value headers are comma-joined; values
+          // containing commas cannot round-trip. See README "Limits".
+          headerObj[k] = reqHeaders[k].join(', ');
+        }
+      }
+      let dialAddr = hp.host + ':' + hp.port;
+      let dialPath: string = st.req.path;
+      if (routes !== null) {
+        const hit = routeFor(routes, dialPath);
+        if (hit === null) {
+          const notFound = '404 page not found (no route matches this path)\n';
+          sendRes(id, 404, { 'Content-Type': ['text/plain; charset=utf-8'] });
+          trySend(frame(0x01, id, utf8Encode(notFound)));
+          trySend(ctlFrame(0x02, id));
+          return;
+        }
+        dialAddr = hit.addr;
+        dialPath = hit.path;
+      }
       const reqOpts: http.HttpRequestOptions = {};
-      reqOpts.method = methodEnum(st.req.method);
+      reqOpts.method = httpMethodFor(st.req.method); // #283-2 passthrough
       reqOpts.header = headerObj;
       reqOpts.extraData = ['GET', 'HEAD'].indexOf(st.req.method) >= 0 ? undefined : body.buffer as ArrayBuffer;
       reqOpts.expectDataType = http.HttpDataType.ARRAY_BUFFER;
       reqOpts.usingCache = false;
       reqOpts.connectTimeout = 10000;
       reqOpts.readTimeout = 120000;
-      resp = await client.request('http://' + dialAddr + dialPath, reqOpts);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      sendRes(id, 502, { 'Content-Type': ['text/html; charset=utf-8'] });
-      trySend(frame(0x01, id, utf8Encode(localErrorPage(msg))));
+      let resp: http.HttpResponse;
+      try {
+        resp = await client.request('http://' + dialAddr + dialPath, reqOpts);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        sendRes(id, 502, { 'Content-Type': ['text/html; charset=utf-8'] });
+        trySend(frame(0x01, id, utf8Encode(localErrorPage(msg))));
+        trySend(ctlFrame(0x02, id));
+        return;
+      }
+      const rh: Record<string, string[]> = {};
+      const headerKeys = Object.keys(resp.header as Object);
+      for (const k of headerKeys) {
+        if (isHop(k) || k.toLowerCase() === 'content-length' || k.toLowerCase() === 'transfer-encoding') continue;
+        const v = (resp.header as Record<string, string>)[k];
+        const arr: string[] = [v];
+        rh[k] = arr;
+      }
+      sendRes(id, resp.responseCode, rh);
+      const payload = new Uint8Array(resp.result as ArrayBuffer);
+      for (let i = 0; i < payload.byteLength; i += MAXP) {
+        trySend(frame(0x01, id, payload.subarray(i, Math.min(i + MAXP, payload.byteLength))));
+      }
       trySend(ctlFrame(0x02, id));
-      client.destroy();
-      return;
-    }
-    const rh: Record<string, string[]> = {};
-    const headerKeys = Object.keys(resp.header as Object);
-    for (const k of headerKeys) {
-      if (isHop(k) || k.toLowerCase() === 'content-length' || k.toLowerCase() === 'transfer-encoding') continue;
-      const v = (resp.header as Record<string, string>)[k];
-      const arr: string[] = [v];
-      rh[k] = arr;
-    }
-    sendRes(id, resp.responseCode, rh);
-    const payload = new Uint8Array(resp.result as ArrayBuffer);
-    for (let i = 0; i < payload.byteLength; i += MAXP) {
-      trySend(frame(0x01, id, payload.subarray(i, Math.min(i + MAXP, payload.byteLength))));
-    }
-    trySend(ctlFrame(0x02, id));
-    client.destroy();
-  }
-
-  function methodEnum(method: string): http.RequestMethod {
-    switch (method) {
-      case 'GET': return http.RequestMethod.GET;
-      case 'HEAD': return http.RequestMethod.HEAD;
-      case 'POST': return http.RequestMethod.POST;
-      case 'PUT': return http.RequestMethod.PUT;
-      case 'DELETE': return http.RequestMethod.DELETE;
-      case 'OPTIONS': return http.RequestMethod.OPTIONS;
-      case 'PATCH': return http.RequestMethod.PATCH;
-      default: return http.RequestMethod.GET;
+    } catch (e) {
+      // #283-4: forwarding failed mid-flight (socket died etc.) - answer with
+      // a best-effort RST so the server does not wait on a ghost stream.
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('etunnel: replay sid=' + id + ' failed: ' + msg);
+      try {
+        ws.send(ctlFrame(0x03, id));
+      } catch (e2) {
+        console.error('etunnel: rst sid=' + id + ' failed: ' + (e2 instanceof Error ? e2.message : String(e2)));
+      }
+    } finally {
+      client.destroy(); // #283-4: destroy on every path
     }
   }
 
@@ -628,12 +653,28 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** Keep a tunnel up across drops; prints `TUNNEL_URL: <url>` on every
- *  successful connect (cross-SDK contract) and replays the resumeToken so
- *  the subdomain is reclaimed instead of re-randomised. */
-export async function supervise(server: string, local: string, opts: Options = {}): Promise<void> {
+/** Cancellable supervisor handle (#283-3). */
+export interface SupervisorHandle {
+  /** Idempotent: stops the loop at the next boundary (drop, backoff sleep). */
+  stop(): void;
+  /** Resolves once the loop has fully exited. */
+  done: Promise<void>;
+}
+
+// #283-3: a permanently invalid server URL must not retry forever.
+const MAX_CONFIG_RETRIES = 3;
+
+function isConfigError(msg: string): boolean {
+  return /url|uri|scheme|invalid/i.test(msg);
+}
+
+async function runSupervise(server: string, local: string, opts: Options,
+    dial: (server: string, local: string, opts: Options) => Promise<Tunnel>,
+    isStopped: () => boolean, stopGate: Promise<void>): Promise<void> {
   let resume = '';
-  for (let attempt = 0; ; attempt++) {
+  let attempt = 0;
+  let configFailures = 0;
+  while (!isStopped()) {
     // Gate that resolves when the session ends (close(), server bye, drop),
     // forwarding to the embedder's own callback in the same breath.
     let gateResolve: ((reason: string) => void) | null = null;
@@ -651,19 +692,55 @@ export async function supervise(server: string, local: string, opts: Options = {
         if (gateResolve) gateResolve(reason);
       },
     };
+    let sessionEnded = false;
     try {
-      const t = await connect(server, local, hook);
+      const t = await dial(server, local, hook);
+      if (isStopped()) break;
       if (t.resumeToken.length > 0) resume = t.resumeToken;
       console.log('TUNNEL_URL: ' + t.url);
       attempt = -1; // a working session resets the backoff to 500ms
-      await gate;
-      console.error('etunnel: tunnel closed, reconnecting');
+      await Promise.race([gate, stopGate]);
+      sessionEnded = true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('etunnel: ' + msg);
+      if (isConfigError(msg)) {
+        configFailures++;
+        if (configFailures >= MAX_CONFIG_RETRIES) {
+          console.error('etunnel: server URL failed ' + configFailures + 'x - giving up; fix ETUNNEL_SERVER/opts and restart the supervisor');
+          return;
+        }
+      }
     }
+    if (sessionEnded) console.error('etunnel: tunnel closed, reconnecting');
+    if (isStopped()) break;
     const wait = retryDelay(attempt < 0 ? 0 : attempt);
     console.error('etunnel: retrying in ' + wait + 'ms');
-    await sleep(wait);
+    attempt++;
+    await Promise.race([sleep(wait), stopGate]); // stop cuts the backoff short
   }
+  console.error(isStopped() ? 'etunnel: supervisor stopped' : 'etunnel: supervisor exited');
+}
+
+/** Keep a tunnel up across drops; prints `TUNNEL_URL: <url>` on every
+ *  successful connect (cross-SDK contract) and replays the resumeToken so
+ *  the subdomain is reclaimed instead of re-randomised. Returns a handle:
+ *  call `handle.stop()` to cancel (#283-3). Config-class failures (invalid
+ *  server URL) are capped at 3 attempts, then the loop gives up. */
+export function startSupervise(server: string, local: string, opts: Options = {},
+    dial: (server: string, local: string, opts: Options) => Promise<Tunnel> = (server: string, local: string, o: Options) => connect(server, local, o)): SupervisorHandle {
+  let stopped = false;
+  let notifyStop: (() => void) | null = null;
+  const stopGate = new Promise<void>((res) => {
+    notifyStop = res;
+  });
+  const done = runSupervise(server, local, opts, dial, () => stopped, stopGate);
+  const handle: SupervisorHandle = {
+    stop(): void {
+      stopped = true;
+      if (notifyStop) notifyStop();
+    },
+    done: done,
+  };
+  return handle;
 }

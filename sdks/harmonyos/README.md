@@ -53,11 +53,14 @@ The consuming app needs the INTERNET permission in its own
 
 ### Reconnects
 
-`connect()` is one-shot; `supervise()` (exported) is the reconnect loop:
+`connect()` is one-shot; `startSupervise()` (exported) is the reconnect loop:
 exponential backoff 500ms → 30s with ±20% jitter, reset on success, printing
 `TUNNEL_URL:` again on every session, and replaying the server-signed
 `resumeToken` so the same subdomain is reclaimed instead of re-randomised
-(matches every other SDK). For long-lived tunnels run the supervisor from a
+(matches every other SDK). It returns a handle — `handle.stop()` cancels the
+loop (resolves `handle.done`); config-class failures (invalid server URL)
+are capped at 3 dial attempts, then the loop gives up instead of retrying
+forever (#283-3). For long-lived tunnels run the supervisor from a
 long-running task / continuous task so the system does not freeze the
 background ability.
 
@@ -78,7 +81,7 @@ const cfg = configFromEnv({
   'ETUNNEL_SUBDOMAIN': '',        // blank = random
   'ETUNNEL_RECONNECT': '1',       // '0' = single-shot, like every other SDK
 });
-await supervise(cfg.server, cfg.local, { token: cfg.token, subdomain: cfg.subdomain });
+await startSupervise(cfg.server, cfg.local, { token: cfg.token, subdomain: cfg.subdomain });
 ```
 
 | Variable | Meaning | Default |
@@ -141,6 +144,11 @@ syntax, no object spread, explicit interfaces for all wire messages,
   dashboards; not for large uploads, SSE, or WebSocket pass-through.
 - One WebSocket per tunnel; concurrency is single-threaded on the ArkTS event
   loop, like the Node/TS/Deno SDKs.
+- Multi-value request headers are comma-joined into a single value — the OHOS
+  `http` header map is single-valued — so values that themselves contain
+  commas cannot round-trip (#283-5, documented limitation).
+- HTTP methods are passed through verbatim (PROPFIND/REPORT/custom verbs are
+  forwarded as-is, never rewritten to GET; #283-2).
 
 ## License
 
