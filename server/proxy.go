@@ -308,8 +308,11 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 				}
 			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
+				// #304 D-1: under h2 a bare return ends a no-Content-Length
+				// stream as silently-valid truncation; abort the connection so
+				// the visitor sees the failure instead of a short body.
 				st.abort()
-				return
+				panic(http.ErrAbortHandler)
 			}
 			_ = rc.Flush()
 			s.metrics.bytesOut.Add(int64(n))
