@@ -365,7 +365,13 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 		if err != nil {
 			return false
 		}
-		if !strings.EqualFold(u.Host, s.cfg.Domain) {
+		// #304 B-1: compare the host without its port - non-default-port
+		// portal deployments (Origin carries :8443 etc.) must not 403.
+		host := s.cfg.Domain
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !strings.EqualFold(u.Hostname(), host) {
 			return false
 		}
 	}

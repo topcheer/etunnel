@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -184,9 +185,24 @@ func DefaultTiers() map[string]*Tier {
 }
 
 // normalize fills defaults and validates.
+// hostnamePattern accepts ordinary dot-separated hostnames (letters,
+// digits, hyphen); an optional :port is split off before the match (#304 C-1).
+var hostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`)
+
 func (c *Config) normalize() error {
 	if c.Domain == "" {
 		return errors.New("etunnel: Domain is required")
+	}
+	// #304 C-1: Domain is interpolated into portal script blocks and the
+	// Origin check - restrict it to hostname characters (an optional :port
+	// is allowed for non-default deployments) so an operator config typo
+	// cannot smuggle markup into the page or break the Origin match.
+	host := c.Domain
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if !hostnamePattern.MatchString(host) {
+		return fmt.Errorf("etunnel: Domain %q is not a valid hostname", c.Domain)
 	}
 	if c.WSPath == "" {
 		c.WSPath = "/tunnel"

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -321,14 +320,11 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 				}
 			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
+				// #304 D-1: under h2 a bare return ends a no-Content-Length
+				// stream as silently-valid truncation; abort the connection so
+				// the visitor sees the failure instead of a short body.
 				st.abort()
-				if errors.Is(werr, os.ErrDeadlineExceeded) {
-					// #294 F2: the visitor stalled past StreamIdleTimeout -
-					// abort with the usual mid-body semantics (truncated,
-					// never silently valid).
-					panic(http.ErrAbortHandler)
-				}
-				return
+				panic(http.ErrAbortHandler)
 			}
 			_ = rc.Flush()
 			s.metrics.bytesOut.Add(int64(n))

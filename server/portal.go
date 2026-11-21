@@ -374,7 +374,8 @@ async function domBuy(provider){
 function copyKey(btn){
   const v = document.getElementById('apikey').value;
   const done = ()=>{ btn.textContent='{{.MsgCopied}}'; setTimeout(()=>{btn.textContent='{{T "me.key.copy"}}';},1500); };
-  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, done); } else { done(); }
+  const fail = ()=>{ btn.textContent='{{T "btn.copyfail"}}'; setTimeout(()=>{btn.textContent='{{T "me.key.copy"}}';},1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v).then(done, fail); } else { fail(); }
 }
 function pkB64(b){const u=new Uint8Array(b);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 function pkUB64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
