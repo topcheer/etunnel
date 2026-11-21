@@ -247,11 +247,21 @@ func TestNotifyTunnelOpen(t *testing.T) {
 		defer fake.mu.Unlock()
 		return len(fake.sent)
 	}
+	// The send is asynchronous (#review): poll until n messages arrived.
+	waitFor := func(n int) bool {
+		for i := 0; i < 100; i++ {
+			if countSent() >= n {
+				return true
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return false
+	}
 
 	// a) fresh subdomain -> exactly one 🚇 push with the required fields.
 	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
-	if n := countSent(); n != 1 {
-		t.Fatalf("fresh subdomain sent %d messages, want 1", n)
+	if !waitFor(1) {
+		t.Fatalf("fresh subdomain sent %d messages, want 1", countSent())
 	}
 	fake.mu.Lock()
 	text := fake.sent[0]
@@ -264,21 +274,22 @@ func TestNotifyTunnelOpen(t *testing.T) {
 
 	// b) resume-style reconnect inside the cooldown -> no repeat.
 	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
+	time.Sleep(150 * time.Millisecond) // give a (wrongly) sync send time to land
 	if n := countSent(); n != 1 {
 		t.Fatalf("cooldown reconnect sent %d messages, want 1", n)
 	}
 
 	// c) a different subdomain is independent.
 	s.notifyTunnelOpen(sess("blue-frog-x2"), "Starter")
-	if n := countSent(); n != 2 {
-		t.Fatalf("second subdomain sent %d messages, want 2", n)
+	if !waitFor(2) {
+		t.Fatalf("second subdomain sent %d messages, want 2", countSent())
 	}
 
 	// cooldown expiry notifies the same subdomain again.
 	time.Sleep(70 * time.Millisecond)
 	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
-	if n := countSent(); n != 3 {
-		t.Fatalf("post-cooldown open sent %d messages, want 3", n)
+	if !waitFor(3) {
+		t.Fatalf("post-cooldown open sent %d messages, want 3", countSent())
 	}
 }
 

@@ -373,8 +373,14 @@ func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
 	if owner == "" {
 		owner = "anonymous"
 	}
-	s.tgSend(fmt.Sprintf("🚇 tunnel open: %s (%s) — plan %s · owner %s · ip %s",
-		sess.sub, sess.url, plan, owner, sess.ip))
+	text := fmt.Sprintf("🚇 tunnel open: %s (%s) — plan %s · owner %s · ip %s",
+		sess.sub, sess.url, plan, owner, sess.ip)
+	// #review: send asynchronously - tgSend's HTTP client has a 40s
+	// timeout, and this runs on the handshake path before readLoop starts,
+	// so a slow or hung Telegram API must not delay a new tunnel from
+	// serving. The synchronous cooldown decision above already prevents
+	// concurrent double-sends.
+	go s.tgSend(text)
 }
 
 func prefixIfSet(reason string) string {
