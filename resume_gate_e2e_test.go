@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,4 +209,78 @@ func TestResumeDoesNotExtendTTL(t *testing.T) {
 			w2.ExpiresAt, w1.ExpiresAt)
 	}
 	c2()
+}
+
+// #312: concurrent double-resume of two DIFFERENT custom tokens under a
+// quota of one. Both handshakes race; the atomic in-lock quota recount
+// (AcquireCustom) must admit exactly one custom resume - the loser falls
+// through to a random subdomain and the plan quota is never exceeded.
+func TestResumeConcurrentOverQuotaRejected(t *testing.T) {
+	srv, srvURL := startTestServer(t, func(c *server.Config) {
+		c.Tiers["duo"] = &server.Tier{
+			Name: "Duo", TTL: 0,
+			CustomDomains: 1, MaxTunnels: 8,
+		}
+	})
+	acct, err := srv.Accounts().Create("cc@example.com", "duo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cca", "ccb"} {
+		name := name
+		if !srv.Accounts().TryClaimDomain("cc@example.com", name, func(a *server.Account) bool {
+			return len(a.Domains) < 2
+		}) {
+			t.Fatalf("claim %s", name)
+		}
+	}
+
+	// Harvest one resume token per custom name while the plan allows both
+	// (each connect+close releases its slot, so the harvest stays legal).
+	tokens := make([]string, 0, 2)
+	for _, name := range []string{"cca", "ccb"} {
+		w, close1 := rawResumeHello(t, srvURL, protocol.Hello{
+			Token: acct.APIKey, Subdomain: name,
+		})
+		if w.Subdomain != name || w.ResumeToken == "" {
+			t.Fatalf("harvest %s: sub=%q", name, w.Subdomain)
+		}
+		tokens = append(tokens, w.ResumeToken)
+		close1()
+	}
+
+	// Fire both resumes concurrently behind a start barrier.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	welcomes := make(chan protocol.Welcome, 2)
+	for _, tok := range tokens {
+		tok := tok
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w, closeFn := rawResumeHello(t, srvURL, protocol.Hello{
+				Token: acct.APIKey, Resume: tok,
+			})
+			welcomes <- w
+			closeFn()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(welcomes)
+
+	// Exactly one custom name may be live; the other resume must have
+	// fallen through to a random subdomain.
+	customWins := 0
+	subs := make([]string, 0, 2)
+	for w := range welcomes {
+		subs = append(subs, w.Subdomain)
+		if w.Subdomain == "cca" || w.Subdomain == "ccb" {
+			customWins++
+		}
+	}
+	if customWins != 1 {
+		t.Fatalf("concurrent double-resume admitted %d custom resumes (#312); subs=%v", customWins, subs)
+	}
 }
