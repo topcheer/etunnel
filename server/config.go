@@ -72,7 +72,10 @@ func ParseTiers(b []byte) (map[string]*Tier, error) {
 // Config configures a Server.
 type Config struct {
 	// Domain is the tunnel base domain, e.g. "t.example.com". Tunnels live at
-	// "<sub>.Domain".
+	// "<sub>.Domain". Must be a valid hostname; an optional :port is allowed
+	// for non-default portal deployments. Values that are not hostnames are
+	// rejected at startup (#304 C-1), and the portal/CLI Origin check
+	// compares against the host with the port stripped (#304 B-1).
 	Domain string
 	// AliasDomain serves a legacy domain alongside Domain during migrations:
 	// requests for <sub>.AliasDomain route to the same tunnels. TLS for the
