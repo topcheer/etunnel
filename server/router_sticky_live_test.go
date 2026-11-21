@@ -52,11 +52,23 @@ func TestStickyRouterLive(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "origin-hello") {
 		t.Fatalf("body %q", rec.Body.String())
 	}
-	// loop guard
+	// loop guard - #295: the forward header is only honored from internal
+	// peers (cluster peers and the LB live on loopback/RFC1918), so the
+	// test peer must look internal for the guard to fire; httptest's
+	// default peer (192.0.2.1) is public TEST-NET and would get the header
+	// stripped before the check
 	req2 := httptest.NewRequest(http.MethodGet, "http://x/", nil)
 	req2.Header.Set("X-Etunnel-Forward", "x")
+	req2.RemoteAddr = "10.0.0.9:4444"
 	if b.Forward("sticky-test-sub", httptest.NewRecorder(), req2) {
 		t.Fatal("loop guard failed")
+	}
+	// #295: the same header forged by a public-internet peer is stripped
+	// and the request forwards normally instead of being refused
+	req3 := httptest.NewRequest(http.MethodGet, "http://x/", nil)
+	req3.Header.Set("X-Etunnel-Forward", "x")
+	if !b.Forward("sticky-test-sub", httptest.NewRecorder(), req3) {
+		t.Fatal("forged forward header should be stripped, not refused")
 	}
 	// release clears for both
 	a.Release("sticky-test-sub")
