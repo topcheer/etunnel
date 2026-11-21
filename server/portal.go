@@ -205,6 +205,12 @@ func providerIcon(p string) template.HTML {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// #295: logout is a real revocation - bump the account's session epoch
+	// so every cookie minted before this point stops verifying, not just
+	// the presenting one.
+	if email := s.sessionEmail(r); email != "" {
+		s.accounts.Mutate(email, func(a *Account) { a.SessionEpoch++ })
+	}
 	http.SetCookie(w, &http.Cookie{Name: "et_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/pricing", http.StatusSeeOther)
 }
@@ -507,6 +513,10 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 			http.Error(w, `{"error":"reset failed"}`, http.StatusInternalServerError)
 			return
 		}
+		// #295: revoking the key also revokes browser sessions - bump the
+		// epoch so a stolen cookie cannot keep using the dashboard (the
+		// response still carries the new key; the caller re-logs in).
+		s.accounts.Mutate(email, func(a *Account) { a.SessionEpoch++ })
 		writeJSON(w, http.StatusOK, map[string]string{"apiKey": key, "message": "API key reset (old key revoked)"})
 	case "cancel":
 		if acct.Tier == "free" {

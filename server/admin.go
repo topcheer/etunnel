@@ -56,6 +56,18 @@ func (s *Server) buildAdmin() {
 	s.adminHandler = mux
 }
 
+// #295: admin-token brute-force cooldown. Tunables are vars so tests can
+// shrink the window.
+var (
+	adminMaxFails     = 5
+	adminFailCooldown = time.Minute
+)
+
+type adminFailState struct {
+	fails        int
+	blockedUntil time.Time
+}
+
 func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Fail closed: an unconfigured AdminToken disables the admin API
@@ -64,11 +76,38 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "admin API disabled: set -admin-token", http.StatusServiceUnavailable)
 			return
 		}
+		// #295: brute-force cooldown - after adminMaxFails bad tokens from
+		// one IP, every attempt (right or wrong) waits out the cooldown.
+		ip := remoteIP(r)
+		s.adminFailsMu.Lock()
+		st := s.adminFails[ip]
+		if st != nil && time.Now().Before(st.blockedUntil) {
+			s.adminFailsMu.Unlock()
+			http.Error(w, "too many failures; try later", http.StatusTooManyRequests)
+			return
+		}
+		s.adminFailsMu.Unlock()
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
+			s.adminFailsMu.Lock()
+			if s.adminFails[ip] == nil {
+				s.adminFails[ip] = &adminFailState{}
+			}
+			st := s.adminFails[ip]
+			if time.Now().After(st.blockedUntil) && st.blockedUntil != (time.Time{}) {
+				st.fails = 0 // cooldown served, start a fresh window
+			}
+			st.fails++
+			if st.fails >= adminMaxFails {
+				st.blockedUntil = time.Now().Add(adminFailCooldown)
+			}
+			s.adminFailsMu.Unlock()
 			s.logf("admin: auth FAILED %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		s.adminFailsMu.Lock()
+		delete(s.adminFails, ip)
+		s.adminFailsMu.Unlock()
 		next(w, r)
 	}
 }

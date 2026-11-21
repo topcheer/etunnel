@@ -95,6 +95,11 @@ Commands as actually used by Makefile and CI
 
 ## Secrets and operational invariants
 
+- Tunnel admission limits stack: the anonymous per-IP cap covers
+  unauthenticated tunnels only; every authenticated tunnel is additionally
+  bounded by the tier's `MaxTunnels` per account across all handshakes
+  (issue #10, #295 item 4).
+
 - `SESSION_SECRET` keys **two** things: OAuth session cookies and the
   `resumeToken` HMAC. Set it and keep it stable in production — without it
   both are per-process, so a restart logs everyone out and makes in-flight

@@ -86,10 +86,16 @@ func (s *Server) sessionKey() []byte {
 	return bootSecret
 }
 
-// sessionCookie mints "email|expiry|hex(hmac)".
+// sessionCookie mints "email|expiry|hex(hmac)". The MAC folds the
+// account's session epoch (#295): bumping it (logout, API-key reset)
+// invalidates every cookie minted before the bump.
 func (s *Server) sessionCookie(email string) *http.Cookie {
 	exp := time.Now().Add(30 * 24 * time.Hour).Unix()
-	mac := hmacStr(s.sessionKey(), fmt.Sprintf("%s|%d", email, exp))
+	epoch := int64(0)
+	if a, ok := s.accounts.LookupEmail(email); ok {
+		epoch = a.SessionEpoch
+	}
+	mac := hmacStr(s.sessionKey(), fmt.Sprintf("%s|%d|%d", email, exp, epoch))
 	v := fmt.Sprintf("%s|%d|%s", email, exp, mac)
 	return &http.Cookie{Name: "et_session", Value: v, Path: "/", HttpOnly: true,
 		Secure:   s.cfg.TLS.Mode != TLSModeHTTP, // #6: never ride plaintext HTTP when TLS is on
@@ -106,11 +112,16 @@ func (s *Server) sessionEmail(r *http.Request) string {
 	if !ok || time.Now().Unix() > exp {
 		return ""
 	}
-	if !hmacEqual(hmacStr(s.sessionKey(), fmt.Sprintf("%s|%d", email, exp)), mac) {
-		return ""
-	}
-	if _, ok := s.accounts.LookupEmail(email); !ok {
+	acct, ok := s.accounts.LookupEmail(email)
+	if !ok {
 		return "" // closed/renamed account invalidates the session
+	}
+	// #295: the epoch folds into the MAC - cookies minted before a logout
+	// or API-key reset (epoch bump) fail this check while the account lives
+	// on. Accounts created before the field existed carry epoch 0, so the
+	// upgrade does not force a global re-login.
+	if !hmacEqual(hmacStr(s.sessionKey(), fmt.Sprintf("%s|%d|%d", email, exp, acct.SessionEpoch)), mac) {
+		return ""
 	}
 	return email
 }

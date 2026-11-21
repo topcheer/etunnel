@@ -42,6 +42,11 @@ const (
 // cliUsedCodes remembers spent authorization codes (by nonce) for replay
 // rejection. Lazily pruned on every take; the entries are tiny and bounded
 // by the number of logins in 15 minutes.
+//
+// #295: process-local by design - multi-node deployments must route CLI
+// login attempts to one node (or share the table) until a cluster-safe
+// store lands; an authorization code spent on node A can otherwise be
+// replayed on node B within its 15-minute window.
 type cliUsedCodes struct {
 	mu   sync.Mutex
 	seen map[string]time.Time
