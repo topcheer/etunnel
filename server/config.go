@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -183,13 +184,64 @@ func DefaultTiers() map[string]*Tier {
 	}
 }
 
+// validHostname enforces a conservative hostname charset (RFC 1123):
+// letters, digits, hyphens and dots, without leading/trailing separators or
+// empty labels. #304 C-1: cfg.Domain is interpolated into landing-page HTML
+// (script tags), URLs and hostname routing - anything outside the charset is
+// operator error and is rejected at startup.
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	if strings.Contains(h, "..") ||
+		strings.HasPrefix(h, "-") || strings.HasSuffix(h, "-") ||
+		strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
+		return false
+	}
+	return true
+}
+
+// validWSPath enforces the tunnel endpoint path charset: it must start with
+// '/' and stick to unreserved URL path characters - no whitespace, control
+// characters or HTML delimiters (#304 C-1).
+func validWSPath(p string) bool {
+	if !strings.HasPrefix(p, "/") || len(p) > 512 {
+		return false
+	}
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '/', r == '.', r == '_', r == '~', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // normalize fills defaults and validates.
 func (c *Config) normalize() error {
 	if c.Domain == "" {
 		return errors.New("etunnel: Domain is required")
 	}
+	// #304 C-1: Domain is interpolated into landing-page HTML (script tags),
+	// URLs and hostname routing - enforce a conservative hostname charset so
+	// operator mistakes like "t.example.com</script>" fail at startup.
+	if !validHostname(c.Domain) {
+		return fmt.Errorf("etunnel: Domain %q is not a valid hostname", c.Domain)
+	}
 	if c.WSPath == "" {
 		c.WSPath = "/tunnel"
+	}
+	if !validWSPath(c.WSPath) {
+		return fmt.Errorf("etunnel: WSPath %q is not a valid URL path", c.WSPath)
 	}
 	if c.Addr == "" {
 		c.Addr = ":443"

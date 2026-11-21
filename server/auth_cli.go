@@ -355,6 +355,9 @@ func (s *Server) csrfValid(r *http.Request, formToken string) bool {
 
 // sameOrigin: when the browser supplies Origin or Referer it must be ours.
 // Absent headers (very old clients) fall through to the token check.
+// #304 B-1: hosts are compared without ports, so a portal deployment on a
+// non-default port still matches, while an attacker's host (with or without
+// a port) does not.
 func (s *Server) sameOrigin(r *http.Request) bool {
 	for _, h := range []string{"Origin", "Referer"} {
 		v := r.Header.Get(h)
@@ -365,7 +368,7 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 		if err != nil {
 			return false
 		}
-		if !strings.EqualFold(u.Host, s.cfg.Domain) {
+		if !strings.EqualFold(u.Hostname(), s.cfg.Domain) {
 			return false
 		}
 	}

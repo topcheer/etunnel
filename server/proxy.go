@@ -298,6 +298,7 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 	// stream, its goroutine and the local connection indefinitely - exactly
 	// the per-write deadline config.go documents for StreamIdleTimeout.
 	deadlineSupported := true
+	var writeDeadline time.Time
 	buf := make([]byte, protocol.MaxPayload)
 	for {
 		n, rerr := st.bodyPr.Read(buf)
@@ -318,14 +319,18 @@ func (s *Server) streamTunnelBody(w http.ResponseWriter, r *http.Request, sess *
 			if deadlineSupported {
 				if derr := rc.SetWriteDeadline(time.Now().Add(s.cfg.StreamIdleTimeout)); derr != nil {
 					deadlineSupported = false
+				} else {
+					writeDeadline = time.Now().Add(s.cfg.StreamIdleTimeout)
 				}
 			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				st.abort()
-				if errors.Is(werr, os.ErrDeadlineExceeded) {
-					// #294 F2: the visitor stalled past StreamIdleTimeout -
-					// abort with the usual mid-body semantics (truncated,
-					// never silently valid).
+				// #304 D-1: h2 surfaces deadline expiry as bare stream errors that
+				// do not wrap os.ErrDeadlineExceeded - any write that fails after
+				// its deadline has passed aborts loudly (truncated, never silently
+				// valid), regardless of the error chain.
+				if errors.Is(werr, os.ErrDeadlineExceeded) ||
+					(!writeDeadline.IsZero() && time.Now().After(writeDeadline)) {
 					panic(http.ErrAbortHandler)
 				}
 				return
@@ -879,9 +884,12 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 function copyAgent(btn){
   var done = function(){ btn.textContent='` + t("btn.copied") + `'; setTimeout(function(){ btn.textContent='` + t("land.agent.copy") + `'; }, 1800); };
+  // #304 C-2: never claim success when the clipboard refused (http
+  // self-hosting has no clipboard API) - say so instead.
+  var failed = function(){ btn.textContent='copy failed'; setTimeout(function(){ btn.textContent='` + t("land.agent.copy") + `'; }, 1800); };
   if (navigator.clipboard && navigator.clipboard.writeText && agentPrompt) {
-    navigator.clipboard.writeText(agentPrompt).then(done, done);
-  } else { done(); }
+    navigator.clipboard.writeText(agentPrompt).then(done, failed);
+  } else { failed(); }
 }
 </script>
 <script type="text/plain" id="agentprompt">` + agentPromptText(cfg) + `</script>

@@ -65,8 +65,10 @@ Commands as actually used by Makefile and CI
   `/login` + `/me` actions), `account.go` (JSON account
   store), `admin.go` (stats/admin API), `telegram.go`, `tls.go` (ondemand /
   dns / static TLS modes), `acme_dns.go` (DNS-01 via lego), `config.go`,
-  `resume.go` (self-signed `resumeToken`: HMAC over `sub|exp`, 30 min TTL,
-  used by reconnecting clients).
+  `resume.go` (self-signed `resumeToken`: HMAC over
+  `sub|exp|owner|sexp|custom`, 30 min TTL, identity-bound to the account
+  (or client IP for anonymous tunnels) with the session's hard expiry
+  inside the signature; used by reconnecting clients).
 - `cmd/etunnel/` — client CLI (`etunnel -server ... 3000`).
 - `cmd/etunneld/` — server daemon entrypoint.
 - `sdks/` — 19 additional single-file, dependency-light language SDKs

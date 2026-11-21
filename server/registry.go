@@ -8,6 +8,10 @@ import (
 // ErrSubdomainTaken is returned when a live tunnel already holds a subdomain.
 var ErrSubdomainTaken = errors.New("etunnel: subdomain already in use")
 
+// ErrCustomQuotaExhausted is returned by AcquireCustom when the account
+// already holds the plan's full share of live custom subdomains (#304 A-3).
+var ErrCustomQuotaExhausted = errors.New("etunnel: custom subdomain quota exhausted")
+
 // Registry tracks live tunnels by subdomain.
 type Registry struct {
 	mu   sync.RWMutex
@@ -22,6 +26,39 @@ func newRegistry() *Registry {
 func (r *Registry) Acquire(sub string, s *Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if cur, ok := r.subs[sub]; ok && cur != s {
+		select {
+		case <-cur.closed:
+			// dead session, replace it below
+		default:
+			return ErrSubdomainTaken
+		}
+	}
+	r.subs[sub] = s
+	return nil
+}
+
+// AcquireCustom atomically recounts the account's live custom tunnels and
+// acquires sub in one critical section (#304 A-3: a count under RLock and an
+// acquire under Lock are two critical sections - concurrent handshakes for
+// the same account can each pass the check and exceed the plan quota).
+func (r *Registry) AcquireCustom(sub string, s *Session, acct *Account, maxCustom int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	used := 0
+	for _, cur := range r.subs {
+		if cur == s || cur.account == nil || cur.account.APIKey != acct.APIKey || !cur.custom {
+			continue
+		}
+		select {
+		case <-cur.closed:
+		default:
+			used++
+		}
+	}
+	if used >= maxCustom {
+		return ErrCustomQuotaExhausted
+	}
 	if cur, ok := r.subs[sub]; ok && cur != s {
 		select {
 		case <-cur.closed:

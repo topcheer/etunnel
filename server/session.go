@@ -341,17 +341,24 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		case tok.custom && !containsStr(acct.Domains, sub):
 			// #292: ownership gate, same as the request path.
 			s.logf("session %s: resume of %s rejected: name not in the account domain list (#292)", sess.id, sub)
-		case tok.custom && s.reg.countCustomForAccount(acct) >= tier.CustomDomains:
-			// #292: quota gate, same as the request path. The sub is not yet
-			// acquired, so the count reflects the other live custom tunnels -
-			// concurrent double-resume cannot exceed the plan quota.
-			s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292)", sess.id, sub, tier.Name, tier.CustomDomains)
 		case tok.custom && protocol.ValidateSubdomain(sub) != nil:
 			s.logf("session %s: resume of %s rejected: invalid subdomain (#292)", sess.id, sub)
 		default:
 			// A random subdomain has no ownership record; the identity binding
 			// inside the token is the proof of entitlement.
-			if aerr := s.reg.Acquire(sub, sess); aerr == nil {
+			var aerr error
+			if tok.custom {
+				// #304 A-3: count and acquire share the registry lock, so
+				// concurrent resumes cannot each pass the quota check.
+				aerr = s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains)
+				if errors.Is(aerr, ErrCustomQuotaExhausted) {
+					s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292/#304)", sess.id, sub, tier.Name, tier.CustomDomains)
+					break
+				}
+			} else {
+				aerr = s.reg.Acquire(sub, sess)
+			}
+			if aerr == nil {
 				sess.sub = sub
 				sess.custom = tok.custom
 				resumed = sub
@@ -370,6 +377,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 				"a static subdomain needs a (free) API key - register at /me to claim one")
 			return
 		}
+		// Quota fast-path: reject the common over-quota case with the same
+		// code as before #304 (limit_reached takes precedence over
+		// ownership/shape errors). The authoritative check is atomic inside
+		// AcquireCustom below (#304 A-3) - this pre-check only preserves the
+		// response precedence, it cannot admit a tunnel past the quota.
 		if used := s.reg.countCustomForAccount(acct); used >= tier.CustomDomains {
 			cancel()
 			releaseIPSlot()
@@ -393,11 +405,18 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainBad, err.Error())
 			return
 		}
-		if err := s.reg.Acquire(sub, sess); err != nil {
+		if aerr := s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains); aerr != nil {
 			cancel()
 			releaseIPSlot()
-			s.wsErrorClose(ws, protocol.ErrCodeSubdomainTaken,
-				fmt.Sprintf("subdomain %q is already in use", sub))
+			// #304 A-3: the quota check lives inside AcquireCustom now, so a
+			// full plan answers LimitReached atomically with the acquire.
+			if errors.Is(aerr, ErrCustomQuotaExhausted) {
+				s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
+					fmt.Sprintf("plan %s allows %d custom subdomain(s), all in use", tier.Name, tier.CustomDomains))
+			} else {
+				s.wsErrorClose(ws, protocol.ErrCodeSubdomainTaken,
+					fmt.Sprintf("subdomain %q is already in use", sub))
+			}
 			return
 		}
 		sess.sub = sub
@@ -465,7 +484,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		sess.Close("welcome failed")
 		return
 	}
-	if tier.TTL > 0 {
+	if !sess.expires.IsZero() {
+		// #304 A-4: the timer follows the expiry actually granted, not the
+		// tier's current TTL - a session resumed from a token issued by a
+		// TTL>0 tier while the account now sits on a TTL=0 tier still carries
+		// a hard expiry and must be reaped when it passes.
 		// Assign under mu: an already-expired TTL can run the callback
 		// immediately, and Close reads the field to stop it.
 		sess.mu.Lock()
