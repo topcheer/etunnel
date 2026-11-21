@@ -343,6 +343,46 @@ func (s *Server) notifyPaymentFailure(email, tier, reason string) {
 	s.tgSend(fmt.Sprintf("⚠️ payment FAILED for %s (%s)%s", email, tier, prefixIfSet(reason)))
 }
 
+// tunnelOpenCooldown suppresses repeat tunnel-open notifications for the
+// same subdomain: resume reconnects walk the same handshake path as fresh
+// tunnels, and a flapping supervisor would otherwise spam the admin chat.
+// Tunable is a var so tests can shrink the window.
+var tunnelOpenCooldown = 5 * time.Minute
+
+// tunnelOpenSeen maps subdomain -> time of the last tunnel-open push. Plain
+// sync.Map: no new dependencies, entries are tiny, and stale keys for dead
+// subdomains are harmless.
+var tunnelOpenSeen sync.Map
+
+// notifyTunnelOpen pushes a tunnel-open event to the admin chat (no-op when
+// the bot is disabled). The same subdomain inside tunnelOpenCooldown is
+// suppressed — resume reconnects walk this same path — while different
+// subdomains are independent (#notify tunnel-open).
+func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
+	if !s.tg.enabled() {
+		return
+	}
+	now := time.Now()
+	if last, ok := tunnelOpenSeen.Load(sess.sub); ok {
+		if t0, ok := last.(time.Time); ok && now.Sub(t0) < tunnelOpenCooldown {
+			return
+		}
+	}
+	tunnelOpenSeen.Store(sess.sub, now)
+	owner := sess.accountEmail()
+	if owner == "" {
+		owner = "anonymous"
+	}
+	text := fmt.Sprintf("🚇 tunnel open: %s (%s) — plan %s · owner %s · ip %s",
+		sess.sub, sess.url, plan, owner, sess.ip)
+	// #review: send asynchronously - tgSend's HTTP client has a 40s
+	// timeout, and this runs on the handshake path before readLoop starts,
+	// so a slow or hung Telegram API must not delay a new tunnel from
+	// serving. The synchronous cooldown decision above already prevents
+	// concurrent double-sends.
+	go s.tgSend(text)
+}
+
 func prefixIfSet(reason string) string {
 	if reason == "" {
 		return ""

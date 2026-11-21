@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeTelegram records sendMessage calls and serves getUpdates from a queue.
@@ -215,5 +216,98 @@ func TestTelegramHistoryGuards(t *testing.T) {
 	}
 	if strings.Contains(s.handleAdminCommand("/help"), "/history") != true {
 		t.Fatal("help must list /history")
+	}
+}
+
+// #notify tunnel-open: a fresh subdomain pushes exactly one 🚇 message; a
+// reconnect inside the cooldown window does not repeat; a different
+// subdomain is independent; a lapsed cooldown notifies again.
+func TestNotifyTunnelOpen(t *testing.T) {
+	fake, api := newFakeTelegram(t)
+	s := newTGTestServer(t, api, 42)
+	old := tunnelOpenCooldown
+	tunnelOpenCooldown = 60 * time.Millisecond
+	t.Cleanup(func() { tunnelOpenCooldown = old })
+	tunnelOpenSeen.Range(func(k, _ any) bool {
+		tunnelOpenSeen.Delete(k)
+		return true
+	})
+
+	sess := func(sub string) *Session {
+		return &Session{
+			id:      "sess-" + sub,
+			sub:     sub,
+			url:     "https://" + sub + ".t.test",
+			ip:      "203.0.113.9:4444",
+			account: &Account{Email: "dev@x.com"},
+		}
+	}
+	countSent := func() int {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return len(fake.sent)
+	}
+	// The send is asynchronous (#review): poll until n messages arrived.
+	waitFor := func(n int) bool {
+		for i := 0; i < 100; i++ {
+			if countSent() >= n {
+				return true
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		return false
+	}
+
+	// a) fresh subdomain -> exactly one 🚇 push with the required fields.
+	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
+	if !waitFor(1) {
+		t.Fatalf("fresh subdomain sent %d messages, want 1", countSent())
+	}
+	fake.mu.Lock()
+	text := fake.sent[0]
+	fake.mu.Unlock()
+	for _, want := range []string{"🚇", "fresh-otter-x1", "https://fresh-otter-x1.t.test", "Pro", "dev@x.com", "203.0.113.9"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("message %q missing %q", text, want)
+		}
+	}
+
+	// b) resume-style reconnect inside the cooldown -> no repeat.
+	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
+	time.Sleep(150 * time.Millisecond) // give a (wrongly) sync send time to land
+	if n := countSent(); n != 1 {
+		t.Fatalf("cooldown reconnect sent %d messages, want 1", n)
+	}
+
+	// c) a different subdomain is independent.
+	s.notifyTunnelOpen(sess("blue-frog-x2"), "Starter")
+	if !waitFor(2) {
+		t.Fatalf("second subdomain sent %d messages, want 2", countSent())
+	}
+
+	// cooldown expiry notifies the same subdomain again.
+	time.Sleep(70 * time.Millisecond)
+	s.notifyTunnelOpen(sess("fresh-otter-x1"), "Pro")
+	if !waitFor(3) {
+		t.Fatalf("post-cooldown open sent %d messages, want 3", countSent())
+	}
+}
+
+// A disabled bot must not send (and must not panic).
+func TestNotifyTunnelOpenDisabled(t *testing.T) {
+	fake, api := newFakeTelegram(t)
+	s := newTGTestServer(t, api, 42)
+	s.tg.token = "" // bot disabled
+	tunnelOpenSeen.Range(func(k, _ any) bool {
+		tunnelOpenSeen.Delete(k)
+		return true
+	})
+
+	s.notifyTunnelOpen(&Session{sub: "quiet-fox-x3", url: "https://quiet-fox-x3.t.test"}, "Free")
+	fake.mu.Lock()
+	n := len(fake.sent)
+	fake.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("disabled bot sent %d messages (#notify tunnel-open)", n)
 	}
 }

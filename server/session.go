@@ -501,6 +501,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		s.logf("session %s: ledger open failed: %v", sess.id, err)
 	}
 
+	// Telegram: push the tunnel-open event to the admin chat. Resume
+	// reconnects walk this same path - the per-subdomain cooldown inside
+	// notifyTunnelOpen keeps a flapping tunnel from spamming.
+	s.notifyTunnelOpen(sess, tier.Name)
+
 	// Serve until the connection dies.
 	sess.readLoop()
 }
