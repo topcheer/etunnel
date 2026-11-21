@@ -12,6 +12,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
@@ -464,6 +465,16 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	// #293: tunnel subdomains are same-site with the portal (the session
+	// cookie's SameSite=Lax does not help), so the browser-supplied
+	// Origin/Referer must name the portal base domain itself; a request
+	// carrying neither header is not a browser submission and is rejected.
+	if !s.requireSameOrigin(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"cross-origin request blocked"}`))
+		return
+	}
 	session := s.sessionEmail(r)
 	if session == "" {
 		http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
@@ -473,7 +484,10 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		Email, Domain string
 		Remove        bool
 	}
-	_ = jsonDecodeBody(r, &req)
+	if err := jsonDecodeBody(r, &req); err != nil {
+		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		return
+	}
 	// Authorization: only the session owner may act on their account.
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email != session {
@@ -670,8 +684,19 @@ func (s *Server) handleDomainCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func jsonDecodeBody(r *http.Request, v any) error {
+	// #293: state-changing endpoints accept application/json only. Enforcing
+	// the media type kills the text/plain CORS simple-request surface (no
+	// preflight, cookie-bearing) that a same-site tunnel page could drive.
+	ct := r.Header.Get("Content-Type")
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil || mt != "application/json" {
+		return errNotJSONBody
+	}
 	return json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(v)
 }
+
+// errNotJSONBody reports a missing or non-JSON Content-Type (#293).
+var errNotJSONBody = fmt.Errorf("etunnel: Content-Type must be application/json")
 
 func validSubdomain(s string) bool {
 	if len(s) == 0 || len(s) > 63 {
