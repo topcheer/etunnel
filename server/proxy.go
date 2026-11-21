@@ -712,6 +712,17 @@ pre.code .cm{color:#8b917f;font-style:italic}
 /* footer */
 footer{border-top:1px solid var(--line);padding:2rem;text-align:center;color:var(--dim);font-size:.8rem;background:var(--panel2)}
 footer .sep{margin:0 .6rem}
+/* AI agent integration block */
+.agentbox{background:var(--panel);border:1px solid var(--line);border-radius:16px;max-width:52rem;margin:2.6rem auto 0;overflow:hidden;box-shadow:0 20px 44px -24px rgba(36,43,33,.28)}
+.agenthead{display:flex;align-items:center;gap:.9rem;padding:1rem 1.2rem;border-bottom:1px solid var(--line);background:var(--panel2)}
+.agenttag{flex:none;font-family:'Fraunces',Georgia,serif;font-weight:800;font-size:.95rem;color:#f8f3e7;background:var(--green);border-radius:10px;padding:.35rem .6rem}
+.agenthead h3{font-family:'Fraunces',Georgia,serif;font-size:1.02rem;margin-bottom:.1rem}
+.agenthead p{color:var(--dim);font-size:.78rem}
+.agentcopy{margin-left:auto;padding:.5rem 1rem;font-size:.8rem}
+.agentpeek{margin:0;border-radius:0;background:var(--code);color:#e9e2cd;padding:1rem 1.2rem;font-size:.72rem;line-height:1.6;max-height:11.5rem;overflow:hidden;position:relative;white-space:pre-wrap;word-break:break-word}
+.agentpeek::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3.2rem;background:linear-gradient(transparent,var(--code))}
+.agentfoot{padding:.6rem 1.2rem .8rem;color:var(--dim);font-size:.72rem;border-top:1px solid rgba(246,239,221,.06)}
+@media(max-width:700px){.agenthead{flex-wrap:wrap}.agentcopy{margin-left:0}}
 </style></head><body>
 <nav>
   <div class="logo">
@@ -785,6 +796,19 @@ flowchart LR
   <div class="tabs" id="langtabs">` + qsTabs + `</div>
   ` + qsPanels + `
   <p class="sub" style="text-align:center;margin:1.4rem 0 0">` + t("land.qs.note") + `</p>
+
+  <div class="agentbox" id="agentbox">
+    <div class="agenthead">
+      <span class="agenttag">AI</span>
+      <div>
+        <h3>` + t("land.agent.h") + `</h3>
+        <p>` + t("land.agent.sub") + `</p>
+      </div>
+      <button class="btn primary agentcopy" id="agentcopy" onclick="copyAgent(this)">` + t("land.agent.copy") + `</button>
+    </div>
+    <pre class="agentpeek" id="agentpeek"></pre>
+    <p class="agentfoot">` + t("land.agent.foot") + `</p>
+  </div>
 </section>
 
 <section id="pricing">
@@ -816,7 +840,22 @@ function copySnippet(btn){
     navigator.clipboard.writeText(pre.textContent).then(done, done);
   } else { done(); }
 }
+// AI agent block: the page shows only a faded peek; the button copies the
+// FULL prompt hidden in the #agentprompt script tag (full fidelity in the
+// clipboard). The tag sits after this script, so populate on DOM ready.
+var agentPrompt = '';
+document.addEventListener('DOMContentLoaded', function(){
+  agentPrompt = document.getElementById('agentprompt').textContent.trim();
+  document.getElementById('agentpeek').textContent = agentPrompt;
+});
+function copyAgent(btn){
+  var done = function(){ btn.textContent='` + t("btn.copied") + `'; setTimeout(function(){ btn.textContent='` + t("land.agent.copy") + `'; }, 1800); };
+  if (navigator.clipboard && navigator.clipboard.writeText && agentPrompt) {
+    navigator.clipboard.writeText(agentPrompt).then(done, done);
+  } else { done(); }
+}
 </script>
+<script type="text/plain" id="agentprompt">` + agentPromptText(cfg) + `</script>
 <script>
 // Pick the diagram orientation before mermaid boots: a top-down flow fits a
 // phone without panning, the left-to-right one reads better on desktop.
@@ -833,6 +872,43 @@ mermaid.initialize({startOnLoad:true,theme:'base',themeVariables:{fontFamily:"'N
 </script>
 </footer>
 </body></html>`
+}
+
+// agentPromptText renders the full copy-to-clipboard integration prompt for
+// AI agents. The landing page shows only a faded peek; the copy button puts
+// this complete text on the clipboard.
+func agentPromptText(cfg Config) string {
+	server := "wss://" + cfg.Domain + cfg.WSPath
+	return `You have access to etunnel, a public tunnel service: it exposes a local HTTP service to the public internet over an outbound WebSocket - no inbound ports, no router config.
+
+## Use it when
+- You need to show the user a running web app/demo/webhook receiver right now.
+- An external service must reach the machine (OAuth callbacks, payment webhooks, CI callbacks).
+- A mobile app or remote client needs to hit a local API.
+
+## How to expose port 3000 (no account needed)
+Run the CLI once and parse stdout:
+  npx @easytunnel/et-sdk 3000
+or use the TypeScript SDK from any Node process:
+  const { connect } = require('@easytunnel/et-sdk');
+  const tunnel = await connect('` + server + `', 3000);
+  console.log(tunnel.url); // e.g. https://quiet-frog-42.` + cfg.Domain + `
+Other languages: Go, Python, Rust, Java, Swift, Dart, PHP, Elixir and more - same two-argument connect(), see github.com/topcheer/etunnel (sdks/).
+
+## Rules
+1. The URL is live only while the exposing process runs. Keep it alive while needed; stop it after.
+2. Free tunnels: random subdomain, 4-hour lifetime, 1 Mbps, HTTPS + WebSocket pass-through. Do not promise a stable URL.
+3. Never tunnel secrets, credentials, admin panels or anything private on a public URL without the user's explicit request.
+4. If the user wants a permanent/custom subdomain, they need an API key (t.etun.uk -> sign in -> /me); pass it as the token argument. Do not fabricate keys.
+5. The local service sees normal HTTP requests; the visitor's real IP arrives in X-Real-IP / X-Forwarded-For set by the tunnel server.
+
+## Failure modes
+- No URL printed / handshake error: check the port is actually listening, then retry once.
+- 404 on the tunnel URL: the exposing process died - restart it.
+- Slow responses: free tier is 1 Mbps; large assets will crawl.
+
+Current server: ` + server + `
+Docs & SDKs: github.com/topcheer/etunnel`
 }
 
 func notFoundHTML(cfg Config, r *http.Request) string {
