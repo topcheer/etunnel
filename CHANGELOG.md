@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.7.28 — 2026-11-22
+
+- **security**: resume path quota gate moves into the registry lock - the #312 check-then-consume TOCTOU is closed (#315) (PR #315)
+- **security**: #295 debt batch - session revocation, refund rollback, admin cooldown, forged-header guard, reserved "me", loud activation errors (#295) (PR #313)
+- fixes: second-review batch - quota atomicity, TTL timer gate, sameOrigin ports, Domain validation, copy-fail copy, loud truncation (#304) (PR #305)
+- fixes: server backlog - #264 upgrade close asymmetry, #265 loud persistence errors, #268 post-hijack fallback, #269 docs sync, #240 money-path tests (#308)
+- fixes: SDK backlog batch closing #243 / #263 / #266 / #267 across Go/Rust/Python/C#/JS-family/Elixir (#309)
+- fixes: Go SDK declares the 502 page as text/html (was text/plain) (#311)
+- features: telegram tunnel-open notification with per-subdomain cooldown, sent asynchronously (#316) (PR #316)
+- tests: #240 money-path coverage - NOWPayments IPN, activate validation, short-domain lifecycle, PayPal credentials (#314)
+- docs: ops deploy record for main@844a508 (#312 TOCTOU fix + telegram notify) live on t.etun.uk (#317)
+
 ## v1.7.27 — 2026-11-21
 
 - **security**: resume tokens are now bound to the issuing identity, re-gated through auth on resume, and capped by TTL - a leaked or cross-account token can no longer resume someone else's tunnel (#292) (PR #296)
