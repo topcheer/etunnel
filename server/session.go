@@ -323,22 +323,43 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		sess.limiter = rate.NewLimiter(rate.Limit(tier.Bandwidth/8), protocol.MaxPayload)
 	}
 
-	// Resolve subdomain. A valid resume token reclaims the previous subdomain
-	// before any plan gating: it was already granted to this client, and the
-	// token is self-validating (HMAC + expiry), so it works across restarts.
+	// Resolve subdomain. A valid resume token reclaims the previous subdomain.
+	// #292: the token is bound to the presenting identity (account, or client
+	// IP for anonymous tunnels) and resume no longer short-circuits plan
+	// gating - custom names re-pass the same ownership/quota checks the
+	// request path applies. Any rejection falls through to normal resolution.
 	resumed := ""
+	var resumedExpiry time.Time
 	if hello.Resume != "" {
-		if sub, err := verifyResumeToken(hello.Resume, time.Now()); err == nil {
-			if err := s.reg.Acquire(sub, sess); err == nil {
+		tok, err := verifyResumeToken(hello.Resume, resumeOwner(acct, ip), time.Now())
+		sub := tok.sub // zero value when the token is invalid
+		switch {
+		case err != nil:
+			s.logf("session %s: resume token rejected: %v", sess.id, err)
+		case tok.custom && (acct == nil || tier.CustomDomains <= 0):
+			s.logf("session %s: resume of %s rejected: plan grants no custom subdomains (#292)", sess.id, sub)
+		case tok.custom && !containsStr(acct.Domains, sub):
+			// #292: ownership gate, same as the request path.
+			s.logf("session %s: resume of %s rejected: name not in the account domain list (#292)", sess.id, sub)
+		case tok.custom && s.reg.countCustomForAccount(acct) >= tier.CustomDomains:
+			// #292: quota gate, same as the request path. The sub is not yet
+			// acquired, so the count reflects the other live custom tunnels -
+			// concurrent double-resume cannot exceed the plan quota.
+			s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292)", sess.id, sub, tier.Name, tier.CustomDomains)
+		case tok.custom && protocol.ValidateSubdomain(sub) != nil:
+			s.logf("session %s: resume of %s rejected: invalid subdomain (#292)", sess.id, sub)
+		default:
+			// A random subdomain has no ownership record; the identity binding
+			// inside the token is the proof of entitlement.
+			if aerr := s.reg.Acquire(sub, sess); aerr == nil {
 				sess.sub = sub
-				sess.custom = true
+				sess.custom = tok.custom
 				resumed = sub
+				resumedExpiry = tok.sessExpiry
 				s.logf("session %s: resumed subdomain %s", sess.id, sub)
 			} else {
 				s.logf("session %s: resume token valid but %s is taken, falling through", sess.id, sub)
 			}
-		} else {
-			s.logf("session %s: resume token rejected: %v", sess.id, err)
 		}
 	}
 	if resumed == "" && hello.Subdomain != "" {
@@ -416,7 +437,13 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 
 	sess.hostname = sess.sub + "." + s.cfg.Domain
 	sess.url = s.cfg.PublicScheme + "://" + sess.hostname
-	if tier.TTL > 0 {
+	// #292: a resumed session keeps the hard expiry its original session was
+	// granted (carried signed inside the token) - resume never extends TTL,
+	// so a cron of rolling resume handshakes cannot keep a tunnel alive
+	// past the lifetime it was originally granted.
+	if !resumedExpiry.IsZero() {
+		sess.expires = resumedExpiry
+	} else if tier.TTL > 0 {
 		sess.expires = now.Add(tier.TTL)
 	}
 	s.metrics.tunnelsTotal.Add(1)
@@ -433,7 +460,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		Plan:      tier.Name,
 		// Signed so the client can reclaim this exact subdomain after a
 		// disconnect, including across a server restart.
-		ResumeToken: issueResumeToken(sess.sub, time.Now()),
+		ResumeToken: issueResumeToken(sess.sub, resumeOwner(acct, ip), sess.expires, sess.custom, time.Now()),
 	}); err != nil {
 		sess.Close("welcome failed")
 		return
