@@ -144,6 +144,9 @@ export async function connect(server: string, local: string | number, opts: Opti
 
   const { host, port } = pickHostPort(local);
   const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
+  // #243 L3: a transport drop (no bye, no ping timeout) must still reach
+  // the embedder - closeTunnel is a no-op when already closed.
+  ws.onclose = () => { if (!closed) closeTunnel('connection lost'); };
   ws.binaryType = 'arraybuffer';
 
   await new Promise<void>((res, rej) => {

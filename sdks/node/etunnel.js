@@ -98,7 +98,12 @@ async function connect(server, local, opts = {}) {
       rej(Object.assign(new Error(parts.join(' ')), { code: 'sdk_connect' }));
     };
     ws.onerror = diag;
-    ws.onclose = (ev) => { if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } }); };
+    ws.onclose = (ev) => {
+      if (ws.readyState !== 1) diag({ error: { message: `connection closed (code ${ev?.code ?? '?'})` } });
+      // #243 L3: a transport drop (no bye, no ping timeout) must still reach
+      // the embedder - closeTunnel is a no-op when already closed.
+      closeTunnel('connection lost');
+    };
   });
 
   ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.6.12', resume: opts.resume || undefined, policy: opts.policy || undefined }));
