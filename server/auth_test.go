@@ -50,6 +50,10 @@ func authedReq(t *testing.T, s *Server, email, path, body string) *httptest.Resp
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	r.AddCookie(s.sessionCookie(email))
+	// #293: the portal only accepts same-origin state changes - simulate the
+	// browser's fetch, which always attaches these two headers.
+	r.Header.Set("Origin", "https://"+s.cfg.Domain)
+	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.handleMeAction(w, r, strings.TrimPrefix(path, "/me/"))
 	return w

@@ -80,6 +80,8 @@ func TestDomainAddRejectsCrossAccountDuplicate(t *testing.T) {
 	body := `{"email":"a@x.com","domain":"dup","remove":false}`
 	r := httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(body))
 	r.AddCookie(s.sessionCookie("a@x.com"))
+	r.Header.Set("Origin", "https://"+s.cfg.Domain)
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleMeAction(rec, r, "domain")
 	if rec.Code != http.StatusOK {
@@ -88,6 +90,8 @@ func TestDomainAddRejectsCrossAccountDuplicate(t *testing.T) {
 	// second account, same name: 409 now (was silently allowed)
 	r = httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(`{"email":"b@x.com","domain":"dup","remove":false}`))
 	r.AddCookie(s.sessionCookie("b@x.com"))
+	r.Header.Set("Origin", "https://"+s.cfg.Domain)
+	r.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	s.handleMeAction(rec, r, "domain")
 	if rec.Code != http.StatusConflict {
@@ -96,6 +100,8 @@ func TestDomainAddRejectsCrossAccountDuplicate(t *testing.T) {
 	// single character is premium like all 1-3 char names: 402 without the entitlement
 	r = httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(`{"email":"b@x.com","domain":"z","remove":false}`))
 	r.AddCookie(s.sessionCookie("b@x.com"))
+	r.Header.Set("Origin", "https://"+s.cfg.Domain)
+	r.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	s.handleMeAction(rec, r, "domain")
 	if rec.Code != http.StatusPaymentRequired || !strings.Contains(rec.Body.String(), "short-domain-1") {

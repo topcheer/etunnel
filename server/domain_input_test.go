@@ -43,6 +43,7 @@ func TestDomainAddAcceptsShortAndExplainsRejects(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(body))
 		r.AddCookie(s.sessionCookie("u@x.com"))
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "https://"+s.cfg.Domain)
 		rec := httptest.NewRecorder()
 		s.handleMeAction(rec, r, "domain")
 		return rec

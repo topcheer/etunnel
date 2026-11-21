@@ -371,3 +371,16 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	}
 	return true
 }
+
+// requireSameOrigin is the stricter variant for state-changing endpoints that
+// have no CSRF token (#293): the browser always attaches Origin (fetch/XHR)
+// or at least Referer to a POST it issued, so a request carrying neither is
+// not a browser same-origin submission and must be rejected. Tunnel subdomains
+// are same-site with the portal (SameSite=Lax does not help there), and an
+// Origin naming a tunnel subdomain fails the host check above.
+func (s *Server) requireSameOrigin(r *http.Request) bool {
+	if r.Header.Get("Origin") == "" && r.Header.Get("Referer") == "" {
+		return false
+	}
+	return s.sameOrigin(r)
+}

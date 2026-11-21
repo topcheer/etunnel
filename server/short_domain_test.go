@@ -47,6 +47,8 @@ func TestShortDomainGateAndEntitlement(t *testing.T) {
 		body := `{"email":"u@x.com","domain":"` + dom + `","remove":false}`
 		r := httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(body))
 		r.AddCookie(s.sessionCookie("u@x.com"))
+		r.Header.Set("Origin", "https://"+s.cfg.Domain)
+		r.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		s.handleMeAction(rec, r, "domain")
 		return rec
@@ -94,6 +96,8 @@ func TestShortDomainFreeAccountEntitlement(t *testing.T) {
 	body := `{"email":"f@x.com","domain":"xyz","remove":false}`
 	r := httptest.NewRequest(http.MethodPost, "/me/domain", bytes.NewBufferString(body))
 	r.AddCookie(s.sessionCookie("f@x.com"))
+	r.Header.Set("Origin", "https://"+s.cfg.Domain)
+	r.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleMeAction(rec, r, "domain")
 	if rec.Code != http.StatusOK {

@@ -341,9 +341,21 @@ func (s *Server) handlePasskeyList(w http.ResponseWriter, r *http.Request) {
 // handlePasskeyRemove deletes one passkey by base64url credential ID.
 // POST /auth/passkey/remove?id=<b64url>
 func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
 	email := s.sessionEmail(r)
 	if email == "" {
 		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+	// #293: removal is a state change issued from the portal; tunnel
+	// subdomains are same-site with it (SameSite=Lax does not help), so the
+	// browser-supplied Origin/Referer must name the base domain and a
+	// header-less request is rejected.
+	if !s.requireSameOrigin(r) {
+		http.Error(w, "cross-origin request blocked", http.StatusForbidden)
 		return
 	}
 	idStr := r.FormValue("id")
