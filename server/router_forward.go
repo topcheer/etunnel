@@ -32,21 +32,33 @@ func forwardUpgraded(target string, w http.ResponseWriter, req *http.Request, fw
 	defer visitor.Close()
 	_ = vbuf.Writer.Flush() // nothing should be pending, but never lose bytes
 
+	// #268: after Hijack the ResponseWriter is unusable - the caller's
+	// notFound/serveTunnelRequest fallback would write to a hijacked
+	// writer. Every post-hijack failure therefore answers 502 on the raw
+	// connection and reports handled, letting the defer close it.
+	hijackFailed := func(why string) {
+		body := "owner unreachable: " + why + "\n"
+		_, _ = fmt.Fprintf(visitor, "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	}
+
 	peer, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
-		return false
+		hijackFailed("dial failed: " + err.Error())
+		return true
 	}
 	defer peer.Close()
 
 	req.Header.Set(fwdHeader, self) // loop guard survives the raw hop
 	if err := req.Write(peer); err != nil {
-		return false
+		hijackFailed("owner handshake failed: " + err.Error())
+		return true
 	}
 
 	br := bufio.NewReader(peer)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return false
+		hijackFailed("owner answer unreadable: " + err.Error())
+		return true
 	}
 	defer resp.Body.Close()
 
