@@ -6,6 +6,8 @@
 // import { connect } from './etunnel';
 // const t = await connect('wss://t.etun.uk/tunnel', 3000);
 
+import zlib from 'node:zlib';
+
 const MAXP = 32768;
 
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
@@ -65,8 +67,32 @@ function frame(kind: number, id: number, payload: Buffer): Buffer {
 
 const HOP = new Set(['connection', 'proxy-connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
-function pickHostPort(local: string | number): { host: string; port: number } {
-  if (/^\d+$/.test(String(local))) return { host: '127.0.0.1', port: Number(local) };
+// #286 helpers: does `buf` still carry `coding`, or did undici hand us the
+// plain entity while the header still declares the coding?
+function bodyIsPlain(coding: string, buf: Buffer): boolean {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return !(buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b);
+    if (coding === 'deflate') return !(buf.length >= 1 && buf[0] === 0x78); // zlib wrapper
+    if (coding === 'br') { zlib.brotliDecompressSync(buf); return true; }   // decoded OK => plain
+    if (coding === 'zstd' && typeof (zlib as any).zstdDecompressSync === 'function') { (zlib as any).zstdDecompressSync(buf); return true; }
+  } catch { /* malformed as `coding` => it is still coded */ }
+  return false;
+}
+
+// Recompress a plain entity back into the coding the local service declared.
+// Returns null when we cannot honor the coding - the caller then drops the
+// Content-Encoding header instead of shipping a mismatch.
+function restoreCoded(coding: string, buf: Buffer): Buffer | null {
+  try {
+    if (coding === 'gzip' || coding === 'x-gzip') return Buffer.from(zlib.gzipSync(buf));
+    if (coding === 'deflate') return Buffer.from(zlib.deflateSync(buf));
+    if (coding === 'br') return Buffer.from(zlib.brotliCompressSync(buf));
+    if (coding === 'zstd' && typeof (zlib as any).zstdCompressSync === 'function') return Buffer.from((zlib as any).zstdCompressSync(buf));
+  } catch { /* fall through: caller drops the declaration */ }
+  return null;
+}
+
+function pickHostPort(local: string | number): { host: string; port: number } {  if (/^\d+$/.test(String(local))) return { host: '127.0.0.1', port: Number(local) };
   const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(String(local));
   // #243 L7: keep IPv6 brackets; wrap bare IPv6 literals.
   if (m) return { host: m[1], port: Number(m[2]) };
@@ -257,8 +283,24 @@ export async function connect(server: string, local: string | number, opts: Opti
     }
     const rh: Record<string, string[]> = {};
     resp.headers.forEach((v, k) => { if (!HOP.has(k.toLowerCase())) (rh[k] = rh[k] || []).push(v); });
+    // #286: undici decompresses gzip/deflate/br transparently yet still
+    // exposes Content-Encoding on resp.headers. Replaying the decompressed
+    // bytes under the declared coding ships a header/entity mismatch (the
+    // mirror image of the framing leak: the visitor gunzips identity bytes
+    // and fails). Keep the wire honest (PROTOCOL.md §2 identity-body
+    // invariant): restore the declared coding when zlib can, otherwise drop
+    // the declaration so headers describe the entity that actually travels.
+    let buf = Buffer.from(await resp.arrayBuffer());
+    const ceKey = Object.keys(rh).find((k) => k.toLowerCase() === 'content-encoding');
+    if (ceKey && buf.length > 0) {
+      const coding = (rh[ceKey][rh[ceKey].length - 1] || '').split(',')[0].trim().toLowerCase();
+      if (bodyIsPlain(coding, buf)) {
+        const restored = restoreCoded(coding, buf);
+        if (restored) buf = restored;
+        else delete rh[ceKey];
+      }
+    }
     ws.send(JSON.stringify({ type: 'res', streamId: id, status: resp.status, headers: rh }));
-    const buf = Buffer.from(await resp.arrayBuffer());
     for (let i = 0; i < buf.length; i += MAXP) ws.send(frame(0x01, id, buf.subarray(i, Math.min(i + MAXP, buf.length))));
     ws.send(frame(0x02, id));
   }

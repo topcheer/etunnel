@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -432,6 +433,70 @@ class EtunnelSdkTest {
                 synchronized(ws.texts) { ws.texts.any { it.contains("\"status\":200") } }
             })
             assertEquals(listOf("X-Multi: a", "X-Multi: b"), seen.toList())
+        } finally {
+            ss.close()
+        }
+    }
+
+    // ---- #286: gzip+chunked replay stays identity on the tunnel wire ----
+
+    @Test
+    fun gzipChunkedReplayStaysIdentity() {
+        // Local backend answers like NanoHTTPD does for gzip-negotiating
+        // visitors: Content-Encoding: gzip, chunked transfer framing, no
+        // Content-Length. The bytes replayed onto the tunnel wire must be
+        // the pure gzip entity - no chunk-size lines in front of it, and no
+        // Transfer-Encoding / stale Content-Length headers crossing the
+        // wire (PROTOCOL.md §2 identity-body invariant, #286).
+        val original = "etunnel #286 identity-body payload - ".repeat(42).toByteArray()
+        val gzBuf = java.io.ByteArrayOutputStream()
+        java.util.zip.GZIPOutputStream(gzBuf).use { it.write(original) }
+        val gz = gzBuf.toByteArray()
+
+        val ss = tinyHttpServer { s ->
+            try {
+                val reader = s.getInputStream().bufferedReader()
+                while (reader.readLine()?.isNotEmpty() == true) { /* drain the request head */ }
+                val out = s.getOutputStream()
+                // Hand-rolled chunked framing: two chunks plus last-chunk,
+                // exactly what the local service put on its wire.
+                val a = gz.copyOfRange(0, gz.size / 2)
+                val b = gz.copyOfRange(gz.size / 2, gz.size)
+                out.write(("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: text/html; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n" +
+                    a.size.toString(16) + "\r\n").toByteArray())
+                out.write(a)
+                out.write("\r\n".toByteArray())
+                out.write((b.size.toString(16) + "\r\n").toByteArray())
+                out.write(b)
+                out.write("\r\n".toByteArray())
+                out.write("0\r\n\r\n".toByteArray())
+                out.flush()
+                s.close()
+            } catch (_: Exception) { /* test teardown races are fine */ }
+        }
+        try {
+            val h = Etunnel.Companion.Handler(ss.localPort.toString())
+            val ws = RecordingWebSocket()
+            h.ws = ws
+            h.open = true
+            h.handleText("""{"type":"req","streamId":9,"method":"GET","path":"/index.html","headers":{"Accept-Encoding":["gzip"]}}""")
+            h.handleBinary(ctlFrame(0x02, 9)) // FIN: schedules the replay
+            assertTrue(awaitUntil(5000) {
+                synchronized(ws.bin) { ws.bin.any { it.size == 9 && (it[0].toInt() and 0xFF) == 0x02 && frameSid(it) == 9 } }
+            })
+
+            val resJson: String = synchronized(ws.texts) { ws.texts.firstOrNull { it.contains("\"type\":\"res\"") } }
+                ?: throw AssertionError("no res sent")
+            assertTrue("Content-Encoding must survive the replay", resJson.contains("\"Content-Encoding\""))
+            assertFalse("Transfer-Encoding must never cross the wire (#286)", resJson.contains("Transfer-Encoding"))
+            assertFalse("Content-Length must never cross the wire (#286)", resJson.contains("Content-Length"))
+
+            val body = synchronized(ws.bin) {
+                ws.bin.filter { it.size > 9 && (it[0].toInt() and 0xFF) == 0x01 && frameSid(it) == 9 }
+                    .flatMap { f -> f.toList().drop(9) }
+                    .toByteArray()
+            }
+            assertArrayEquals("replayed body must be the pure gzip entity, framing stripped (#286)", gz, body)
         } finally {
             ss.close()
         }
