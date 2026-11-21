@@ -393,11 +393,18 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			s.wsErrorClose(ws, protocol.ErrCodeSubdomainBad, err.Error())
 			return
 		}
-		if err := s.reg.Acquire(sub, sess); err != nil {
+		// #304 A-3: quota is enforced atomically inside AcquireCustom; the
+		// pre-count above stays as the friendly fast path only.
+		if err := s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains); err != nil {
 			cancel()
 			releaseIPSlot()
-			s.wsErrorClose(ws, protocol.ErrCodeSubdomainTaken,
-				fmt.Sprintf("subdomain %q is already in use", sub))
+			if errors.Is(err, ErrAccountQuota) {
+				s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
+					fmt.Sprintf("plan %s allows %d custom subdomain(s), all in use", tier.Name, tier.CustomDomains))
+			} else {
+				s.wsErrorClose(ws, protocol.ErrCodeSubdomainTaken,
+					fmt.Sprintf("subdomain %q is already in use", sub))
+			}
 			return
 		}
 		sess.sub = sub
@@ -465,15 +472,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		sess.Close("welcome failed")
 		return
 	}
-	if tier.TTL > 0 {
-		// Assign under mu: an already-expired TTL can run the callback
-		// immediately, and Close reads the field to stop it.
-		sess.mu.Lock()
-		sess.ttlTimer = time.AfterFunc(time.Until(sess.expires), func() {
-			sess.Close(protocol.ErrCodeTTlExpired)
-		})
-		sess.mu.Unlock()
-	}
+	// #304 A-4: arm the timer whenever an expiry is set - a tier-upgrade
+	// resume can carry an expires value even when the new tier's TTL is 0;
+	// gating on tier.TTL left such sessions alive past their expiry with no
+	// timer.
+	s.armTTLTimer(sess)
 	go sess.pingLoop()
 	nowNano := time.Now().UnixNano()
 	sess.lastPong.Store(nowNano)
@@ -497,6 +500,23 @@ func expiresUnix(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
+}
+
+// armTTLTimer starts the session expiry timer when the session carries an
+// expiry (#304 A-4: the gate must be on the expires value itself, not on the
+// current tier's TTL - a tier-upgrade resume can hand a TTL-0 session an
+// expires value from the previous tier).
+func (s *Server) armTTLTimer(sess *Session) {
+	if sess.expires.IsZero() {
+		return
+	}
+	// Assign under mu: an already-expired TTL can run the callback
+	// immediately, and Close reads the field to stop it.
+	sess.mu.Lock()
+	sess.ttlTimer = time.AfterFunc(time.Until(sess.expires), func() {
+		sess.Close(protocol.ErrCodeTTlExpired)
+	})
+	sess.mu.Unlock()
 }
 
 func (s *Server) wsErrorClose(ws *websocket.Conn, code, msg string) {

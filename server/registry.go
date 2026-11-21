@@ -34,6 +34,46 @@ func (r *Registry) Acquire(sub string, s *Session) error {
 	return nil
 }
 
+// ErrAccountQuota is returned when the account's live custom-subdomain
+// count is already at its plan limit (#304 A-3).
+var ErrAccountQuota = errors.New("etunnel: account custom-subdomain quota exhausted")
+
+// AcquireCustom assigns a custom subdomain to s, enforcing the account's
+// live-custom-tunnel quota inside the SAME lock that performs the acquire
+// (#304 A-3: the previous count(RLock)-then-Acquire(Lock) split let two
+// concurrent resumes of different custom subdomains for one account both
+// pass the check).
+func (r *Registry) AcquireCustom(sub string, s *Session, acct *Account, limit int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.subs[sub]; ok && cur != s {
+		select {
+		case <-cur.closed:
+			// dead session, replace it below
+		default:
+			return ErrSubdomainTaken
+		}
+	}
+	if limit > 0 && acct != nil {
+		n := 0
+		for _, live := range r.subs {
+			if live == s || live.account == nil || live.account.APIKey != acct.APIKey || !live.custom {
+				continue
+			}
+			select {
+			case <-live.closed:
+			default:
+				n++
+			}
+		}
+		if n >= limit {
+			return ErrAccountQuota
+		}
+	}
+	r.subs[sub] = s
+	return nil
+}
+
 // Release frees sub if it is currently held by s.
 func (r *Registry) Release(sub string, s *Session) {
 	r.mu.Lock()
