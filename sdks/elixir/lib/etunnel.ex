@@ -215,6 +215,14 @@ defmodule Etunnel do
     state = %{state | last_activity: System.monotonic_time(:millisecond)} # #243 M3
     case Jason.decode(msg) do
       {:ok, %{"type" => "welcome"} = w} ->
+        # #338: PROTOCOL.md section 3 both-sides version gate - reject newer
+        # protocols loudly (permanent failure ends the reconnect supervisor,
+        # Go reconnect.go parity); a missing proto counts as v1.
+        if is_integer(w["proto"]) and w["proto"] > 1 do
+          IO.puts(:stderr, "etunnel: server speaks protocol v#{w["proto"]}; update the SDK")
+          state = reply_url(state, {:error, {"proto_version", "server speaks protocol v#{w["proto"]}"}})
+          {:stop, {:proto_version, w["proto"]}, %{state | url_waiter: nil}}
+        else
         IO.puts("TUNNEL_URL: #{w["url"]}")
         state = reply_url(state, w["url"])
 
@@ -227,6 +235,7 @@ defmodule Etunnel do
           end
 
         {:ok, %{state | url: w["url"], url_waiter: nil}}
+        end
 
       {:ok, %{"type" => "error"} = e} ->
         IO.puts(:stderr, "etunnel: #{e["code"]}: #{e["message"]}")

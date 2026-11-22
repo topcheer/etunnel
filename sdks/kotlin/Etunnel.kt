@@ -150,7 +150,18 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
             fun handleText(msg: String) {
                 val m = Json.read(msg)
                 when (m["type"]) {
-                    "welcome" -> { info = m; welcome.countDown() }
+                    "welcome" -> {
+                        // #338: PROTOCOL.md section 3 both-sides version gate -
+                        // reject newer protocols loudly; missing proto = v1.
+                        val p = (m["proto"] as? Number)?.toInt() ?: 1
+                        if (p > 1) {
+                            error = "proto_version: server speaks protocol v$p; update the SDK"
+                            welcome.countDown()
+                        } else {
+                            info = m
+                            welcome.countDown()
+                        }
+                    }
                     "error" -> { error = "${m["code"]}: ${m["message"] ?: ""}"; welcome.countDown() }
                     "req" -> {
                         val sid = (m["streamId"] as Number).toInt()
