@@ -170,14 +170,20 @@ the tunnel stays connected and keeps retrying for you.</div>
 (defn- handle-text
   [ws ctx m]
   (case (:type m)
-    "welcome" (reset! (:state ctx)
+    "welcome" (if (and (:proto m) (> (:proto m) 1))
+                ;; #338: PROTOCOL.md section 3 both-sides version gate -
+                ;; reject newer protocols loudly; missing proto = v1.
+                (reset! (:state ctx)
+                        {:proto-error (str "etunnel: proto_version: server speaks protocol v" (:proto m) "; update the SDK")
+                         :ws ws})
+                (reset! (:state ctx)
                 {:url (:url m) :ws ws
                  ;; server-signed token: reclaim the same subdomain on reconnect
                  :resume-token (or (:resumeToken m) "")
                  :close! (fn []
                            (send-text! ws (json/generate-string
                                             {:type "bye" :reason "client closed"}))
-                           (.join (.sendClose ws WebSocket/NORMAL_CLOSURE "bye")))})
+                           (.join (.sendClose ws WebSocket/NORMAL_CLOSURE "bye")))}))
     "req" (do
               (.put ^ConcurrentHashMap (:streams ctx)
                   (long (:streamId m))
