@@ -347,7 +347,11 @@ func (t *Tunnel) serveLocalUpgrade(st *clientStream, resp *http.Response) {
 		if cw, ok := rwc.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		} else {
+			// #330-4 (LOW): no CloseWrite support - a half close degrades to
+			// a full close (post-FIN reverse bytes are lost); log so the
+			// degradation is visible.
 			_ = rwc.Close()
+			t.logf("etunnel: transport lacks CloseWrite; half close degraded to full close (#330-4)")
 		}
 	}()
 
@@ -374,7 +378,17 @@ func (t *Tunnel) serveLocalUpgrade(st *clientStream, resp *http.Response) {
 	// #322-1 (M1): wait for the second direction instead of aborting the
 	// whole stream on the first EOF - PROTOCOL.md §5: FIN half closes; the
 	// stream is dead only when both directions have completed.
-	<-done
+	//
+	// #330-1 (HIGH): that wait can park forever on a hung local service
+	// that never FINs (push-only/long-poll): a parked rwc.Read on a
+	// hijacked 101 connection is not woken by st.cancel alone, so watch
+	// the stream context and actively close rwc to unwind the splice.
+	select {
+	case <-done:
+	case <-st.ctx.Done():
+		_ = rwc.Close() // wake the parked local->external Read
+		<-done
+	}
 	st.finish()
 }
 
