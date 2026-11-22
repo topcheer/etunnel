@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.30 — 2026-11-23
+
+- **security**: account delete/downgrade/refund/ResetKey now cascade-kick the holder's online sessions (#350/#351/#363/#366) (PR #361, PR #372)
+- **security**: Stripe dispute attribution fixed - partial refunds and merchant wins keep entitlements; PayPal/NOWPayments refund rollback shapes + expired rows removed (#352/#364/#365) (PR #372)
+- sdk: Rust ureq 2 -> 3 rewrite (#212) (PR #344); oneshot mode served nothing - exited before any request (#345) (PR #349)
+- sdk: Rust connect/recv timeouts, bounded serve threads, shared agent pool (#354/#357/#369) (PR #360, PR #371); scala/c/lua host:port (#358)
+- telegram: parameter-less admin commands answer with tappable lists (#346) (PR #347); single tappable list + byte-budget truncation (#367), admin email normalization (#368) (PR #373)
+- docs/config: NOWPayments configuration documented + startup price env validation (#355/#370) (PR #373); PROTOCOL/name comment drift sync (#359) (PR #362)
+- ops: deploy records for v1.7.29 and the telegram tap commands (PR #343, PR #348)
+
 ## v1.7.29 — 2026-11-22
 
 - **security**: server review batch - MaxTunnels TOCTOU, 101 header injection (CRLF), downgrade downlink timeouts, webauthn hardening, admin fail counters, PayPal dedup, Origin rejection, telegram cooldown hygiene (#321/#323) (PR #325)
