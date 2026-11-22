@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.7.29 — 2026-11-22
+
+- **security**: server review batch - MaxTunnels TOCTOU, 101 header injection (CRLF), downgrade downlink timeouts, webauthn hardening, admin fail counters, PayPal dedup, Origin rejection, telegram cooldown hygiene (#321/#323) (PR #325)
+- **security**: resume TOCTOU closed out - random-name resume joins the bounded acquire; O(1) counters (#331 follow-through) (PR #333)
+- fixes: SDK semantic batch - half-close semantics, malformed-frame fatality, bye priority channel, proto gates (TS/Deno/Go) (#322) (PR #324)
+- fixes: SDK review batch - upgrade leak reclaim on hung locals, TS/Deno proto gate, review LOWs (#330) (PR #332)
+- site: cookieless analytics (analytics.ggcode.dev) on official pages (#326)
+- site: privacy policy aligned with cookieless analytics; DNT honored (#327)
+- docs: ops deploy records - #326 site analytics, #324/#325/#327 review fixes + DNT, #333/#332 review-fix batch (#328, #329, #334)
+- ledger: this entry also clears the #331 bookkeeping debt - the six PRs above (#324/#325/#326/#327/#332/#333) are recorded here together instead of per-merge
+
 ## v1.7.28 — 2026-11-22
 
 - **security**: resume path quota gate moves into the registry lock - the #312 check-then-consume TOCTOU is closed (#315) (PR #315)
