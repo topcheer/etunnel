@@ -16,6 +16,7 @@ import (
 type fakeTelegram struct {
 	mu       sync.Mutex
 	sent     []string
+	markups  []any  // reply_markup payload per sendMessage (nil = main menu)
 	updates  string // raw JSON array for the next getUpdates
 	serveErr bool
 }
@@ -30,6 +31,7 @@ func newFakeTelegram(t *testing.T) (*fakeTelegram, *httptest.Server) {
 			_ = json.NewDecoder(r.Body).Decode(&p)
 			f.mu.Lock()
 			f.sent = append(f.sent, fmt.Sprint(p["text"]))
+			f.markups = append(f.markups, p["reply_markup"])
 			f.mu.Unlock()
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
