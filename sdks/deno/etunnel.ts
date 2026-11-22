@@ -223,7 +223,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     lastActivity = Date.now();
     if (typeof ev.data === 'string') {
       let m: any;
-      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1: ignore malformed frames
+      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1 + #322-2 converged: unknown control types are ignored; malformed KNOWN frames are fatal server-side (PROTOCOL.md §3) - the client stays alive by skipping
       if (m.type === 'req') {
         // #243 M2: refuse a replayed live id or a stream beyond the cap
         // (Go registerClientStream parity) and tell the server with an RST.
