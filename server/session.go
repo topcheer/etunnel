@@ -366,7 +366,14 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			} else {
-				aerr = s.reg.Acquire(sub, sess)
+				// #331 M1: random-name resumes enforce MaxTunnels atomically
+				// too - a supervisor replaying N random tokens concurrently
+				// must not exceed the plan's concurrent-tunnel limit.
+				aerr = s.reg.AcquireBounded(sub, sess, acct, tier.MaxTunnels, false, 0)
+				if errors.Is(aerr, ErrAccountQuota) {
+					s.logf("session %s: resume of %s rejected: plan %s allows %d concurrent tunnel(s), all in use (#331)", sess.id, sub, tier.Name, tier.MaxTunnels)
+					break
+				}
 			}
 			if aerr == nil {
 				sess.sub = sub

@@ -380,8 +380,13 @@ func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
 		if now.Sub(t0) < tunnelOpenCooldown {
 			return
 		}
+		// #331 LOW4: a CAS loss against the sweep (which deletes the expired
+		// entry) must not silently swallow the post-cooldown notification -
+		// retry the LoadOrStore claim instead of returning.
 		if !tunnelOpenSeen.CompareAndSwap(sess.sub, prev, now) {
-			return // another handshake claimed the renewal slot
+			if _, loaded := tunnelOpenSeen.LoadOrStore(sess.sub, now); loaded {
+				return // yet another handshake holds a fresh window
+			}
 		}
 	}
 	owner := sess.accountEmail()

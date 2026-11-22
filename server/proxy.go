@@ -1057,9 +1057,8 @@ func validHeaderValue(v string) bool {
 		if c < 0x20 && c != '\t' {
 			return false
 		}
-		if c > 0x7e {
-			return false
-		}
+		// #331 LOW3: 0x80-0xFF (obs-text / UTF-8) is legal per RFC 7230 -
+		// only CR/LF/NUL and other control bytes split responses.
 	}
 	return true
 }

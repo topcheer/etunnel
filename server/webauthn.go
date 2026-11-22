@@ -139,6 +139,15 @@ func (s *Server) allowPasskeyBegin(ip string) bool {
 		s.passkeyBegins = map[string]*passkeyBeginRate{}
 	}
 	now := time.Now()
+	// #331 LOW2: bound the table - attacker-controlled IPs would grow it
+	// without bound; drop expired windows when past a floor.
+	if len(s.passkeyBegins) > 4096 {
+		for k2, st2 := range s.passkeyBegins {
+			if now.Sub(st2.windowStart) >= beginWindow {
+				delete(s.passkeyBegins, k2)
+			}
+		}
+	}
 	st, ok := s.passkeyBegins[ip]
 	if !ok || now.Sub(st.windowStart) >= beginWindow {
 		s.passkeyBegins[ip] = &passkeyBeginRate{windowStart: now, count: 1}
