@@ -74,8 +74,11 @@ func (st *clientStream) pump() {
 				_ = st.reqPw.CloseWithError(io.EOF)
 				return
 			case protocol.KindRst:
-				_ = st.reqPw.CloseWithError(errStreamReset)
-				st.finish()
+				// #337-2 (MED): an RST means the visitor abandoned the stream -
+				// abort (cancel + close request pipe + finish) so a hung local
+				// that never FINs is still reclaimed; finish() alone left the
+				// parked rwc.Read, goroutine and fd alive until tunnel close.
+				st.abort()
 				return
 			}
 		case <-st.done:
