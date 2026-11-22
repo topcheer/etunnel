@@ -435,6 +435,7 @@ func (s *Server) handleAdminCommand(text string) string {
 		if !ok {
 			return "no such account: " + rest
 		}
+		s.kickSessionsByAccount(acct.APIKey, "account deleted by admin")
 		if !s.accounts.Delete(acct.APIKey) {
 			return "delete failed"
 		}

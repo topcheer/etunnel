@@ -803,6 +803,9 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		case paymentEventSeen("stripe:" + ev.ID):
 			s.logf("billing: stripe webhook replay suppressed (event %s)", ev.ID)
 		default:
+			if a, ok := s.accounts.LookupEmail(email); ok {
+				s.kickSessionsByAccount(a.APIKey, "entitlement revoked (refund/chargeback)")
+			}
 			s.accounts.DowngradeToFree(email)
 			s.revokeShortDomainEntitlement(email)
 			markPaymentEvent("stripe:" + ev.ID)
@@ -1342,6 +1345,11 @@ func (s *Server) reapExpiredTiers(now time.Time) int {
 	expired := s.accounts.ExpiredPaid(now)
 	for _, email := range expired {
 		if s.accounts.DowngradeToFree(email) {
+			// #351: the expired entitlement must stop serving - kick live
+			// tunnels so the free-tier limits re-apply on the next connect.
+			if a, ok := s.accounts.LookupEmail(email); ok {
+				s.kickSessionsByAccount(a.APIKey, "subscription expired")
+			}
 			s.logf("billing: subscription expired, %s downgraded to free", email)
 			if s.tg.enabled() {
 				s.tgSend(context.Background(), fmt.Sprintf("⏳ %s subscription expired - downgraded to free", email))
