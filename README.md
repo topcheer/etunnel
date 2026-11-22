@@ -239,7 +239,7 @@ migration (static wildcard cert from the ACME directory, not renewed).
 
 | Path | Purpose |
 |---|---|
-| `wss://<domain>/tunnel` | SDK WebSocket endpoint (subprotocol `etunnel-v1`) |
+| `wss://<domain>/tunnel` | SDK WebSocket endpoint (subprotocol `etunnel-v1`). Handshakes carrying a browser `Origin` header are rejected (#321): tunnels are SDK-only, and browser-initiated tunnels would burn the visitor's per-IP quota. Passkey login-begin is rate limited per source IP (30/min) |
 | `POST /api/register` | `{"email"}` -> free-tier API key |
 | `POST /auth/cli/start` | CLI loopback login: `{"redirect_uri"}` (must be `http://127.0.0.1:<port>/callback`) -> `{auth_url, device_code}` |
 | `GET/POST /auth/cli/grant` | browser approval page (session required); allow -> 303 back to the loopback port with a one-time code (5-min TTL) |
