@@ -164,6 +164,13 @@ func (s *Server) accountTunnelLimitReached(acct *Account, tier *Tier) bool {
 // handleTunnelWS upgrades, authenticates, assigns a subdomain and runs the
 // session until it ends.
 func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
+	// #321 LOW8: browsers always attach an Origin to WebSocket connects, and
+	// a cross-site page can open anonymous tunnels that burn the visitor's
+	// per-IP quota. SDK clients never send one - reject handshakes that do.
+	if r.Header.Get("Origin") != "" {
+		http.Error(w, "browser-origin tunnels are not supported; use the SDK", http.StatusForbidden)
+		return
+	}
 	// WSS source ban (owner directive): CF Workers/WARP-hosted clients churn
 	// tunnel slots; refuse the upgrade before any state is created.
 	if banWSS(s, r.RemoteAddr) {
@@ -353,7 +360,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 				// names - e.g. a supervisor replaying several tokens after a
 				// restart - cannot each pass a pre-check and exceed the plan
 				// quota. Quota failure falls through like any other rejection.
-				aerr = s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains)
+				aerr = s.reg.AcquireBounded(sub, sess, acct, tier.MaxTunnels, true, tier.CustomDomains)
 				if errors.Is(aerr, ErrAccountQuota) {
 					s.logf("session %s: resume of %s rejected: plan %s allows %d custom subdomain(s), all in use (#292/#312)", sess.id, sub, tier.Name, tier.CustomDomains)
 					break
@@ -405,7 +412,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		}
 		// #304 A-3: quota is enforced atomically inside AcquireCustom; the
 		// pre-count above stays as the friendly fast path only.
-		if err := s.reg.AcquireCustom(sub, sess, acct, tier.CustomDomains); err != nil {
+		if err := s.reg.AcquireBounded(sub, sess, acct, tier.MaxTunnels, true, tier.CustomDomains); err != nil {
 			cancel()
 			releaseIPSlot()
 			if errors.Is(err, ErrAccountQuota) {
@@ -424,9 +431,17 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 		var sub string
 		for i := 0; i < 12; i++ {
 			cand := protocol.RandomSubdomain()
-			if err := s.reg.Acquire(cand, sess); err == nil {
+			aerr := s.reg.AcquireBounded(cand, sess, acct, tier.MaxTunnels, false, 0)
+			if aerr == nil {
 				sub = cand
 				break
+			}
+			if errors.Is(aerr, ErrAccountQuota) {
+				cancel()
+				releaseIPSlot()
+				s.wsErrorClose(ws, protocol.ErrCodeLimitReached,
+					fmt.Sprintf("plan %s allows %d concurrent tunnel(s)", tier.Name, tier.MaxTunnels))
+				return
 			}
 		}
 		if sub == "" {

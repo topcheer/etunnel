@@ -84,7 +84,35 @@ func forwardUpgraded(target string, w http.ResponseWriter, req *http.Request, fw
 	// 101: splice both directions. vbuf.Reader first so any bytes the
 	// visitor sent right after its handshake (often the same packet) are
 	// not stranded in the hijacked buffer.
-	go func() { _, _ = io.Copy(peer, vbuf.Reader) }()
-	_, _ = io.Copy(visitor, br)
+	// #321 LOW4: per-op idle deadlines so a stalled side cannot pin the
+	// two splice goroutines (and the session) forever.
+	go func() { _ = spliceConn(peer, vbuf.Reader, visitor.SetReadDeadline, spliceIdleTimeout) }()
+	_ = spliceConn(visitor, br, peer.SetReadDeadline, spliceIdleTimeout)
 	return true
+}
+
+// spliceIdleTimeout bounds each read/write on an upgraded-splice connection
+// (var so tests can shrink it).
+var spliceIdleTimeout = 5 * time.Minute
+
+// spliceConn copies src -> dst with per-op idle deadlines (set through the
+// hook on the UNDERLYING net.Conn - src is typically a bufio.Reader wrapping
+// it), so a stalled side tears the splice down instead of pinning it forever
+// (#321 LOW4). src must be drained from the hijack's buffered reader so
+// bytes past the handshake are not stranded.
+func spliceConn(dst net.Conn, src io.Reader, setSrcReadDeadline func(time.Time) error, idle time.Duration) error {
+	buf := make([]byte, 32*1024)
+	for {
+		_ = setSrcReadDeadline(time.Now().Add(idle))
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			_ = dst.SetWriteDeadline(time.Now().Add(idle))
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
 }

@@ -312,6 +312,12 @@ func (r *meshRouter) Release(sub string) {
 // Forward proxies the request to the peer owning sub. Returns false when the
 // request is not forwardable (we own it, nobody does, or it already bounced).
 func (r *meshRouter) Forward(sub string, w http.ResponseWriter, req *http.Request) bool {
+	// #321 LOW3: mirror the sticky router (#295) - the loop-guard header is
+	// only trusted from internal peers; a public visitor forging it could
+	// force a selective 404.
+	if req.Header.Get(r.fwdHdr) != "" && !isInternalPeer(req.RemoteAddr) {
+		req.Header.Del(r.fwdHdr)
+	}
 	if req.Header.Get(r.fwdHdr) != "" {
 		return false // forwarding loop guard
 	}
