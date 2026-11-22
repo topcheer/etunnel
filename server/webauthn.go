@@ -139,14 +139,32 @@ func (s *Server) allowPasskeyBegin(ip string) bool {
 		s.passkeyBegins = map[string]*passkeyBeginRate{}
 	}
 	now := time.Now()
-	// #331 LOW2: bound the table - attacker-controlled IPs would grow it
-	// without bound; drop expired windows when past a floor.
+	// #331 LOW2: opportunistic prune of expired windows.
 	if len(s.passkeyBegins) > 4096 {
 		for k2, st2 := range s.passkeyBegins {
 			if now.Sub(st2.windowStart) >= beginWindow {
 				delete(s.passkeyBegins, k2)
 			}
 		}
+	}
+	// #336 LOW2: hard cap - fresh attacker IPs must not grow the table past
+	// the cap either; evict the oldest window until there is room (same
+	// policy as waSessions). The scan only runs at the cap boundary, which
+	// retires the old every-call O(n) prune concern.
+	const passkeyBeginCap = 4096
+	for len(s.passkeyBegins) >= passkeyBeginCap {
+		oldestID, oldestStart := "", time.Time{}
+		first := true
+		for k2, st2 := range s.passkeyBegins {
+			if first || st2.windowStart.Before(oldestStart) {
+				oldestID, oldestStart = k2, st2.windowStart
+				first = false
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		delete(s.passkeyBegins, oldestID)
 	}
 	st, ok := s.passkeyBegins[ip]
 	if !ok || now.Sub(st.windowStart) >= beginWindow {

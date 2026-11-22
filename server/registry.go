@@ -89,7 +89,12 @@ func (r *Registry) AcquireBounded(sub string, s *Session, acct *Account, maxTunn
 	if cur, ok := r.subs[sub]; ok && cur != s {
 		select {
 		case <-cur.closed:
-			// dead session, replace it below
+			// #336 HIGH: dead session being replaced - hand its slot back
+			// to the account counters NOW. The old holder's own Release is
+			// swallowed by the cur==s guard once subs[sub] points at the
+			// replacement, so skipping this decrements leaked a count per
+			// replacement and locked the account out of its quota forever.
+			r.accountRelease(cur.account, cur.custom)
 		default:
 			return ErrSubdomainTaken
 		}
