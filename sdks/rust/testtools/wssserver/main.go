@@ -19,13 +19,13 @@
 package main
 
 import (
-	"os"
 	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 
 	"github.com/coder/websocket"
 )
