@@ -152,6 +152,24 @@ func (s *Session) streamCount() int {
 // accountTunnelLimitReached reports whether acct already holds the maximum
 // number of concurrent tunnels its plan allows (issue #10). Anonymous sessions
 // and unlimited plans (MaxTunnels <= 0) are never limited here.
+// kickSessionsByAccount closes every live session held by the account with
+// the given API key (#350: account deletion / entitlement revocation must
+// cascade to the holder's tunnels instead of leaving them served). Sessions
+// are located via reg.Snapshot() and closed with a readable reason; Close is
+// idempotent (closeOnce), so racing with the holder's own teardown is safe.
+// Returns the number of sessions closed.
+func (s *Server) kickSessionsByAccount(apiKey, reason string) int {
+	n := 0
+	for _, sess := range s.reg.Snapshot() {
+		if sess.account == nil || sess.account.APIKey != apiKey {
+			continue
+		}
+		sess.Close(reason)
+		n++
+	}
+	return n
+}
+
 func (s *Server) accountTunnelLimitReached(acct *Account, tier *Tier) bool {
 	if acct == nil || tier == nil || tier.MaxTunnels <= 0 {
 		return false

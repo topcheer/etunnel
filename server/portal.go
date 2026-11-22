@@ -525,6 +525,8 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		// epoch so a stolen cookie cannot keep using the dashboard (the
 		// response still carries the new key; the caller re-logs in).
 		s.accounts.Mutate(email, func(a *Account) { a.SessionEpoch++ })
+		// #351: reset also tears down tunnels authenticated by the old key.
+		s.kickSessionsByAccount(acct.APIKey, "API key reset")
 		writeJSON(w, http.StatusOK, map[string]string{"apiKey": key, "message": "API key reset (old key revoked)"})
 	case "cancel":
 		if acct.Tier == "free" {
@@ -532,16 +534,21 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 			return
 		}
 		s.accounts.CancelSubscription(email)
+		// #351: cancelled entitlement stops serving immediately; live tunnels
+		// are closed so the free-tier limits re-apply on the next connect.
+		if a, ok := s.accounts.LookupEmail(email); ok {
+			s.kickSessionsByAccount(a.APIKey, "subscription cancelled")
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"message": "subscription cancelled - back on free tier"})
 	case "domain":
 		s.domainAction(w, acct, req.Domain, req.Remove)
 	case "close":
 		// Only allow closing accounts with no active tunnels.
-		for _, sess := range s.reg.Snapshot() {
-			if sess.account != nil && sess.account.Email == email {
-				http.Error(w, `{"error":"close your tunnels first (/tunnels admin or stop clients)"}`, http.StatusConflict)
-				return
-			}
+		// #350: cascade-close the holder's tunnels INSTEAD of racing a
+		// pre-check - closing first makes the subsequent delete authoritative
+		// (a tunnel opened between check and delete would have survived).
+		if closed := s.kickSessionsByAccount(acct.APIKey, "account closed by owner"); closed > 0 {
+			s.logf("portal: account %s closed, %d live tunnel(s) cascaded", email, closed)
 		}
 		s.accounts.Delete(acct.APIKey)
 		http.SetCookie(w, &http.Cookie{Name: "et_session", Value: "", Path: "/", MaxAge: -1})
