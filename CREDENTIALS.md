@@ -13,6 +13,9 @@
 | `PAYPAL_ENV` | 生产留空（=live），测试填 `sandbox` | — |
 | `PAYPAL_WEBHOOK_ID` | 同 App → Webhooks → 添加 `https://<域名>/webhooks/paypal`（事件：Payment capture completed） | 同 Stripe（兜底） |
 | `TIER_STARTER_PRICE_CENTS` / `TIER_PRO_PRICE_CENTS` | 自定（默认 300 / 900） | 用默认价 |
+| `NOWPAYMENTS_API_KEY` | nowpayments.io → Store Settings → API Keys | Crypto 支付按钮 503 |
+| `NOWPAYMENTS_IPNSecret` | 同上 → IPN Callback（填 `https://<域名>/webhooks/nowpayments`）设置 IPN Secret | 加密支付仅靠回跳页（建议配） |
+| `TIER_STARTER_CRYPTO_PRICE_CENTS` | 自定（默认 500） | 用默认价 |
 
 ## 2. 用户登录（订阅前置）
 

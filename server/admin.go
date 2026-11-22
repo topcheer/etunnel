@@ -271,6 +271,12 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown tier", http.StatusBadRequest)
 			return
 		}
+		// #353: validate the address the same way the portal does - a
+		// malformed or over-long email would create an un-reachable account.
+		if !strings.Contains(req.Email, "@") || len(req.Email) > 254 {
+			http.Error(w, "valid email required", http.StatusBadRequest)
+			return
+		}
 		a, err := s.accounts.Create(req.Email, req.Tier)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)

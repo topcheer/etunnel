@@ -43,8 +43,9 @@ var ErrBadSubdomain = errors.New("etunnel: invalid subdomain")
 
 // RandomSubdomain generates a human-readable random subdomain such as
 // "quick-fox-k3f9qz". The word pair is memorable; the 6-char suffix from
-// a 30-symbol no-lookalike alphabet carries the entropy. Total keyspace
-// 48*48*30^6 ≈ 2^40.6: the old word-word-NN format (2^17.8, ~230k names)
+// a 30-symbol no-lookalike alphabet carries the entropy. The word lists are
+// 48/48 entries; total keyspace 48*48*30^6 ≈ 2^40.6: the old word-word-NN
+// format (2^17.8, ~230k names)
 // could be exhaustively scanned in under an hour, which defeated the
 // purpose for anonymous users who do not want their URL guessed.
 func RandomSubdomain() string {

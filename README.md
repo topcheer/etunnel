@@ -336,7 +336,15 @@ PAYPAL_ENV=sandbox                       # or live
 PAYPAL_WEBHOOK_ID=<webhook id>           # endpoint: https://<domain>/webhooks/paypal
 TIER_STARTER_PRICE_CENTS=300             # optional overrides (default $3 / $9)
 TIER_PRO_PRICE_CENTS=900
+NOWPAYMENTS_API_KEY=<api key>            # crypto via NOWPayments (optional)
+NOWPAYMENTS_IPN_SECRET=<ipn secret>      # endpoint: https://<domain>/webhooks/nowpayments
+TIER_STARTER_CRYPTO_PRICE_CENTS=500      # optional crypto overrides (default $5)
 ```
+
+A misconfigured `TIER_*` price override (non-numeric or <= 0) is logged at
+startup/checkout and falls back to the builtin price. Crypto (NOWPayments)
+signatures are HMAC-SHA512 over the sorted IPN key/value pairs; refund and
+expiry states roll the entitlement back to free.
 
 First payment mints the account and API key for the payer's email;
 renewals and upgrades keep the same key and change the tier. Stripe signatures
@@ -352,10 +360,12 @@ TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id
 
 `/status`, `/tunnels`, `/accounts`, `/kick <subdomain>`,
 `/delete <email>`, `/key <email>`, `/tier <email> <tier>`,
-`/whois <subdomain>`. Called without arguments, `/whois`, `/kick`,
+`/whois <subdomain>`, `/tunnel <subdomain>`, `/history [5|10|30]`,
+`/help`. Called without arguments, `/whois`, `/kick`,
 `/delete`, `/key` and `/tier` reply with a tappable list of ready-made
 commands built from live tunnels and accounts. Only the whitelisted chat is
-answered; payments push a notification to it. Long polling - no public webhook.
+answered; payments and tunnel-open events push a notification to it.
+Long polling - no public webhook.
 
 ## Repository layout
 

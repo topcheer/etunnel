@@ -117,7 +117,7 @@ Server → client (success):
 
 ```json
 {"type":"welcome","proto":1,"hostname":"quick-fox-k3f9qz.t.example.com",
- "subdomain":"quick-fox-k3f9qz","url":"https://quick-fox-42.t.example.com",
+ "subdomain":"quick-fox-k3f9qz","url":"https://quick-fox-k3f9qz.t.example.com",
  "expiresAt":1762548000,"plan":"Free","resumeToken":"eyJzdWIiOi..."}
 ```
 
