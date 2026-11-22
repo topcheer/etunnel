@@ -815,8 +815,16 @@ fn main() {
                     resume = Some(t.resume_token.clone());
                 }
                 if !reconnect {
-                    // #243 L4: without reconnect there is nothing to wait
-                    // for - exit instead of sleeping forever.
+                    // #243 L4 + #345: one-shot mode still SERVES traffic.
+                    // Wait for the tunnel to close (reader exits on bye /
+                    // transport error), then exit 0. Exiting immediately
+                    // regressed the #53 serving path: the process quit
+                    // before any request could be served, so e.g. the
+                    // silent-send e2e saw a client that never answers.
+                    while !t.closed.load(Ordering::SeqCst) {
+                        thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    eprintln!("etunnel: connection closed");
                     std::process::exit(0);
                 }
                 while !t.closed.load(Ordering::SeqCst) {
