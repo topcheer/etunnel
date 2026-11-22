@@ -63,6 +63,10 @@ func serve(c net.Conn, first bool) {
 
 	if first {
 		welcome := fmt.Sprintf(`{"type":"welcome","url":"http://lua-test.t.test","subdomain":"lua-test","hostname":"lua-test.t.test","resumeToken":%q}`, token)
+		// #338 batch 2: env-injectable welcome.proto for the proto-gate test.
+		if p := os.Getenv("ETUNNEL_FIXTURE_PROTO"); p != "" {
+			welcome = fmt.Sprintf(`{"type":"welcome","proto":%s,`, p) + welcome[len(`{"type":"welcome",`):]
+		}
 		writeFrame(c, true, []byte(welcome))
 		// Abrupt close: the supervisor must reconnect.
 		return

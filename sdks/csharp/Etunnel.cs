@@ -250,6 +250,10 @@ public sealed class Etunnel
                 var type = doc.GetProperty("type").GetString();
                 if (type == "welcome")
                 {
+                    // #338: PROTOCOL.md section 3 both-sides version gate -
+                    // reject newer protocols loudly; missing proto = v1.
+                    if (doc.TryGetProperty("proto", out var pv) && pv.GetInt32() > 1)
+                        throw new IOException($"etunnel: proto_version: server speaks protocol v{pv.GetInt32()}; update the SDK");
                     url = doc.GetProperty("url").GetString()!;
                     if (doc.TryGetProperty("resumeToken", out var rt))
                         resumeToken = rt.GetString() ?? "";

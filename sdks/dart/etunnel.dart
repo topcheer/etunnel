@@ -193,6 +193,16 @@ class Etunnel {
       }
       switch (m['type']) {
         case 'welcome':
+          // #338: PROTOCOL.md section 3 both-sides version gate - reject
+          // newer protocols loudly; missing proto = v1.
+          final pv = (m['proto'] as num?) ?? 1;
+          if (pv > 1) {
+            try { ws.close(); } catch (_) {}
+            if (!_url.isCompleted) {
+              _url.completeError(Exception('etunnel: proto_version: server speaks protocol v$pv; update the SDK'));
+            }
+            return; // sync handler: no await here (close is fire-and-forget)
+          }
           url = m['url'] as String;
           resumeToken = (m['resumeToken'] as String?) ?? resumeToken;
           // #243 M4: a late welcome after a timeout used to hit an already

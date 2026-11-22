@@ -1,0 +1,17 @@
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.GeneratedMSBuildEditorConfig.editorconfig
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.AssemblyInfoInputs.cache
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.AssemblyInfo.cs
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.csproj.CoreCompileInputs.cache
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.sourcelink.json
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate.deps.json
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate.runtimeconfig.json
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate.runtimeconfig.dev.json
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate.dll
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/bin/Debug/net10.0/ProtoGate.pdb
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.dll
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/refint/ProtoGate.dll
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.pdb
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.genruntimeconfig.cache
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ref/ProtoGate.dll
+/Volumes/new/ggai/et/.ggcode/worktrees/fix-338-batch2/sdks/csharp/tests/proto_gate/obj/Debug/net10.0/ProtoGate.csproj.Up2Date
