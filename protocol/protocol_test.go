@@ -131,3 +131,18 @@ func TestRandomSubdomain(t *testing.T) {
 		t.Fatalf("poor entropy: %d unique in 100", len(seen))
 	}
 }
+
+// #322-4: trailing bytes inside one WS message must be rejected with
+// ErrBadFrame - ReadFrame used to silently truncate combined framing.
+func TestReadFrameRejectsTrailingBytes(t *testing.T) {
+	payload := []byte("abc")
+	b := Frame{Kind: KindData, StreamID: 7, Payload: payload}.Encode()
+	b = append(b, 0xAA) // one stray byte after the complete frame
+	_, err := ReadFrame(bytes.NewReader(b))
+	if err == nil || !strings.Contains(err.Error(), "trailing bytes") {
+		t.Fatalf("expected a trailing-bytes ErrBadFrame (#322-4), got %v", err)
+	}
+	if !errors.Is(err, ErrBadFrame) {
+		t.Fatalf("error must wrap ErrBadFrame (#322-4), got %v", err)
+	}
+}
