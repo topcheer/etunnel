@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,10 +78,21 @@ func (s *Server) telegramAPI(ctx context.Context, method string, payload any) (m
 }
 
 func (s *Server) tgSend(ctx context.Context, text string) {
+	s.tgSendKB(ctx, text, nil)
+}
+
+// tgSendKB sends text with an optional custom reply keyboard; nil keeps the
+// standard main menu (#tap-commands: parameter-less admin commands answer
+// with tappable full-command rows).
+func (s *Server) tgSendKB(ctx context.Context, text string, kb [][]string) {
+	markup := any(tgMainMenu())
+	if kb != nil {
+		markup = map[string]any{"keyboard": kb, "resize_keyboard": true}
+	}
 	_, _ = s.telegramAPI(ctx, "sendMessage", map[string]any{
 		"chat_id":      s.tg.chatID,
 		"text":         text,
-		"reply_markup": tgMainMenu(),
+		"reply_markup": markup,
 	})
 }
 
@@ -156,10 +168,125 @@ func (s *Server) dispatchTelegramUpdate(ctx context.Context, u any) int {
 		return next
 	}
 	text, _ := msg["text"].(string)
-	if reply := s.handleAdminCommand(text); reply != "" {
-		s.tgSend(ctx, reply)
+	if reply, kb := s.handleAdminCommandKB(text); reply != "" {
+		s.tgSendKB(ctx, reply, kb)
 	}
 	return next
+}
+
+// maxTappableRows bounds the reply keyboard of parameter-less list commands
+// so a large registry cannot blow up the Telegram client UI.
+const maxTappableRows = 24
+
+// tapRows renders rows as a single-column keyboard, capped at
+// maxTappableRows; the bool reports whether rows were truncated (the caller
+// appends a hint to the reply text).
+func tapRows(rows []string) ([][]string, bool) {
+	truncated := len(rows) > maxTappableRows
+	if truncated {
+		rows = rows[:maxTappableRows]
+	}
+	kb := make([][]string, 0, len(rows)+1)
+	for _, r := range rows {
+		kb = append(kb, []string{r})
+	}
+	kb = append(kb, []string{"📊 Status", "❓ Help"}) // back to the main menu
+	return kb, truncated
+}
+
+// handleAdminCommandKB executes one admin command and returns the reply plus
+// an optional tappable keyboard. Parameter-less list commands (/whois, /kick,
+// /delete, /key, /tier) are intercepted here and answer with ready-to-tap
+// full-command rows built from the live registry and account store; an empty
+// source falls back to the plain usage text. Everything else - all with-arg
+// forms and the remaining commands - delegates to handleAdminCommand
+// unchanged (#tap-commands).
+func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
+	text = strings.TrimSpace(text)
+	if cmd, ok := menuAliases[text]; ok {
+		text = cmd
+	}
+	cmd, rest, _ := strings.Cut(text, " ")
+	rest = strings.TrimSpace(rest)
+	if rest != "" {
+		return s.handleAdminCommand(text), nil // with-arg form: unchanged
+	}
+
+	switch cmd {
+	case "/whois", "/kick":
+		sessions := s.reg.Snapshot()
+		if len(sessions) == 0 {
+			return "usage: " + cmd + " <subdomain> (no live tunnels)", nil
+		}
+		verb := strings.TrimPrefix(cmd, "/") // whois | kick
+		rows := make([]string, 0, len(sessions))
+		var b strings.Builder
+		b.WriteString("tap a tunnel to " + verb + ":\n")
+		for _, sess := range sessions {
+			owner := "anonymous"
+			if sess.account != nil {
+				owner = sess.account.Email
+			}
+			tap := cmd + " " + sess.Subdomain()
+			rows = append(rows, tap)
+			fmt.Fprintf(&b, "%s — %s\n", tap, owner)
+		}
+		kb, truncated := tapRows(rows)
+		if truncated {
+			b.WriteString(fmt.Sprintf("\n(showing first %d — use the text command for more)", maxTappableRows))
+		}
+		return b.String(), kb
+	case "/delete", "/key":
+		accts := s.accounts.List()
+		if len(accts) == 0 {
+			return "usage: " + cmd + " <email> (no accounts)", nil
+		}
+		verb := "delete"
+		if cmd == "/key" {
+			verb = "show the API key of"
+		}
+		rows := make([]string, 0, len(accts))
+		var b strings.Builder
+		for _, a := range accts {
+			tap := cmd + " " + a.Email
+			rows = append(rows, tap)
+			fmt.Fprintf(&b, "%s\n", tap)
+		}
+		kb, truncated := tapRows(rows)
+		text := "tap an account to " + verb + ":\n" + b.String()
+		if truncated {
+			text += fmt.Sprintf("(showing first %d — use the text command for more)\n", maxTappableRows)
+		}
+		return text, kb
+	case "/tier":
+		accts := s.accounts.List()
+		upgrades := make([]string, 0, len(s.cfg.Tiers))
+		for name := range s.cfg.Tiers {
+			if name != "free" {
+				upgrades = append(upgrades, name)
+			}
+		}
+		sort.Strings(upgrades)
+		if len(accts) == 0 || len(upgrades) == 0 {
+			return "usage: /tier <email> <tier> (no accounts or no upgradeable tiers)", nil
+		}
+		rows := make([]string, 0, len(accts)*len(upgrades))
+		var b strings.Builder
+		for _, a := range accts {
+			for _, up := range upgrades {
+				tap := "/tier " + a.Email + " " + up
+				rows = append(rows, tap)
+				fmt.Fprintf(&b, "%s\n", tap)
+			}
+		}
+		kb, truncated := tapRows(rows)
+		text := "tap an account+tier to upgrade:\n" + b.String()
+		if truncated {
+			text += fmt.Sprintf("(showing first %d — use the text command for more)\n", maxTappableRows)
+		}
+		return text, kb
+	}
+	return s.handleAdminCommand(text), nil
 }
 
 // handleAdminCommand executes one whitelisted command and returns the reply.
