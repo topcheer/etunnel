@@ -205,6 +205,7 @@ func (s *Server) handleCLIGrant(w http.ResponseWriter, r *http.Request) {
 		// HTML-escapes the email for free (review issue #113).
 		csrf := s.csrfMint(w)
 		tpl := `<!doctype html><html lang="en"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>CLI authorization - etunnel</title>

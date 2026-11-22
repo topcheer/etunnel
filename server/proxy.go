@@ -636,6 +636,7 @@ func landingHTML(cfg Config, lang string) string {
 	t := func(key string) string { return T(lang, key) }
 	return `<!doctype html>
 <html lang="` + lang + `" dir="` + langDir(lang) + `"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="` + t("land.meta.desc") + `">
 <link rel="icon" href="` + portalFavicon + `">

@@ -167,6 +167,7 @@ func (s *Server) handlePricing(w http.ResponseWriter, r *http.Request) {
 			Buyable:    buyable})
 	}
 	const pricingHTML = `<!doctype html><html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="` + portalFavicon + `">
 <title>{{T "price.title"}}</title>
