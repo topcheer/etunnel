@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.31 — 2026-11-23
+
+- republish: version-manifest bump only, no code changes since v1.7.30 - re-anchors the ledger after v1.7.30's tag initially shipped without the deno/etunnel.ts + rust/Cargo.lock source stamps (fixed via #377), which made the sdk-packages version gate reject the first v1.7.30 tag and left its registry publish incomplete; this bump re-stamps every manifest (all four in-source client stamps included) and re-runs the full publish pipeline so registry artifacts land cleanly
+
 ## v1.7.30 — 2026-11-23
 
 - **security**: account delete/downgrade/refund/ResetKey now cascade-kick the holder's online sessions (#350/#351/#363/#366) (PR #361, PR #372)
