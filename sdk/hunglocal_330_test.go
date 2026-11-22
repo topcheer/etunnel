@@ -121,3 +121,61 @@ func TestServeLocalUpgradeHungLocalReclaimsOnTunnelClose(t *testing.T) {
 		t.Fatalf("pre-FIN visitor bytes must reach the local service, got %q", rx)
 	}
 }
+
+// #337-2 (MED): an RST arriving while the local service is hung must still
+// reclaim the handler - pump aborts the stream (ctx cancel + body pipe
+// close), which fires the ctx.Done arm and actively closes rwc.
+func TestServeLocalUpgradeRstArrivalReclaimsHungLocal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tun := &Tunnel{
+		ctx:     ctx,
+		cancel:  cancel,
+		out:     make(chan wsOut, 8),
+		closed:  make(chan struct{}),
+		streams: make(map[uint32]*clientStream),
+	}
+
+	sctx, scancel := context.WithCancel(ctx)
+	st := &clientStream{
+		id:     2,
+		t:      tun,
+		ctx:    sctx,
+		cancel: scancel,
+		frames: make(chan protocol.Frame, 8),
+		done:   make(chan struct{}),
+	}
+	tun.mu.Lock()
+	tun.streams[2] = st
+	tun.mu.Unlock()
+	st.reqPr, st.reqPw = io.Pipe()
+
+	conn := &hungLocalConn{closedCh: make(chan struct{})}
+	resp := &http.Response{Header: http.Header{}, StatusCode: http.StatusSwitchingProtocols, Body: conn}
+
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		tun.serveLocalUpgrade(st, resp)
+	}()
+	go st.pump()
+
+	// visitor sends a byte, then the server RSTs the stream (visitor gave up)
+	st.frames <- protocol.Frame{Kind: protocol.KindData, StreamID: 2, Payload: []byte("V")}
+	st.frames <- protocol.Frame{Kind: protocol.KindRst, StreamID: 2}
+
+	select {
+	case <-served:
+		// reclaimed via the ctx.Done arm: pump abort cancelled ctx, which
+		// actively closed rwc, waking the parked read
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveLocalUpgrade leaked: RST arrival with hung local never reclaimed (#337-2)")
+	}
+
+	conn.mu.Lock()
+	rx := string(conn.received)
+	conn.mu.Unlock()
+	if !strings.Contains(rx, "V") {
+		t.Fatalf("pre-RST visitor bytes must reach the local service, got %q", rx)
+	}
+}

@@ -21,6 +21,13 @@ MANIFESTS = {
     "sdks/deno/deno.json":          ("json",  "version"),
     "composer.json":                ("json",  "version"),
     "sdks/rust/Cargo.toml":         ("regex", r'(?m)^version = "[^"]*"'),
+    # #337-4 (LOW): keep the hello client strings and Cargo.lock in the stamp
+    # chain - they used to drift (etunnel-ts/1.6.11 vs VERSION 1.7.29,
+    # Cargo.lock stuck at 1.7.28).
+    "sdks/node/etunnel.js":         ("regex",  r"(?m)etunnel-node/[0-9]+\.[0-9]+\.[0-9]+"),
+    "sdks/typescript/etunnel.ts":   ("regex",  r"(?m)etunnel-ts/[0-9]+\.[0-9]+\.[0-9]+"),
+    "sdks/deno/etunnel.ts":         ("regex",  r"(?m)etunnel-deno/[0-9]+\.[0-9]+\.[0-9]+"),
+    "sdks/rust/Cargo.lock":         ("regex",  r'(?m)name = "etunnel"\nversion = "[^"]*"'),
     "sdks/python/pyproject.toml":   ("regex", r'(?m)^version = "[^"]*"'),
     "sdks/dart/pubspec.yaml":       ("regex", r'(?m)^version: .*$'),
     "sdks/ruby/etunnel.gemspec":    ("regex", r"(?m)s\.version = '[^']*'"),

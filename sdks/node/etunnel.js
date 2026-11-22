@@ -85,6 +85,12 @@ async function connect(server, local, opts = {}) {
   // supervisor captures the session socket that way) instead of patching the
   // global, which is unsafe when several connects race on shared event loops.
   const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
+  // #337-1 (HIGH): handshake-failure paths (proto gate, welcome timeout,
+  // error frames) close the socket asynchronously; the close handler and
+  // the teardown path touch this state, so it must exist before the ws
+  // object does - declaration order used to TDZ-crash the embedder.
+  const state = { closed: false, streams: new Map() };
+  let pinger = null;
   ws.binaryType = 'arraybuffer';
 
   await new Promise((res, rej) => {
@@ -106,7 +112,7 @@ async function connect(server, local, opts = {}) {
     };
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.6.12', resume: opts.resume || undefined, policy: opts.policy || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.7.29', resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
     const to = setTimeout(() => {
@@ -138,7 +144,7 @@ async function connect(server, local, opts = {}) {
     };
   });
 
-  const state = { url: info.url, closed: false, streams: new Map() };
+  state.url = info.url;
   const send = (o) => ws.send(typeof o === 'string' ? o : o);
   const sendBin = (buf) => ws.send(buf);
   let lastPong = Date.now(); // #243 M3: last pong received from the server
@@ -146,7 +152,6 @@ async function connect(server, local, opts = {}) {
 
   // #243 M3: single teardown path shared by explicit close() and the ping
   // timeout below, so the pinger never outlives the socket.
-  let pinger = null;
   function closeTunnel(reason) {
     if (state.closed) return;
     state.closed = true;
