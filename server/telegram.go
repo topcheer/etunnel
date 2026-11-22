@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -89,11 +90,14 @@ func (s *Server) tgSendKB(ctx context.Context, text string, kb [][]string) {
 	if kb != nil {
 		markup = map[string]any{"keyboard": kb, "resize_keyboard": true}
 	}
-	_, _ = s.telegramAPI(ctx, "sendMessage", map[string]any{
+	if _, err := s.telegramAPI(ctx, "sendMessage", map[string]any{
 		"chat_id":      s.tg.chatID,
 		"text":         text,
 		"reply_markup": markup,
-	})
+	}); err != nil {
+		// #353: silent drops made bot outages invisible.
+		log.Printf("telegram: sendMessage failed: %v", err)
+	}
 }
 
 // tgMainMenu is the tap-only reply keyboard shown on every bot reply.
@@ -178,10 +182,11 @@ func (s *Server) dispatchTelegramUpdate(ctx context.Context, u any) int {
 // so a large registry cannot blow up the Telegram client UI.
 const maxTappableRows = 24
 
-// tapRows renders rows as a single-column keyboard, capped at
-// maxTappableRows; the bool reports whether rows were truncated (the caller
-// appends a hint to the reply text).
-func tapRows(rows []string) ([][]string, bool) {
+// tapRows renders rows as a single-column keyboard capped at
+// maxTappableRows and returns the TEXT body to send alongside it (#353:
+// Telegram rejects messages over 4096 chars - the text is truncated in
+// sync with the keyboard, one line per row, plus a header/tail allowance).
+func tapRows(rows []string) ([][]string, string) {
 	truncated := len(rows) > maxTappableRows
 	if truncated {
 		rows = rows[:maxTappableRows]
@@ -191,7 +196,14 @@ func tapRows(rows []string) ([][]string, bool) {
 		kb = append(kb, []string{r})
 	}
 	kb = append(kb, []string{"📊 Status", "❓ Help"}) // back to the main menu
-	return kb, truncated
+	var b strings.Builder
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%s\n", r)
+	}
+	if truncated {
+		fmt.Fprintf(&b, "…and %d more — use the text command form for the full list", len(rows))
+	}
+	return kb, b.String()
 }
 
 // handleAdminCommandKB executes one admin command and returns the reply plus
@@ -220,8 +232,7 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 		}
 		verb := strings.TrimPrefix(cmd, "/") // whois | kick
 		rows := make([]string, 0, len(sessions))
-		var b strings.Builder
-		b.WriteString("tap a tunnel to " + verb + ":\n")
+		var owners strings.Builder
 		for _, sess := range sessions {
 			owner := "anonymous"
 			if sess.account != nil {
@@ -229,13 +240,10 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 			}
 			tap := cmd + " " + sess.Subdomain()
 			rows = append(rows, tap)
-			fmt.Fprintf(&b, "%s — %s\n", tap, owner)
+			fmt.Fprintf(&owners, "%s — %s\n", tap, owner)
 		}
-		kb, truncated := tapRows(rows)
-		if truncated {
-			b.WriteString(fmt.Sprintf("\n(showing first %d — use the text command for more)", maxTappableRows))
-		}
-		return b.String(), kb
+		kb, body := tapRows(rows)
+		return "tap a tunnel to " + verb + ":\n" + owners.String() + body, kb
 	case "/delete", "/key":
 		accts := s.accounts.List()
 		if len(accts) == 0 {
@@ -246,18 +254,11 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 			verb = "show the API key of"
 		}
 		rows := make([]string, 0, len(accts))
-		var b strings.Builder
 		for _, a := range accts {
-			tap := cmd + " " + a.Email
-			rows = append(rows, tap)
-			fmt.Fprintf(&b, "%s\n", tap)
+			rows = append(rows, cmd+" "+a.Email)
 		}
-		kb, truncated := tapRows(rows)
-		text := "tap an account to " + verb + ":\n" + b.String()
-		if truncated {
-			text += fmt.Sprintf("(showing first %d — use the text command for more)\n", maxTappableRows)
-		}
-		return text, kb
+		kb, body := tapRows(rows)
+		return "tap an account to " + verb + ":\n" + body, kb
 	case "/tier":
 		accts := s.accounts.List()
 		upgrades := make([]string, 0, len(s.cfg.Tiers))
@@ -271,20 +272,13 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 			return "usage: /tier <email> <tier> (no accounts or no upgradeable tiers)", nil
 		}
 		rows := make([]string, 0, len(accts)*len(upgrades))
-		var b strings.Builder
 		for _, a := range accts {
 			for _, up := range upgrades {
-				tap := "/tier " + a.Email + " " + up
-				rows = append(rows, tap)
-				fmt.Fprintf(&b, "%s\n", tap)
+				rows = append(rows, "/tier "+a.Email+" "+up)
 			}
 		}
-		kb, truncated := tapRows(rows)
-		text := "tap an account+tier to upgrade:\n" + b.String()
-		if truncated {
-			text += fmt.Sprintf("(showing first %d — use the text command for more)\n", maxTappableRows)
-		}
-		return text, kb
+		kb, body := tapRows(rows)
+		return "tap an account+tier to upgrade:\n" + body, kb
 	}
 	return s.handleAdminCommand(text), nil
 }

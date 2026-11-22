@@ -16,7 +16,7 @@
 
 | # | 缺口 | 竞品覆盖（修正口径） | 本仓实证 |
 |---|---|---|---|
-| ① | 隧道层 basic auth / IP allowlist | ngrok、zrok、Cloudflare Access（boringproxy 无内建证据，不计入） | grep 全 server/ 无隧道层 auth（仅支付 provider 出站用） |
+| ① | 隧道层 basic auth / IP allowlist | ngrok、zrok、Cloudflare Access（boringproxy 无内建证据，不计入） | grep 全 server/ 无隧道层 auth（仅支付 provider 出站用）。**已关闭**：hello.policy 隧道层策略门控（basic auth / IP allowlist）已实现（#202 系） |
 | ② | raw TCP 隧道（SSH/DB） | **公开可用口径 ≈ 3/6**：ngrok、zrok（配对式）、localhost.run（付费 Pro）；Cloudflare 公网 TCP 走 Spectrum 企业档，boringproxy 仅 HTTPS 端口上 SNI 分流的 TLS 流（issue #36 时代任意端口 TCP 长期缺），localtunnel 无 | 协议帧已是纯字节流复用（DATA/FIN/RST），缺的只是入口 TCP 监听层——底座现成 |
 | ③ | config 文件 / 多隧道声明 | ngrok.yml、cloudflared config.yml 标配 | v1.7.0 起单进程多目标路由（-route PREFIX=ADDR 可重复）已支持；仍缺 config 文件载体（仅 flags+env） |
 | ④ | 自有域名绑定（CNAME+代管证书） | ngrok/zrok/localhost.run/boringproxy（4/6，多在付费档） | 仅子域+短域 |

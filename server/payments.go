@@ -26,6 +26,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -96,6 +97,8 @@ func (s *Server) cryptoPriceCents(tierID string) (int64, bool) {
 		if err == nil && n > 0 {
 			return n, true
 		}
+		// #355: same visibility as the fiat price override.
+		log.Printf("billing: TIER_%s_CRYPTO_PRICE_CENTS=%q is not a positive integer; using builtin price", strings.ToUpper(tierID), v)
 	}
 	builtin := map[string]int64{"starter": 500}
 	if n, ok := builtin[tierID]; ok {
@@ -1051,6 +1054,28 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 			markPaymentEvent("paypal:" + ev.ID)
 		}
 	}
+	// #352: refunds, reversals and customer disputes roll the entitlement
+	// back exactly like the Stripe path (DowngradeToFree + short-domain
+	// reclaim + session kick cascade).
+	switch ev.EventType {
+	case "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED",
+		"CUSTOMER.DISPUTE.CREATED", "CUSTOMER.DISPUTE.RESOLVED":
+		email := strings.ToLower(strings.TrimSpace(ev.Resource.CustomID))
+		if email == "" {
+			s.logf("billing: paypal %s (%s) has no attributable account; no rollback", ev.EventType, ev.ID)
+			break
+		}
+		if paymentEventSeen("paypal:" + ev.ID) {
+			s.logf("billing: paypal webhook replay suppressed (event %s)", ev.ID)
+			break
+		}
+		// task-46 (#350/#351) session-kick cascade lands separately; this
+		// base aligns with the Stripe rollback path (store + entitlement).
+		s.accounts.DowngradeToFree(email)
+		s.revokeShortDomainEntitlement(email)
+		markPaymentEvent("paypal:" + ev.ID)
+		s.logf("billing: paypal %s - %s rolled back to free", ev.EventType, email)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1201,6 +1226,26 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, _ := ev["payment_status"].(string)
+	// #352: refund states roll the entitlement back like the Stripe path.
+	switch status {
+	case "refunded", "expired":
+		oid, _ := ev["order_id"].(string)
+		email, _, _ := strings.Cut(oid, ":")
+		if email == "" {
+			s.logf("billing: nowpayments %s IPN has no attributable account; no rollback", status)
+			break
+		}
+		if paymentEventSeen("now:" + nowPaymentID(ev)) {
+			s.logf("billing: nowpayments IPN replay suppressed (payment %s)", nowPaymentID(ev))
+			break
+		}
+		// task-46 (#350/#351) session-kick cascade lands separately; this
+		// base aligns with the Stripe rollback path (store + entitlement).
+		s.accounts.DowngradeToFree(email)
+		s.revokeShortDomainEntitlement(email)
+		markPaymentEvent("now:" + nowPaymentID(ev))
+		s.logf("billing: nowpayments %s - %s rolled back to free", status, email)
+	}
 	if status == "finished" && nowpaymentsPaidEnough(ev) { // #3: "confirmed" is seen-on-chain, not settled
 		oid, _ := ev["order_id"].(string)
 		email, tier, _ := strings.Cut(oid, ":")
