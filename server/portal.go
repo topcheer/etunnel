@@ -51,7 +51,7 @@ const logoMark = `<svg width="26" height="26" viewBox="0 0 512 512" aria-hidden=
 // login, /me, pricing, legal, CLI auth) so analytics.ggcode.dev tracks the
 // product site. Tenant tunnel 404/502 pages deliberately omit it: those
 // render on visitor-controlled *.domain hostnames and must not report.
-const analyticsSnippet = `<script defer src="https://analytics.ggcode.dev/script.js" data-website-id="34638151-6e32-421d-bfe0-a364824539b9"></script>`
+const analyticsSnippet = `<script defer src="https://analytics.ggcode.dev/script.js" data-website-id="34638151-6e32-421d-bfe0-a364824539b9" data-do-not-track="true"></script>`
 
 const portalCSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,800;1,9..144,600&family=Nunito+Sans:ital,wght@0,400;0,600;0,700;0,800&display=swap');

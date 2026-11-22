@@ -182,8 +182,11 @@ legitimate interest in running a secure service.</li>
 holding a signed value of your email, so you stay logged in. During the
 sign-in redirect a second strictly necessary cookie (<code>et_returnto</code>,
 HttpOnly, Secure, 10 minutes) remembers where to send you back; it expires
-on its own. Both are strictly necessary; we use no analytics, advertising
-or third-party tracking cookies.</li>
+on its own. Both are strictly necessary; we use no advertising or
+third-party tracking cookies. For site statistics we run privacy-friendly,
+cookieless analytics on our own infrastructure
+(<code>analytics.ggcode.dev</code>): it sets no cookies, does no
+cross-site tracking, and honors your browser's Do-Not-Track signal.</li>
 </ul>
 <p>We do not ask for and do not store card numbers, bank details or wallet keys.
 Payment credentials are entered on the payment provider's own pages.</p>
