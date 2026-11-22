@@ -351,7 +351,10 @@ TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id
 ```
 
 `/status`, `/tunnels`, `/accounts`, `/kick <subdomain>`,
-`/tier <email> <tier>`, `/whois <subdomain>`. Only the whitelisted chat is
+`/delete <email>`, `/key <email>`, `/tier <email> <tier>`,
+`/whois <subdomain>`. Called without arguments, `/whois`, `/kick`,
+`/delete`, `/key` and `/tier` reply with a tappable list of ready-made
+commands built from live tunnels and accounts. Only the whitelisted chat is
 answered; payments push a notification to it. Long polling - no public webhook.
 
 ## Repository layout
