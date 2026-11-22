@@ -429,10 +429,14 @@ func (t *Tunnel) Close(reason string) {
 		// Enqueue bye before the signal so the writer flushes it first.
 		bye, _ := protocol.EncodeControl(&protocol.Bye{Type: protocol.MsgBye, Reason: reason})
 		// #322-3: bye travels on the priority channel - the ordinary queue
-		// can be full (256), which used to silently drop the goodbye.
+		// can be full (256), which used to silently drop the goodbye. Select
+		// order is randomized, but the write loop drains pri unconditionally
+		// and the drain budget always flushes what remains (#330-3: the
+		// budget, not select order, is the guarantee).
 		select {
 		case t.pri <- wsOut{text: true, data: bye}:
 		default:
+			// #330-6 [INFO]: unreachable in practice (pri cap 8 vs one bye).
 		}
 		close(t.closed)
 		// t.cancel() is deferred to the write loop so the reader is not
