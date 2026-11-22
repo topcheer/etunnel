@@ -190,7 +190,18 @@ export async function connect(server: string, local: string | number, opts: Opti
       try {
         m = JSON.parse(String(ev.data));
       } catch { return; }
-      if (m.type === 'welcome') { clearTimeout(to); res(m); }
+      if (m.type === 'welcome') {
+        // #322-6/#330-2: reject newer protocol versions loudly (PROTOCOL.md
+        // §3) - decoding v2 traffic as v1 produces silent garbage.
+        if (m.proto > 1) {
+          clearTimeout(to);
+          ws.close();
+          rej(Object.assign(new Error(`etunnel: server speaks protocol v${m.proto}; update the SDK`), { code: 'proto_version' }));
+          return;
+        }
+        clearTimeout(to);
+        res(m);
+      }
       else if (m.type === 'error') { clearTimeout(to); rej(Object.assign(new Error(`etunnel: server rejected: ${m.code}: ${m.message || ''}`), { code: m.code })); }
     };
   });

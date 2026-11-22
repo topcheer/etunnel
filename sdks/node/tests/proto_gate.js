@@ -1,4 +1,5 @@
 // #322-6: welcome.proto=2 must be rejected loudly (proto gate).
+(globalThis).process.argv[1] = ''; // keep the SDK's CLI auto-run block out of the test
 const { connect } = require('../etunnel.js');
 
 class FakeWS {

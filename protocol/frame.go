@@ -82,7 +82,7 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	var probe [1]byte
 	if _, err := io.ReadFull(r, probe[:]); err == nil {
 		return Frame{}, fmt.Errorf("%w: trailing bytes after frame in message", ErrBadFrame)
-	} else if err != io.EOF {
+	} else if !errors.Is(err, io.EOF) { // #330-5: wrapper-tolerant EOF check
 		return Frame{}, err
 	}
 	return f, nil
