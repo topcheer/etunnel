@@ -439,7 +439,19 @@ end
 if arg and arg[0] and arg[0]:match("etunnel%.lua$") then
 
 local server = os.getenv("ETUNNEL_SERVER") or "wss://t.etun.uk/tunnel"
-local local_port = tonumber(arg and arg[1] or os.getenv("ETUNNEL_LOCAL") or "3000")
+-- #358: ETUNNEL_LOCAL accepts port or host:port (contract). tonumber on a
+-- host:port form yielded nil and a cryptic pcall retry; parsed cleanly now
+-- (loopback forms dial 127.0.0.1; remote hosts error out).
+local local_raw = (arg and arg[1]) or os.getenv("ETUNNEL_LOCAL") or "3000"
+local port_str = local_raw:match("^%d+$")
+if not port_str then
+  local host, p = local_raw:match("^(127%.0%.0%.1|localhost):(%d+)$")
+  if not host then
+    error('etunnel: ETUNNEL_LOCAL "' .. local_raw .. '" must be a port (1-65535) or 127.0.0.1:port')
+  end
+  port_str = p
+end
+local local_port = tonumber(port_str)
 local token, subdomain = os.getenv("ETUNNEL_TOKEN"), os.getenv("ETUNNEL_SUBDOMAIN")
 
 -- supervisor: connect, wait for the disconnect, back off, retry. connect()

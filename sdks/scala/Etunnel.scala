@@ -454,7 +454,22 @@ object Main {
 
   def main(args: Array[String]): Unit = {
     val server = sys.env.getOrElse("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
-    val port = (args.headOption orElse sys.env.get("ETUNNEL_LOCAL")).getOrElse("3000").toInt
+    // #358: ETUNNEL_LOCAL accepts port or host:port (sdk/README.md contract).
+    // The SDK dials 127.0.0.1, so loopback forms map to the port and any
+    // other host gets a clean error instead of the old NumberFormatException
+    // on "127.0.0.1:3000".toInt.
+    val localRaw = (args.headOption orElse sys.env.get("ETUNNEL_LOCAL")).getOrElse("3000").trim
+    val port: Int = localRaw match {
+      case p if p.matches("\\d+") && p.toInt >= 1 && p.toInt <= 65535 => p.toInt
+      case h if h.startsWith("127.0.0.1:") || h.startsWith("localhost:") =>
+        val pp = h.substring(h.lastIndexOf(':') + 1)
+        if (pp.matches("\\d+") && pp.toInt >= 1 && pp.toInt <= 65535) pp.toInt
+        else throw new IllegalArgumentException(
+          s"etunnel: ETUNNEL_LOCAL \"$h\" must be a port (1-65535) or 127.0.0.1:port")
+      case other =>
+        throw new IllegalArgumentException(
+          s"etunnel: ETUNNEL_LOCAL \"$other\": only a port or 127.0.0.1:port / localhost:port is supported by this SDK")
+    }
     val token = sys.env.get("ETUNNEL_TOKEN").orNull
     val subdomain = sys.env.get("ETUNNEL_SUBDOMAIN").orNull
 

@@ -352,6 +352,9 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
 
     let closed = Arc::new(AtomicBool::new(false));
     let done = Arc::new(DoneBroadcaster::new());
+    // #354/#357: one agent per tunnel, shared (Arc) across every serve
+    // thread - connection reuse like Go's Transport (MaxIdleConns=100).
+    let agent = build_http_agent(std::time::Duration::from_secs(10));
     let ws2 = Arc::clone(&ws);
     let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
@@ -441,7 +444,8 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                             let st = streams.remove(&sid).unwrap();
                             let tx3 = reader_tx.clone();
                             let local3 = local.clone();
-                            thread::spawn(move || serve(tx3, local3, sid, st));
+                            let agent3 = agent.clone(); // #357: shared pool
+                            thread::spawn(move || serve(tx3, agent3, local3, sid, st));
                         }
                         0x03 => { streams.remove(&sid); }
                         _ => {}
@@ -590,7 +594,22 @@ impl Local {
     }
 }
 
-fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
+/// #354/#357: one HTTP client configuration for the tunnel's lifetime -
+/// 10s connect timeout (Go sdk/etunnel.go:215 parity; was: unbounded
+/// hang on unreachable locals), redirects pinned at 10 (ureq 2 default
+/// was 5, ureq 3 default is 10 - declared so there is no silent drift),
+/// 4xx/5xx as values. ureq 3 Agents are internally Arc'd: cloning shares
+/// the connection pool across serve threads.
+fn build_http_agent(connect_timeout: std::time::Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(connect_timeout))
+        .max_redirects(10)
+        .build()
+        .into()
+}
+
+fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, st: StreamBuf) {
     let (addr, path) = match local.resolve(&st.path) {
         Some(hit) => hit,
         None => {
@@ -608,13 +627,8 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
     };
     // #212: ureq 3 - explicit agent with http_status_as_error(false) so 4xx/
     // 5xx responses arrive as values (2.x Error::Status parity: error
-    // responses keep their headers and body). Timeouts stay at the ureq
-    // defaults (unset), matching the previous 2.x configuration.
-    
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
+    // responses keep their headers and body). #354: the agent (10s connect
+    // timeout, shared tunnel-lifetime pool) is passed in from connect().
     let mut rb = ureq::http::Request::builder()
         .method(st.method.as_str())
         .uri(format!("http://{}{}", addr, path));
@@ -850,7 +864,9 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
     let port = srv.local_addr().map_err(|e| e.to_string())?.port();
 
     let start_body = format!("{{\"redirect_uri\":\"http://127.0.0.1:{port}/callback\"}}");
-    let start = ureq::post(&format!("{base}/auth/cli/start"))
+    // #354: login gets the same 10s connect bound (ureq 2's default was 30s).
+    let agent = build_http_agent(std::time::Duration::from_secs(10));
+    let start = agent.post(&format!("{base}/auth/cli/start"))
         .header("Content-Type", "application/json")
         .send(start_body.as_bytes()) // #212: ureq 3 (send_string -> send)
         .map_err(|e| format!("etunnel: login start: {e}"))?
@@ -907,7 +923,7 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
     drop(srv);
 
     let ex_body = format!("{{\"device_code\":\"{device_code}\",\"code\":\"{code}\"}}");
-    let ex = ureq::post(&format!("{base}/auth/cli/exchange"))
+    let ex = agent.post(&format!("{base}/auth/cli/exchange"))
         .header("Content-Type", "application/json")
         .send(ex_body.as_bytes()) // #212: ureq 3 (send_string -> send)
         .map_err(|e| format!("etunnel: login exchange: {e}"))?
@@ -1023,7 +1039,7 @@ mod ureq3_serve_tests {
 
         let (tx, rx) = mpsc::channel();
         let local = Local::One(format!("127.0.0.1:{}", port));
-        let handle = std::thread::spawn(move || serve(tx, local, 1, st));
+        let handle = std::thread::spawn(move || serve(tx, build_http_agent(std::time::Duration::from_secs(10)), local, 1, st));
         (rx, handle, port)
     }
 
@@ -1102,5 +1118,56 @@ mod ureq3_serve_tests {
             _ => panic!("expected 502 res frame"),
         }
         handle.join().expect("serve thread must not panic on transport error");
+    }
+}
+
+#[cfg(test)]
+mod connect_timeout_tests {
+    // #354: the agent bounds connects - a blackhole local (non-routable
+    // 10.255.255.1:81, SYN never answered) must surface a 502 within the
+    // connect budget instead of parking serve() forever. Uses a 1s budget
+    // (same config path as the production 10s) to keep the suite fast.
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn connect_timeout_surfaces_502_on_blackhole_local() {
+        let (tx, rx) = mpsc::channel();
+        let st = StreamBuf {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            size: 0,
+        };
+        // 10.255.255.1:81: in the TEST-NG net, SYNs to it are silently
+        // dropped - exactly the hang the missing timeout caused (#354).
+        let agent = build_http_agent(std::time::Duration::from_secs(1));
+        let handle = std::thread::spawn(move || {
+            serve(tx, agent, Local::One("10.255.255.1:81".into()), 1, st)
+        });
+
+        let t0 = std::time::Instant::now();
+        let mut saw_502 = false;
+        while !saw_502 {
+            let m = rx.recv_timeout(std::time::Duration::from_secs(6))
+                .expect("serve() never answered within 6s - connect timeout missing (#354)");
+            if let Message::Text(t) = &m {
+                if t.contains("\"status\":502") {
+                    saw_502 = true;
+                }
+            }
+        }
+        let elapsed = t0.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(5),
+            "502 took {:?} - connect timeout not bounding (#354)", elapsed);
+        handle.join().expect("serve thread must not panic");
+    }
+
+    #[test]
+    fn agent_config_is_pinned() {
+        // #357: redirects pinned at 10; builder must accept the production
+        // settings (10s connect) without drift.
+        let _ = build_http_agent(std::time::Duration::from_secs(10));
     }
 }

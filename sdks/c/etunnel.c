@@ -636,8 +636,35 @@ static void reset_streams(void) {
 int main(int argc, char **argv) {
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);
-    if (argc > 1) g_local_port = atoi(argv[1]);
-    else if (getenv("ETUNNEL_LOCAL")) g_local_port = atoi(getenv("ETUNNEL_LOCAL"));
+    /* #358: ETUNNEL_LOCAL accepts a port or host:port (contract). atoi on a
+     * host:port form silently dialed port 0 - now parsed with validation and
+     * a clean error. This SDK dials 127.0.0.1, so loopback host forms map to
+     * the port; remote hosts are rejected cleanly. */
+    {
+        const char *local_raw = (argc > 1) ? argv[1] : getenv("ETUNNEL_LOCAL");
+        if (!local_raw) local_raw = "3000";
+        const char *colon = strrchr(local_raw, ':');
+        if (colon) {
+            size_t hl = (size_t)(colon - local_raw);
+            if ((hl == 9 && strncmp(local_raw, "127.0.0.1", 9) == 0)
+                || (hl == 9 && strncmp(local_raw, "localhost", 9) == 0)) {
+                char port_s[8] = {0};
+                size_t pl = strlen(colon + 1);
+                if (pl >= sizeof(port_s)) pl = sizeof(port_s) - 1;
+                memcpy(port_s, colon + 1, pl);
+                g_local_port = atoi(port_s);
+            } else {
+                fprintf(stderr, "etunnel: ETUNNEL_LOCAL host \"%.*s\" is not supported (loopback only) - use 127.0.0.1:port\n", (int)hl, local_raw);
+                exit(2);
+            }
+        } else {
+            g_local_port = atoi(local_raw);
+        }
+        if (g_local_port < 1 || g_local_port > 65535) {
+            fprintf(stderr, "etunnel: ETUNNEL_LOCAL \"%s\" must be a port (1-65535) or 127.0.0.1:port\n", local_raw);
+            exit(2);
+        }
+    }
     /* with ETUNNEL_ROUTES set, argv[1]/ETUNNEL_LOCAL may stay absent (unused) */
     parse_routes(getenv("ETUNNEL_ROUTES"));
     #ifndef ETUNNEL_DEFAULT_SERVER
