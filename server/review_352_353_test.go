@@ -48,6 +48,8 @@ func TestPayPalRefundRollsBackTier(t *testing.T) {
 	if _, err := s.activate("rf352@x.com", "pro"); err != nil {
 		t.Fatal(err)
 	}
+	// #361 cascade: a live session held by the refunded account must close.
+	sess, _ := seededSession(t, s, "rf352@x.com", "rf352-t1")
 	body := `{"id":"evt-352a","event_type":"PAYMENT.CAPTURE.REFUNDED","resource":{"custom_id":"rf352@x.com"}}`
 	r := httptest.NewRequest(http.MethodPost, "/webhooks/paypal", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -57,6 +59,11 @@ func TestPayPalRefundRollsBackTier(t *testing.T) {
 	}
 	if a, _ := s.accounts.LookupEmail("rf352@x.com"); a.Tier != "free" {
 		t.Fatalf("refund did not roll back tier: %q (#352)", a.Tier)
+	}
+	select {
+	case <-sess.closed:
+	default:
+		t.Fatal("refund rollback did not close the holder's live session (#361 cascade)")
 	}
 }
 

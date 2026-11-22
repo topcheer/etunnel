@@ -1074,6 +1074,9 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		// task-46 (#350/#351) session-kick cascade lands separately; this
 		// base aligns with the Stripe rollback path (store + entitlement).
+		if a, ok := s.accounts.LookupEmail(email); ok {
+			s.kickSessionsByAccount(a.APIKey, "entitlement revoked (refund/chargeback)")
+		}
 		s.accounts.DowngradeToFree(email)
 		s.revokeShortDomainEntitlement(email)
 		markPaymentEvent("paypal:" + ev.ID)
@@ -1244,6 +1247,9 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		}
 		// task-46 (#350/#351) session-kick cascade lands separately; this
 		// base aligns with the Stripe rollback path (store + entitlement).
+		if a, ok := s.accounts.LookupEmail(email); ok {
+			s.kickSessionsByAccount(a.APIKey, "entitlement revoked (refund/chargeback)")
+		}
 		s.accounts.DowngradeToFree(email)
 		s.revokeShortDomainEntitlement(email)
 		markPaymentEvent("now:" + nowPaymentID(ev))
