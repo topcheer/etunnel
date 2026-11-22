@@ -20,6 +20,7 @@ import (
 func (s *Server) legalHTML(w http.ResponseWriter, lang, title, updated, body string) {
 	tr := func(key string) string { return T(lang, key) }
 	tpl := `<!doctype html><html lang="` + lang + `" dir="` + langDir(lang) + `"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="` + portalFavicon + `">
 <title>` + title + ` - etunnel</title>

@@ -47,6 +47,12 @@ const portalFavicon = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/200
 
 const logoMark = `<svg width="26" height="26" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="120" fill="#242b21"/><rect x="120" y="128" width="272" height="256" rx="40" fill="none" stroke="#f6efdd" stroke-width="40"/><line x1="48" y1="256" x2="464" y2="256" stroke="#4a8f6a" stroke-width="40" stroke-linecap="round"/></svg>`
 
+// analyticsSnippet is injected into every official-site page (landing,
+// login, /me, pricing, legal, CLI auth) so analytics.ggcode.dev tracks the
+// product site. Tenant tunnel 404/502 pages deliberately omit it: those
+// render on visitor-controlled *.domain hostnames and must not report.
+const analyticsSnippet = `<script defer src="https://analytics.ggcode.dev/script.js" data-website-id="34638151-6e32-421d-bfe0-a364824539b9"></script>`
+
 const portalCSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,800;1,9..144,600&family=Nunito+Sans:ital,wght@0,400;0,600;0,700;0,800&display=swap');
 :root{--bg:#f8f3e7;--panel:#fffdf6;--panel2:#f1ead7;--line:#e6ddc6;--fg:#242b21;--dim:#7a7f6e;--green:#2c6e49;--green2:#4a8f6a;--amber:#d9783f;--red:#bf4b37;--code:#22271e}
@@ -116,6 +122,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	loginHTML := `<!doctype html>
 <html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{{T "login.title"}}</title>
@@ -239,6 +246,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 	meHTML := `<!doctype html>
 <html lang="{{.Lang}}" dir="{{.Dir}}"><head><meta charset="utf-8">
+` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{{T "me.title"}}</title>
