@@ -369,12 +369,13 @@ func (s *pgAccountStore) TryClaimDomain(email, dom string, mayClaim func(*Accoun
 	return true
 }
 
-func (s *pgAccountStore) List() []*Account {
+// List returns a value snapshot (#356 - see AccountStore.List).
+func (s *pgAccountStore) List() []Account {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*Account, 0, len(s.byKey))
+	out := make([]Account, 0, len(s.byKey))
 	for _, a := range s.byKey {
-		out = append(out, a)
+		out = append(out, *a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
 	return out
@@ -426,7 +427,7 @@ var _ interface {
 	ExpiredPaid(time.Time) []string
 	Snapshot(string) (Account, bool)
 	Mutate(string, func(*Account)) bool
-	List() []*Account
+	List() []Account
 	PruneInactive(time.Duration, time.Time) int
 	Close() error
 } = (*pgAccountStore)(nil)

@@ -37,7 +37,7 @@ type accountBackend interface {
 	// mutate also reports a persistence failure, for callers that must not
 	// answer "ok" when the write did not reach storage (#218).
 	mutate(email string, fn func(*Account)) (bool, error)
-	List() []*Account
+	List() []Account
 	PruneInactive(olderThan time.Duration, now time.Time) int
 }
 
@@ -357,12 +357,14 @@ func (s *AccountStore) mutate(email string, fn func(*Account)) (bool, error) {
 }
 
 // List returns all accounts sorted by creation time.
-func (s *AccountStore) List() []*Account {
+// List returns a value snapshot of every account (#356: the old []*Account
+// handed out live pointers that readers raced against billing/OAuth writes).
+func (s *AccountStore) List() []Account {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*Account, 0, len(s.byKey))
+	out := make([]Account, 0, len(s.byKey))
 	for _, a := range s.byKey {
-		out = append(out, a)
+		out = append(out, *a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
 	return out

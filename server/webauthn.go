@@ -390,10 +390,15 @@ func (s *Server) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) accountByCredentialID(id []byte) (*Account, bool) {
+	// #356: List hands out value copies, so match by email and re-resolve
+	// the live account through the store (mutation needs the pointer).
 	for _, a := range s.accounts.List() {
 		for _, p := range a.Passkeys {
 			if string(p.ID) == string(id) {
-				return a, true
+				if acct, ok := s.accounts.LookupEmail(a.Email); ok {
+					return acct, true
+				}
+				return nil, false
 			}
 		}
 	}
