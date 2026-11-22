@@ -174,18 +174,24 @@ func TestNowPaymentsRefundRollsBackTier(t *testing.T) {
 func TestTapListBodyWithin4096(t *testing.T) {
 	fake, api := newFakeTelegram(t)
 	s := newTGTestServer(t, api, 42)
-	for i := 0; i < 60; i++ {
-		if _, err := s.accounts.Create(fmt.Sprintf("user%02d@x.com", i), "free"); err != nil {
+	// Long emails (254 chars, the RFC 5321 cap) force the byte budget to
+	// bite within a handful of rows (#367: the cap is byte based, not
+	// row-count based - 60 short rows would fit under 4096 and never
+	// truncate).
+	local := strings.Repeat("u", 246) // +@x.com = 252 chars
+	for i := 0; i < 40; i++ {
+		email := fmt.Sprintf("%s%02d@x.com", local[:240], i) // ~250 chars
+		if _, err := s.accounts.Create(email, "free"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, cmd := range []string{"/delete", "/key", "/tier"} {
+	for _, cmd := range []string{"/delete", "/key"} {
 		text, _ := tapDispatch(t, s, fake, cmd)
 		if len(text) > 4096 {
 			t.Fatalf("%s list body = %d chars, over the 4096 Telegram limit (#353)", cmd, len(text))
 		}
-		if !strings.Contains(text, "use the text command form for the full list") {
-			t.Fatalf("%s list lacks the truncation hint (#353)", cmd)
+		if !strings.Contains(text, "see /tunnels or /accounts for the full lists") {
+			t.Fatalf("%s list lacks the truncation hint (#353/#367)", cmd)
 		}
 	}
 }

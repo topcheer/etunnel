@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,6 +57,23 @@ type TierFile map[string]Tier
 // while the Tier JSON tags are ttl/bandwidth) cannot silently zero a tier's
 // limits - an accepted-but-ignored typo used to yield "unlimited TTL and
 // bandwidth" with no error at all.
+
+// validateTierPriceEnv logs any TIER_*_PRICE_CENTS / TIER_*_CRYPTO_PRICE_CENTS
+// override that would be silently ignored by the price lookups (#370: one
+// startup line instead of per-request logging).
+func validateTierPriceEnv() {
+	for _, kv := range os.Environ() {
+		k, v, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(k, "TIER_") ||
+			(!strings.HasSuffix(k, "_PRICE_CENTS") && !strings.HasSuffix(k, "_CRYPTO_PRICE_CENTS")) {
+			continue
+		}
+		if n, err := strconv.ParseInt(v, 10, 64); err != nil || n <= 0 {
+			log.Printf("billing: %s=%q is not a positive integer - override ignored, builtin price applies", k, v)
+		}
+	}
+}
+
 func ParseTiers(b []byte) (map[string]*Tier, error) {
 	var tf TierFile
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -229,6 +249,10 @@ func (c *Config) normalize() error {
 	if c.DefaultTier == "" {
 		c.DefaultTier = "free"
 	}
+	// #370: validate price overrides once at startup - failures are logged
+	// here (once) and the per-request price lookups fall back quietly, so
+	// operators see the misconfiguration without log spam.
+	validateTierPriceEnv()
 	if c.DefaultPaidTier == "" {
 		c.DefaultPaidTier = "starter"
 	}

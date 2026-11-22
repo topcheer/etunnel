@@ -241,6 +241,29 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// validAccountEmail applies the handleRegister email rules (#368):
+// exactly one @, a local part and domain, no control characters or
+// whitespace, and the RFC 5321 254-byte total limit.
+func validAccountEmail(email string) bool {
+	if email == "" || len(email) > 254 {
+		return false
+	}
+	if strings.Count(email, "@") != 1 {
+		return false
+	}
+	local, domain, _ := strings.Cut(email, "@")
+	if local == "" || domain == "" || !strings.Contains(domain, ".") {
+		return false
+	}
+	for i := 0; i < len(email); i++ {
+		c := email[i]
+		if c <= ' ' || c == 0x7f {
+			return false // control characters and whitespace
+		}
+	}
+	return true
+}
+
 func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -271,9 +294,12 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown tier", http.StatusBadRequest)
 			return
 		}
-		// #353: validate the address the same way the portal does - a
-		// malformed or over-long email would create an un-reachable account.
-		if !strings.Contains(req.Email, "@") || len(req.Email) > 254 {
+		// #353/#368: normalize + validate the address the same way
+		// handleRegister does - lowercase/trim, refuse control characters
+		// and multi-@ junk, and cap at 254 (an un-reachable or spoofed
+		// account email can never receive a key).
+		req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+		if !validAccountEmail(req.Email) {
 			http.Error(w, "valid email required", http.StatusBadRequest)
 			return
 		}

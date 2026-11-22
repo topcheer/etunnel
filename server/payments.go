@@ -26,7 +26,6 @@ import (
 	"html"
 	"html/template"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -97,8 +96,7 @@ func (s *Server) cryptoPriceCents(tierID string) (int64, bool) {
 		if err == nil && n > 0 {
 			return n, true
 		}
-		// #355: same visibility as the fiat price override.
-		log.Printf("billing: TIER_%s_CRYPTO_PRICE_CENTS=%q is not a positive integer; using builtin price", strings.ToUpper(tierID), v)
+		// #355/#370: visibility handled once at startup (validateTierPriceEnv).
 	}
 	builtin := map[string]int64{"starter": 500}
 	if n, ok := builtin[tierID]; ok {
