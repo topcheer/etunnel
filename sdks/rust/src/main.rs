@@ -354,7 +354,7 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
     let done = Arc::new(DoneBroadcaster::new());
     // #354/#357: one agent per tunnel, shared (Arc) across every serve
     // thread - connection reuse like Go's Transport (MaxIdleConns=100).
-    let agent = build_http_agent(std::time::Duration::from_secs(10));
+    let agent = build_production_agent();
     let ws2 = Arc::clone(&ws);
     let local = local; // Local (single or routed); serve() resolves per request
     let closed2 = Arc::clone(&closed);
@@ -445,7 +445,20 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                             let tx3 = reader_tx.clone();
                             let local3 = local.clone();
                             let agent3 = agent.clone(); // #357: shared pool
-                            thread::spawn(move || serve(tx3, agent3, local3, sid, st));
+                            if !try_reserve_serve_slot() {
+                                // #369: at the in-flight serve cap - refuse
+                                // loudly (503 + RST) instead of stacking
+                                // another blocked OS thread.
+                                tx3.send(Message::Text(format!(
+                                    "{{\"type\":\"res\",\"streamId\":{sid},\"status\":503,\"headers\":{{\"Content-Type\":[\"text/plain; charset=utf-8\"]}}}}"
+                                ).into())).ok();
+                                tx3.send(frame(0x03, sid, b"")).ok();
+                                continue;
+                            }
+                            thread::spawn(move || {
+                                serve(tx3, agent3, local3, sid, st);
+                                release_serve_slot(); // #369
+                            });
                         }
                         0x03 => { streams.remove(&sid); }
                         _ => {}
@@ -600,13 +613,61 @@ impl Local {
 /// was 5, ureq 3 default is 10 - declared so there is no silent drift),
 /// 4xx/5xx as values. ureq 3 Agents are internally Arc'd: cloning shares
 /// the connection pool across serve threads.
-fn build_http_agent(connect_timeout: std::time::Duration) -> ureq::Agent {
+///
+/// #369 (MED): every serve() runs on its own OS thread, so ALL its waits
+/// must be bounded - timeout_recv_response/timeout_recv_body stop a hung
+/// or trickle-feeding local service from parking the thread forever.
+/// max_idle_connections is set explicitly (100, matching the Go Transport
+/// the comment referenced) instead of relying on defaults.
+fn build_http_agent(connect_timeout: std::time::Duration,
+                    recv_response: std::time::Duration,
+                    recv_body: std::time::Duration,
+                    per_io: std::time::Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_connect(Some(connect_timeout))
+        .timeout_recv_response(Some(recv_response))
+        .timeout_recv_body(Some(recv_body))
+        // #369: per-op wake-ups - budgets are checked at IO boundaries, so a
+        // stalled socket read must time out periodically for recv_* to fire.
+        .timeout_per_read(Some(per_io))
+        .timeout_per_write(Some(per_io))
         .max_redirects(10)
+        .max_idle_connections(100)
         .build()
         .into()
+}
+
+/// Production configuration: 10s connect / 30s response headers / 60s body
+/// (#369: Go uses ResponseHeaderTimeout=0 with cheap goroutines; Rust pays
+/// one OS thread per in-flight serve, so the reads must be bounded).
+fn build_production_agent() -> ureq::Agent {
+    build_http_agent(
+        std::time::Duration::from_secs(10),  // connect
+        std::time::Duration::from_secs(30),  // response headers
+        std::time::Duration::from_secs(60),  // body
+        std::time::Duration::from_secs(15),  // per-IO wake-up
+    )
+}
+
+/// #369 (MED): in-flight serve() threads are capped at MAX_STREAMS. serve
+/// threads spawn AFTER the stream leaves the streams map (FIN dispatch), so
+/// the map's own cap does not bound them - a hung local could otherwise
+/// accumulate one blocked OS thread per abandoned stream. Over the cap the
+/// visitor gets 503 + RST (Go reconnect.go-style refusal, not a silent drop).
+static SERVE_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Reserve an in-flight serve slot. false = at capacity: caller must 503+RST.
+fn try_reserve_serve_slot() -> bool {
+    SERVE_IN_FLIGHT
+        .fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |n| {
+            if n >= MAX_STREAMS { None } else { Some(n + 1) }
+        })
+        .is_ok()
+}
+
+fn release_serve_slot() {
+    SERVE_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, st: StreamBuf) {
@@ -679,12 +740,21 @@ fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, 
         }
     }
     let mut buf = Vec::new();
-    let mut rd = rbody.as_reader();
-    let _ = std::io::Read::take(&mut rd, BODY_CAP as u64 + 1).read_to_end(&mut buf);
+    // #369: Body::into_reader() (not as_reader()) keeps ureq's budget
+    // enforcement active - as_reader is the raw escape hatch that ignores
+    // recv timeouts.
+    let mut rd = rbody.into_reader();
+    let body_read_result =
+        std::io::Read::take(&mut rd, BODY_CAP as u64 + 1).read_to_end(&mut buf);
     if buf.len() > BODY_CAP {
         buf.truncate(BODY_CAP);
         truncated = true;
     }
+    // #369: a body-phase read error (recv_body/per-read timeout on a hung
+    // local) must NOT end as a clean FIN - the visitor would see a
+    // "complete" 200 with a truncated body (#243 M7 semantics apply
+    // mid-body too).
+    let body_incomplete = body_read_result.is_err();
 
     let hdr_json = hdrs
         .iter()
@@ -696,10 +766,14 @@ fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, 
     for chunk in buf.chunks(MAXP) {
         tx.send(frame(0x01, sid, chunk)).ok();
     }
-    if truncated {
-        // #243 M7: the visitor must see a reset, not a "complete" 200 with
-        // a missing tail.
-        eprintln!("etunnel: stream {}: response exceeded the 64MiB buffer, sending RST", sid);
+    if truncated || body_incomplete {
+        // #243 M7 + #369: the visitor must see a reset, not a "complete" 200
+        // with a missing tail (over-cap) or no tail at all (recv timeout).
+        if body_incomplete {
+            eprintln!("etunnel: stream {}: body read incomplete, sending RST", sid);
+        } else {
+            eprintln!("etunnel: stream {}: response exceeded the 64MiB buffer, sending RST", sid);
+        }
         tx.send(frame(0x03, sid, b"")).ok();
     } else {
         tx.send(frame(0x02, sid, b"")).ok();
@@ -873,7 +947,7 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
 
     let start_body = format!("{{\"redirect_uri\":\"http://127.0.0.1:{port}/callback\"}}");
     // #354: login gets the same 10s connect bound (ureq 2's default was 30s).
-    let agent = build_http_agent(std::time::Duration::from_secs(10));
+    let agent = build_production_agent();
     let start = agent.post(&format!("{base}/auth/cli/start"))
         .header("Content-Type", "application/json")
         .send(start_body.as_bytes()) // #212: ureq 3 (send_string -> send)
@@ -1047,7 +1121,7 @@ mod ureq3_serve_tests {
 
         let (tx, rx) = mpsc::channel();
         let local = Local::One(format!("127.0.0.1:{}", port));
-        let handle = std::thread::spawn(move || serve(tx, build_http_agent(std::time::Duration::from_secs(10)), local, 1, st));
+        let handle = std::thread::spawn(move || serve(tx, build_production_agent(), local, 1, st));
         (rx, handle, port)
     }
 
@@ -1150,7 +1224,12 @@ mod connect_timeout_tests {
         };
         // 10.255.255.1:81: in the TEST-NG net, SYNs to it are silently
         // dropped - exactly the hang the missing timeout caused (#354).
-        let agent = build_http_agent(std::time::Duration::from_secs(1));
+        let agent = build_http_agent(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(1), // #369 recv_response budget
+            std::time::Duration::from_secs(2), // #369 recv_body budget
+            std::time::Duration::from_millis(300), // per-IO wake-up
+        );
         let handle = std::thread::spawn(move || {
             serve(tx, agent, Local::One("10.255.255.1:81".into()), 1, st)
         });
@@ -1176,6 +1255,152 @@ mod connect_timeout_tests {
     fn agent_config_is_pinned() {
         // #357: redirects pinned at 10; builder must accept the production
         // settings (10s connect) without drift.
-        let _ = build_http_agent(std::time::Duration::from_secs(10));
+        let _ = build_http_agent(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(15),
+        );
+    }
+}
+
+#[cfg(test)]
+mod serve_bounds_tests {
+    // #369 (MED) regressions: recv timeouts + in-flight serve cap.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+
+    // local that accepts, reads the request head, sends response HEADERS
+    // but never the promised body ("head only, no body returned")
+    fn head_only_server() -> u16 {
+        let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = ln.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = ln.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = c.read(&mut buf);
+            let _ = c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 4096\r\n\r\n");
+            let _ = c.flush();
+            std::thread::sleep(std::time::Duration::from_secs(30)); // body never comes
+        });
+        port
+    }
+
+    // local that accepts and never answers at all ("returns nothing at all")
+    fn silent_server() -> u16 {
+        let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = ln.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut c, _) = ln.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = c.read(&mut buf);
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            drop(c);
+        });
+        port
+    }
+
+    fn run_serve_collect(port: u16, recv_response: u64, recv_body: u64) -> std::time::Duration {
+        let (tx, rx) = mpsc::channel();
+        let st = StreamBuf {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            size: 0,
+        };
+        let agent = build_http_agent(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(recv_response),
+            std::time::Duration::from_secs(recv_body),
+            std::time::Duration::from_millis(300),
+        );
+        let h = std::thread::spawn(move || {
+            serve(tx, agent, Local::One(format!("127.0.0.1:{}", port)), 1, st)
+        });
+        let t0 = std::time::Instant::now();
+        let mut saw_rst = false;
+        while !saw_rst {
+            let m = rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("serve() never ended - body timeout missing (#369)");
+            if let Message::Binary(ref b) = m {
+                if b.first() == Some(&0x03) {
+                    saw_rst = true;
+                }
+            }
+        }
+        h.join().expect("serve thread must exit after body timeout (#369)");
+        t0.elapsed()
+    }
+
+    fn run_serve(port: u16, recv_response: u64, recv_body: u64) -> std::time::Duration {
+        let (tx, rx) = mpsc::channel();
+        let st = StreamBuf {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            size: 0,
+        };
+        let agent = build_http_agent(
+            std::time::Duration::from_secs(1),              // connect
+            std::time::Duration::from_secs(recv_response),  // #369 recv_response
+            std::time::Duration::from_secs(recv_body),      // #369 recv_body
+            std::time::Duration::from_millis(300),          // per-IO wake-up
+        );
+        let h = std::thread::spawn(move || {
+            serve(tx, agent, Local::One(format!("127.0.0.1:{}", port)), 1, st)
+        });
+        let t0 = std::time::Instant::now();
+        let mut saw_502 = false;
+        while !saw_502 {
+            let m = rx.recv_timeout(std::time::Duration::from_secs(5))
+                .expect("serve() never answered - recv timeouts missing (#369)");
+            if let Message::Text(ref t) = m {
+                if t.contains("\"status\":502") {
+                    saw_502 = true;
+                }
+            }
+        }
+        h.join().expect("serve thread must exit after timeout (#369)");
+        t0.elapsed()
+    }
+
+    #[test]
+    fn head_only_local_body_timeout_ends_in_rst() {
+        // #369: res(200) headers arrive, the body never does - the visitor
+        // must get an RST (not a clean FIN) and the serve thread must exit
+        // inside the recv_body budget.
+        let port = head_only_server();
+        let d = run_serve_collect(port, 2, 1);
+        assert!(d < std::time::Duration::from_secs(4),
+            "recv_body timeout not bounding: {:?}", d);
+        // run_serve_collect already asserts the exchange terminated with RST
+    }
+
+    #[test]
+    fn silent_local_502_within_recv_response_budget() {
+        let port = silent_server();
+        let d = run_serve(port, 1, 30); // recv_response budget fires first here
+        assert!(d < std::time::Duration::from_secs(4),
+            "recv_response timeout not bounding: {:?}", d);
+    }
+
+    #[test]
+    fn in_flight_serve_cap_reserves_and_releases() {
+        // #369: the cap helper must refuse at MAX_STREAMS and release cleanly.
+        let mut reserved = 0usize;
+        while try_reserve_serve_slot() {
+            reserved += 1;
+            assert!(reserved <= MAX_STREAMS, "cap exceeded the stream limit");
+        }
+        assert_eq!(reserved, MAX_STREAMS, "cap must refuse exactly at MAX_STREAMS");
+        for _ in 0..reserved {
+            release_serve_slot();
+        }
+        assert!(try_reserve_serve_slot(), "release must re-open the slot");
+        release_serve_slot();
     }
 }
