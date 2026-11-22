@@ -182,27 +182,36 @@ func (s *Server) dispatchTelegramUpdate(ctx context.Context, u any) int {
 // so a large registry cannot blow up the Telegram client UI.
 const maxTappableRows = 24
 
-// tapRows renders rows as a single-column keyboard capped at
-// maxTappableRows and returns the TEXT body to send alongside it (#353:
-// Telegram rejects messages over 4096 chars - the text is truncated in
-// sync with the keyboard, one line per row, plus a header/tail allowance).
+// telegramMsgLimit is Telegram's hard message length cap.
+const telegramMsgLimit = 4096
+
+// tapRows renders rows as a single-column keyboard and returns the TEXT
+// body to send alongside it, truncated to the Telegram 4096-char message
+// budget (#367: rows can be long - a 254-char email - so the cap is byte
+// based, not row-count based). The tail reports the true omitted count and
+// points at /tunnels//accounts for the full lists.
 func tapRows(rows []string) ([][]string, string) {
-	truncated := len(rows) > maxTappableRows
-	if truncated {
-		rows = rows[:maxTappableRows]
-	}
-	kb := make([][]string, 0, len(rows)+1)
+	kept := 0
+	var b strings.Builder
+	// Reserve room for the tail line (~80 bytes covers the widest count).
+	const tailAllowance = 96
 	for _, r := range rows {
+		if b.Len()+len(r)+1 > telegramMsgLimit-tailAllowance {
+			break
+		}
+		b.WriteString(r)
+		b.WriteByte('\n')
+		kept++
+	}
+	omitted := len(rows) - kept
+	if omitted > 0 {
+		fmt.Fprintf(&b, "…and %d more — see /tunnels or /accounts for the full lists", omitted)
+	}
+	kb := make([][]string, 0, kept+1)
+	for _, r := range rows[:kept] {
 		kb = append(kb, []string{r})
 	}
 	kb = append(kb, []string{"📊 Status", "❓ Help"}) // back to the main menu
-	var b strings.Builder
-	for _, r := range rows {
-		fmt.Fprintf(&b, "%s\n", r)
-	}
-	if truncated {
-		fmt.Fprintf(&b, "…and %d more — use the text command form for the full list", len(rows))
-	}
 	return kb, b.String()
 }
 
@@ -232,18 +241,18 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 		}
 		verb := strings.TrimPrefix(cmd, "/") // whois | kick
 		rows := make([]string, 0, len(sessions))
-		var owners strings.Builder
 		for _, sess := range sessions {
 			owner := "anonymous"
 			if sess.account != nil {
-				owner = sess.account.Email
+				owner = " (" + sess.account.Email + ")"
 			}
-			tap := cmd + " " + sess.Subdomain()
-			rows = append(rows, tap)
-			fmt.Fprintf(&owners, "%s — %s\n", tap, owner)
+			// #367: single merged list - the tap row itself carries the
+			// owner summary; no second owners block (double-write + the
+			// two lists could disagree past truncation).
+			rows = append(rows, cmd+" "+sess.Subdomain()+owner)
 		}
 		kb, body := tapRows(rows)
-		return "tap a tunnel to " + verb + ":\n" + owners.String() + body, kb
+		return "tap a tunnel to " + verb + ":\n" + body, kb
 	case "/delete", "/key":
 		accts := s.accounts.List()
 		if len(accts) == 0 {
