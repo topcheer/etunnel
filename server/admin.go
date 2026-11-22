@@ -297,8 +297,13 @@ func (s *Server) handleAdminAccountDelete(w http.ResponseWriter, r *http.Request
 	key := strings.TrimPrefix(r.URL.Path, "/admin/accounts/")
 	// #350: cascade-close the account's live tunnels (reason readable).
 	s.kickSessionsByAccount(key, "account deleted")
-	if !s.accounts.Delete(key) {
-		http.Error(w, "not found", http.StatusNotFound)
+	if err := s.accounts.DeleteWithError(key); err != nil {
+		if errors.Is(err, errAccountNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			// #366: the account would resurrect after restart.
+			http.Error(w, "delete failed; may reappear after restart", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

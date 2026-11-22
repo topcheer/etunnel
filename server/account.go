@@ -28,6 +28,9 @@ type accountBackend interface {
 	LookupEmail(email string) (*Account, bool)
 	FindByProvider(provider, subject string) (*Account, bool)
 	Delete(key string) bool
+	// DeleteWithError deletes and reports persistence failure (#366: a
+	// failed delete resurrected accounts on restart while callers 200'd).
+	DeleteWithError(key string) error
 	ResetKey(email string) (string, bool)
 	CancelSubscription(email string) bool
 	DowngradeToFree(email string) bool
@@ -239,19 +242,30 @@ func (s *AccountStore) Snapshot(key string) (Account, bool) {
 
 // Delete removes an account by API key.
 func (s *AccountStore) Delete(key string) bool {
+	return s.DeleteWithError(key) == nil
+}
+
+// DeleteWithError deletes the account and surfaces persistence failure
+// (#366): memory is mutated first (the operator can reconcile), but the
+// error tells the caller the account will reappear on restart.
+func (s *AccountStore) DeleteWithError(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a, ok := s.byKey[key]
 	if !ok {
-		return false
+		return errAccountNotFound
 	}
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
 	if err := s.saveLocked(); err != nil {
 		// memory is already mutated; surface so operators can reconcile
+		return fmt.Errorf("persist delete for %s: %w", a.Email, err)
 	}
-	return true
+	return nil
 }
+
+// errAccountNotFound is returned by DeleteWithError for unknown keys.
+var errAccountNotFound = errors.New("etunnel: account not found")
 
 // ResetKey issues a fresh API key for the account (identity/tier preserved).
 func (s *AccountStore) ResetKey(email string) (string, bool) {

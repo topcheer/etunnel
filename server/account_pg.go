@@ -238,17 +238,27 @@ func (s *pgAccountStore) FindByProvider(provider, subject string) (*Account, boo
 }
 
 func (s *pgAccountStore) Delete(key string) bool {
+	return s.DeleteWithError(key) == nil
+}
+
+// DeleteWithError deletes and reports the Exec failure (#366): on failure
+// the in-memory account is NOT removed, so the 5s loadAll poll cannot
+// resurrect a row that was never deleted.
+func (s *pgAccountStore) DeleteWithError(key string) error {
 	s.mu.Lock()
 	a, ok := s.byKey[key]
 	if !ok {
 		s.mu.Unlock()
-		return false
+		return errAccountNotFound
+	}
+	if _, err := s.pool.Exec(context.Background(), `DELETE FROM accounts WHERE api_key=$1`, key); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("pg delete %s: %w", key, err)
 	}
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
 	s.mu.Unlock()
-	_, _ = s.pool.Exec(context.Background(), `DELETE FROM accounts WHERE api_key=$1`, key)
-	return true
+	return nil
 }
 
 func (s *pgAccountStore) ResetKey(email string) (string, bool) {

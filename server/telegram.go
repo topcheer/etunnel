@@ -430,8 +430,9 @@ func (s *Server) handleAdminCommand(text string) string {
 			return "no such account: " + rest
 		}
 		s.kickSessionsByAccount(acct.APIKey, "account deleted by admin")
-		if !s.accounts.Delete(acct.APIKey) {
-			return "delete failed"
+		if err := s.accounts.DeleteWithError(acct.APIKey); err != nil {
+			// #366: the account may resurrect after restart - tell the admin.
+			return "delete failed: " + err.Error()
 		}
 		return "deleted " + acct.Email
 	case "/tunnel":

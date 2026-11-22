@@ -764,9 +764,20 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		Type string `json:"type"`
 		Data struct {
 			Object struct {
-				PaymentStatus string `json:"payment_status"`
-				ReceiptEmail  string `json:"receipt_email"`
-				Metadata      struct {
+				PaymentStatus  string `json:"payment_status"`
+				ReceiptEmail   string `json:"receipt_email"`
+				Amount         int64  `json:"amount"`
+				AmountRefunded int64  `json:"amount_refunded"`
+				// Dispute events carry a Dispute object: its own (usually
+				// empty) metadata, the disputed charge id, and the outcome.
+				Charge         string `json:"charge"`
+				DisputeOutcome struct {
+					Outcome string `json:"outcome"` // won | lost | null
+				} `json:"outcome"`
+				DisputedTransactions []struct {
+					SellerTransactionID string `json:"seller_transaction_id"`
+				} `json:"disputed_transactions"`
+				Metadata struct {
 					Email string `json:"email"`
 					Tier  string `json:"tier"`
 				} `json:"metadata"`
@@ -793,13 +804,51 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			markPaymentEvent("stripe:" + ev.ID)
 		}
 	}
-	// #295: refunds and chargebacks roll the entitlement back exactly like
-	// the tier reaper does - the money is gone, the paid quota must go too.
-	if ev.Type == "charge.refunded" || ev.Type == "charge.dispute.created" {
+	// #295/#364: refunds and chargebacks roll the entitlement back exactly
+	// like the tier reaper does - but only when the money is actually gone
+	// (full refund; dispute lost or refunded on chargeback).
+	if ev.Type == "charge.refunded" || ev.Type == "charge.dispute.created" ||
+		ev.Type == "charge.dispute.closed" {
+		// #364: dispute.created carries a DISPUTE object (no receipt_email,
+		// metadata usually empty) - attribute via data.object.charge by
+		// fetching the charge (also covers charge.dispute.closed, which is
+		// a Dispute too).
 		email := ev.Data.Object.Metadata.Email
 		if email == "" {
 			email = strings.ToLower(strings.TrimSpace(ev.Data.Object.ReceiptEmail))
 		}
+		if email == "" && ev.Data.Object.Charge != "" {
+			if ch, err := s.stripeReq("GET", "/v1/charges/"+url.PathEscape(ev.Data.Object.Charge), nil); err == nil {
+				if meta, ok := ch["metadata"].(map[string]any); ok {
+					email, _ = meta["email"].(string)
+				}
+				if email == "" {
+					email, _ = ch["receipt_email"].(string)
+				}
+			} else {
+				s.logf("billing: stripe dispute charge lookup failed: %v", err)
+			}
+			email = strings.ToLower(strings.TrimSpace(email))
+		}
+
+		// #364: partial refunds keep the entitlement - only
+		// amount_refunded >= amount means the money is fully gone.
+		if ev.Type == "charge.refunded" &&
+			ev.Data.Object.Amount > 0 && ev.Data.Object.AmountRefunded < ev.Data.Object.Amount {
+			s.logf("billing: stripe partial refund (%d/%d cents) - keeping entitlement",
+				ev.Data.Object.AmountRefunded, ev.Data.Object.Amount)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// #364/#365: a closed dispute where the MERCHANT won means the money
+		// stays - no rollback.
+		if ev.Type == "charge.dispute.closed" && ev.Data.Object.DisputeOutcome.Outcome == "won" {
+			s.logf("billing: stripe dispute won by merchant - keeping entitlement")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		switch {
 		case email == "":
 			s.logf("billing: stripe %s (%s) has no attributable email; no rollback", ev.Type, ev.ID)
@@ -1033,6 +1082,18 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		EventType string `json:"event_type"`
 		Resource  struct {
 			CustomID string `json:"custom_id"`
+			// #365: REFUND resources link the original capture; DISPUTE
+			// resources carry disputed transactions and the outcome.
+			Links []struct {
+				Rel string `json:"rel"`
+				H   string `json:"href"`
+			} `json:"links"`
+			DisputedTransactions []struct {
+				SellerTransactionID string `json:"seller_transaction_id"`
+			} `json:"disputed_transactions"`
+			DisputeOutcome struct {
+				Outcome string `json:"outcome"` // buyer_favor | seller_favor | resolved | null
+			} `json:"dispute_outcome"`
 		} `json:"resource"`
 	}
 	if err := json.Unmarshal(body, &ev); err != nil {
@@ -1063,26 +1124,91 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 	switch ev.EventType {
 	case "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED",
 		"CUSTOMER.DISPUTE.CREATED", "CUSTOMER.DISPUTE.RESOLVED":
-		email := strings.ToLower(strings.TrimSpace(ev.Resource.CustomID))
-		if email == "" {
-			s.logf("billing: paypal %s (%s) has no attributable account; no rollback", ev.EventType, ev.ID)
-			break
-		}
 		if paymentEventSeen("paypal:" + ev.ID) {
 			s.logf("billing: paypal webhook replay suppressed (event %s)", ev.ID)
 			break
 		}
-		// task-46 (#350/#351) session-kick cascade lands separately; this
-		// base aligns with the Stripe rollback path (store + entitlement).
-		if a, ok := s.accounts.LookupEmail(email); ok {
-			s.kickSessionsByAccount(a.APIKey, "entitlement revoked (refund/chargeback)")
+		// #365: RESOLVED only rolls back when the buyer won / was refunded;
+		// a merchant win keeps the money AND the entitlement.
+		if ev.EventType == "CUSTOMER.DISPUTE.RESOLVED" &&
+			ev.Resource.DisputeOutcome.Outcome != "buyer_favor" &&
+			ev.Resource.DisputeOutcome.Outcome != "resolved" {
+			s.logf("billing: paypal dispute resolved in merchant favor (%s) - keeping entitlement",
+				ev.Resource.DisputeOutcome.Outcome)
+			break
+		}
+		// #365: attribution is event-shape specific. custom_id may ride the
+		// resource directly (older integrations); otherwise REFUNDED's
+		// resource is a REFUND whose capture is linked via links[rel=up],
+		// and DISPUTES are attributed via disputed_transactions reverse
+		// lookup - if neither resolves, log and skip (never guess).
+		email := s.paypalRollbackEmail(ev.Resource.CustomID, ev.Resource.Links, ev.Resource.DisputedTransactions)
+		if email == "" {
+			s.logf("billing: paypal %s (%s) could not be attributed to an account; no rollback", ev.EventType, ev.ID)
+			break
 		}
 		s.accounts.DowngradeToFree(email)
 		s.revokeShortDomainEntitlement(email)
+		if a, ok := s.accounts.LookupEmail(email); ok {
+			s.kickSessionsByAccount(a.APIKey, "entitlement revoked (refund/chargeback)")
+		}
 		markPaymentEvent("paypal:" + ev.ID)
 		s.logf("billing: paypal %s - %s rolled back to free", ev.EventType, email)
 	}
+
 	w.WriteHeader(http.StatusOK)
+}
+
+// paypalEventResource mirrors the subset of PayPal event resources the
+// rollback paths need (refund links, dispute transactions, outcome).
+type paypalEventResource struct {
+	CustomID string `json:"custom_id"`
+	Links    []struct {
+		Rel string `json:"rel"`
+		H   string `json:"href"`
+	} `json:"links"`
+	DisputedTransactions []struct {
+		SellerTransactionID string `json:"seller_transaction_id"`
+	} `json:"disputed_transactions"`
+	DisputeOutcome struct {
+		Outcome string `json:"outcome"`
+	} `json:"dispute_outcome"`
+}
+
+// paypalRollbackEmail attributes a refund/dispute event to the charged
+// account (#365): custom_id may ride the resource (older integrations);
+// otherwise the refund resource links the original capture via
+// links[rel=up] (href ends in /captures/<id>), and disputes are attributed
+// via disputed_transactions[].seller_transaction_id. Returns "" when
+// neither resolves - callers log and skip rather than guess.
+func (s *Server) paypalRollbackEmail(customID string, links []struct {
+	Rel string `json:"rel"`
+	H   string `json:"href"`
+}, disputedTx []struct {
+	SellerTransactionID string `json:"seller_transaction_id"`
+}) string {
+	if email := strings.ToLower(strings.TrimSpace(customID)); email != "" {
+		return email
+	}
+	for _, l := range links {
+		if l.Rel != "up" {
+			continue
+		}
+		seg := l.H[strings.LastIndexByte(l.H, '/')+1:]
+		if cap, err := s.paypalCaptureOrder(seg); err == nil {
+			if email, _ := paypalOrderMeta(cap); email != "" {
+				return email
+			}
+		}
+	}
+	for _, dt := range disputedTx {
+		if cap, err := s.paypalCaptureOrder(dt.SellerTransactionID); err == nil {
+			if email, _ := paypalOrderMeta(cap); email != "" {
+				return email
+			}
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -1232,9 +1358,11 @@ func (s *Server) handleNowPaymentsIPN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, _ := ev["payment_status"].(string)
-	// #352: refund states roll the entitlement back like the Stripe path.
+	// #352/#365: refund states roll the entitlement back like the Stripe
+	// path. "expired" is NOT here: it means an UNPAID invoice lapsed - no
+	// money came back, so an existing paid entitlement must survive.
 	switch status {
-	case "refunded", "expired":
+	case "refunded":
 		oid, _ := ev["order_id"].(string)
 		email, _, _ := strings.Cut(oid, ":")
 		if email == "" {
