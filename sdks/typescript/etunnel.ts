@@ -144,6 +144,18 @@ export async function connect(server: string, local: string | number, opts: Opti
 
   const { host, port } = pickHostPort(local);
   const ws = opts.wsFactory ? opts.wsFactory(server) : new WebSocket(server, 'etunnel-v1');
+  // #337-1 (HIGH): handshake-failure paths (proto gate, welcome timeout,
+  // error frames) close the socket asynchronously; the close handler and
+  // the teardown path touch this state, so it must exist before the ws
+  // object does - declaration order used to TDZ-crash the embedder.
+  const streams = new Map<number, { req: ReqMsg; body: Buffer[]; size: number }>();
+  let closed = false;
+  let lastPong = Date.now(); // #243 M3: last pong received from the server
+  let lastActivity = Date.now(); // #243 M3: last inbound ws message of any kind
+
+  // #243 M3: single teardown path shared by explicit close() and the ping
+  // timeout below, so the pinger never outlives the socket.
+  let pinger: ReturnType<typeof setInterval> | null = null;
   // #243 L3: a transport drop (no bye, no ping timeout) must still reach
   // the embedder - closeTunnel is a no-op when already closed.
   ws.onclose = () => { if (!closed) closeTunnel('connection lost'); };
@@ -154,7 +166,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.onerror = () => rej(new Error('ws: connect failed'));
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.6.11', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.7.29', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
     const to = setTimeout(() => {
@@ -185,16 +197,9 @@ export async function connect(server: string, local: string | number, opts: Opti
     };
   });
 
-  const streams = new Map<number, { req: ReqMsg; body: Buffer[]; size: number }>();
-  let closed = false;
-  let lastPong = Date.now(); // #243 M3: last pong received from the server
-  let lastActivity = Date.now(); // #243 M3: last inbound ws message of any kind
 
   function trySend(buf: Buffer): void { try { ws.send(buf); } catch { /* gone */ } }
 
-  // #243 M3: single teardown path shared by explicit close() and the ping
-  // timeout below, so the pinger never outlives the socket.
-  let pinger: ReturnType<typeof setInterval> | null = null;
   function closeTunnel(reason: string): void {
     if (closed) return;
     closed = true;
