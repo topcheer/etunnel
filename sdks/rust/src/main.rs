@@ -128,6 +128,8 @@ fn json_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
 }
 
+
+
 fn extract_str(json: &str, key: &str) -> Option<String> {
     let pat = format!("\"{}\":", key);
     let i = json.find(&pat)? + pat.len();
@@ -324,6 +326,18 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             let t = t.as_str();
             if let Some(u) = extract_str(t, "url") {
                 if t.contains("\"type\":\"welcome\"") {
+                    // #322-6: reject newer protocol versions loudly
+                    // (PROTOCOL.md §3) - decoding v2 traffic as v1 produces
+                    // silent garbage. A missing proto counts as v1 (parity
+                    // with the Go SDK's gate).
+                    if let Some(p) = extract_num(t, "proto") {
+                        if p > 1.0 {
+                            return Err(format!(
+                                "etunnel: server speaks protocol v{}; update the SDK",
+                                p
+                            ));
+                        }
+                    }
                     url = u;
                     resume_token = extract_str(t, "resumeToken").unwrap_or_default();
                     break;
@@ -947,5 +961,26 @@ mod login_e2e {
         assert_eq!(creds.api_token, "tok-123");
         assert_eq!(creds.subdomains, vec!["my-sub"]);
         assert_eq!(creds.plan, "pro");
+    }
+}
+
+#[cfg(test)]
+mod proto_gate_tests {
+    use super::extract_num;
+
+    #[test]
+    fn extract_num_parses_welcome_proto() {
+        assert_eq!(extract_num("{\"type\":\"welcome\",\"proto\":2,\"url\":\"https://x\"}", "proto"), Some(2.0));
+        assert_eq!(extract_num("{\"type\":\"welcome\",\"proto\":1}", "proto"), Some(1.0));
+        assert_eq!(extract_num("{\"type\":\"welcome\",\"url\":\"https://x\"}", "proto"), None);
+    }
+
+    #[test]
+    fn proto_gate_rejects_above_v1() {
+        // mirrors the gate in connect_local: a missing proto counts as v1
+        let gate = |p: Option<f64>| p.unwrap_or(1.0) > 1.0;
+        assert!(gate(extract_num("{\"type\":\"welcome\",\"proto\":2}", "proto")));
+        assert!(!gate(extract_num("{\"type\":\"welcome\",\"proto\":1}", "proto")));
+        assert!(!gate(extract_num("{\"type\":\"welcome\"}", "proto")));
     }
 }

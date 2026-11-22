@@ -53,6 +53,12 @@ func TestServeUpgradeVisitorEarlyExitReclaims(t *testing.T) {
 	// The visitor hangs up; the app never sends a byte (push-only WS).
 	peer.Close()
 
+	// #322-1 (M1): the visitor's early exit now surfaces to the SDK as a
+	// FIN (half close), not an RST. The SDK acknowledges by finishing its
+	// own direction - its FIN arrives over the tunnel as a KindFin frame
+	// (injected here through the session dispatcher), unblocking the splice.
+	st.sess.routeFrame(protocol.Frame{Kind: protocol.KindFin, StreamID: 9}, 0)
+
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

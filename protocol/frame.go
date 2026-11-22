@@ -76,5 +76,14 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 	}
+	// #322-4: a frame must consume its whole WS message - trailing bytes
+	// mean combined or corrupted framing, which used to be silently
+	// truncated (the trailing data just vanished).
+	var probe [1]byte
+	if _, err := io.ReadFull(r, probe[:]); err == nil {
+		return Frame{}, fmt.Errorf("%w: trailing bytes after frame in message", ErrBadFrame)
+	} else if err != io.EOF {
+		return Frame{}, err
+	}
 	return f, nil
 }

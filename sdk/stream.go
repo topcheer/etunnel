@@ -63,6 +63,10 @@ func (st *clientStream) pump() {
 			switch f.Kind {
 			case protocol.KindData:
 				if _, err := st.reqPw.Write(f.Payload); err != nil {
+					// #322-7: the local consumer gave up on this stream - send an
+					// RST so the server stops feeding a dead stream instead of
+					// finishing silently and leaking the stream server-side.
+					_ = st.t.sendRst(st.id)
 					st.finish()
 					return
 				}
@@ -336,7 +340,15 @@ func (t *Tunnel) serveLocalUpgrade(st *clientStream, resp *http.Response) {
 	go func() {
 		defer func() { done <- struct{}{} }()
 		_, _ = io.Copy(rwc, st.reqPr)
-		_ = rwc.Close()
+		// #322-1 (M1): visitor FIN half-closes - close our write side toward
+		// the local service (the FIN crossed upstream) and keep the reverse
+		// direction live. rwc.Close() here truncated local->visitor bytes in
+		// flight and tore the stream down mid-upgrade.
+		if cw, ok := rwc.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		} else {
+			_ = rwc.Close()
+		}
 	}()
 
 	// local -> external.
@@ -358,9 +370,12 @@ func (t *Tunnel) serveLocalUpgrade(st *clientStream, resp *http.Response) {
 		}
 	}()
 
+	<-done // first direction finished: its FIN crossed, the other side may stream
+	// #322-1 (M1): wait for the second direction instead of aborting the
+	// whole stream on the first EOF - PROTOCOL.md §5: FIN half closes; the
+	// stream is dead only when both directions have completed.
 	<-done
-	st.abort()
-	<-done
+	st.finish()
 }
 
 // localErrorPage renders the geek-chic 502 page served when the local app is

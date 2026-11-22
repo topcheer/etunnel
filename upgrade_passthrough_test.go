@@ -299,3 +299,239 @@ func drain(br *bufio.Reader) []byte {
 	}
 	return out
 }
+
+// #322-1 (M1): a visitor FIN half-closes the stream - the reverse direction
+// (local -> visitor) must keep flowing after the FIN, and only finish once
+// both directions completed. The old code aborted the whole stream on the
+// first EOF, truncating local bytes in flight.
+func TestUpgradeHalfCloseKeepsReverseFlow(t *testing.T) {
+	local, localGotCh := fakeLocalHalfClose(t)
+
+	srv, err := server.New(server.Config{
+		Domain:       "t.local",
+		Addr:         "127.0.0.1:1",
+		AccountsFile: filepath.Join(t.TempDir(), "a.json"),
+		TLS:          server.TLSConfig{Mode: server.TLSModeHTTP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: hostNormalizer("t.local", srv.Handler()), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second}
+	go hs.Serve(ln)
+	t.Cleanup(func() { hs.Close() })
+
+	controlURL := "ws://" + ln.Addr().String() + "/tunnel"
+	cli := &http.Client{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, controlURL, &websocket.DialOptions{HTTPClient: cli, CompressionMode: websocket.CompressionDisabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+	hello, _ := json.Marshal(map[string]any{"type": "hello", "proto": 1, "client": "halfclose"})
+	if err := ws.Write(ctx, websocket.MessageText, hello); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := ws.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var welcome struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &welcome); err != nil {
+		t.Fatalf("welcome: %v (%s)", err, raw)
+	}
+	sub := strings.TrimPrefix(strings.TrimPrefix(welcome.URL, "http://"), "https://")
+
+	streams := map[uint32]net.Conn{}
+	finSeen := make(chan struct{}, 1)
+	go func() {
+		for {
+			typ, data, err := ws.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if typ == websocket.MessageText {
+				var msg map[string]any
+				json.Unmarshal(data, &msg)
+				switch msg["type"] {
+				case "req":
+					id := uint32(msg["streamId"].(float64))
+					c, err := net.Dial("tcp", local)
+					if err != nil {
+						return
+					}
+					streams[id] = c
+					fmt.Fprintf(c, "GET /raw HTTP/1.1\r\nHost: l\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: cmVwcm8=\r\nSec-WebSocket-Version: 13\r\n\r\n")
+					br := bufio.NewReader(c)
+					resp, err := http.ReadResponse(br, nil)
+					if err != nil {
+						return
+					}
+					hdrs := map[string][]string{}
+					for k, v := range resp.Header {
+						hdrs[k] = v
+					}
+					res, _ := json.Marshal(map[string]any{"type": "res", "streamId": id, "status": resp.StatusCode, "headers": hdrs})
+					ws.Write(context.Background(), websocket.MessageText, res)
+					go func(id uint32, c net.Conn, leftover []byte) {
+						if len(leftover) > 0 {
+							ws.Write(context.Background(), websocket.MessageBinary, frameWire(protocol.KindData, id, leftover))
+						}
+						buf := make([]byte, 4096)
+						for {
+							n, err := c.Read(buf)
+							if n > 0 {
+								if werr := ws.Write(context.Background(), websocket.MessageBinary, frameWire(protocol.KindData, id, buf[:n])); werr != nil {
+									return
+								}
+							}
+							if err != nil {
+								ws.Write(context.Background(), websocket.MessageBinary, frameWire(protocol.KindFin, id, nil))
+								return
+							}
+						}
+					}(id, c, drain(br))
+				case "ping":
+					pon, _ := json.Marshal(map[string]any{"type": "pong", "ts": msg["ts"]})
+					ws.Write(context.Background(), websocket.MessageText, pon)
+				}
+			} else {
+				kind := data[0]
+				id := binary.BigEndian.Uint32(data[1:5])
+				n := binary.BigEndian.Uint32(data[5:9])
+				payload := data[9 : 9+n]
+				if c, ok := streams[id]; ok {
+					if kind == protocol.KindData {
+						c.Write(payload)
+					} else if kind == protocol.KindFin {
+						// #322-1: half close - the "SDK" half of this harness
+						// closes the WRITE side of the local connection (exactly
+						// what serveLocalUpgrade does via CloseWrite on its rwc):
+						// the local app observes EOF, sends its last data, and
+						// only then does the SDK cross the FIN upstream.
+						t.Logf("pump: FIN for sid %d - CloseWrite toward local (half close)", id)
+						if tc, ok := c.(*net.TCPConn); ok {
+							_ = tc.CloseWrite()
+						}
+						time.Sleep(150 * time.Millisecond) // let post-FIN local data drain upstream first
+						ws.Write(context.Background(), websocket.MessageBinary, frameWire(protocol.KindFin, id, nil))
+						select {
+						case finSeen <- struct{}{}:
+						default:
+						}
+					} else if kind == protocol.KindRst {
+						c.Close()
+						delete(streams, id)
+					}
+				}
+			}
+		}
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /raw HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: aGFsZg==\r\nSec-WebSocket-Version: 13\r\n\r\n", sub)
+	conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("handshake read: %v", err)
+	}
+	if resp.StatusCode != 101 {
+		t.Fatalf("expected 101, got %d", resp.StatusCode)
+	}
+
+	// visitor sends data then half-closes its write side (FIN)
+	if _, err := conn.Write([]byte("V1V2")); err != nil {
+		t.Fatal(err)
+	}
+	tcp := conn.(*net.TCPConn)
+	if err := tcp.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-finSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SDK never forwarded the visitor FIN upstream")
+	}
+
+	// local answers AFTER the visitor FIN - the old code truncated exactly
+	// this reverse-direction data when it aborted on the first EOF.
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var got bytes.Buffer
+	buf := make([]byte, 512)
+	for {
+		n, err := br.Read(buf)
+		if n > 0 {
+			got.Write(buf[:n])
+			t.Logf("visitor read: %q", got.String())
+			if strings.Contains(got.String(), "LATE-RESPONSE") {
+				break
+			}
+		}
+		if err != nil {
+			t.Fatalf("reverse direction truncated after visitor FIN (#322-1): %v; got %q", err, got.String())
+		}
+	}
+	localGot := <-localGotCh
+	if localGot != "V1V2" {
+		t.Fatalf("local must receive the visitor bytes verbatim, got %q", localGot)
+	}
+}
+
+// fakeLocalHalfClose answers 101, then accumulates bytes until the visitor
+// FIN, reports them, and only then writes post-FIN data downstream.
+func fakeLocalHalfClose(t *testing.T) (string, chan string) {
+	t.Helper()
+	got := make(chan string, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			close(got)
+			return
+		}
+		defer c.Close()
+		br := bufio.NewReader(c)
+		if _, err := http.ReadRequest(br); err != nil {
+			close(got)
+			return
+		}
+		c.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
+		var sb strings.Builder
+		buf := make([]byte, 512)
+		for {
+			n, err := br.Read(buf)
+			if n > 0 {
+				sb.Write(buf[:n])
+			}
+			if err != nil {
+				break // visitor FIN
+			}
+		}
+		t.Logf("fakeLocal: visitor FIN, got %q; writing LATE-RESPONSE", sb.String())
+		got <- sb.String()
+		if n, werr := c.Write([]byte("LATE-RESPONSE")); werr != nil {
+			t.Logf("fakeLocal: LATE-RESPONSE write failed: %v", werr)
+		} else {
+			t.Logf("fakeLocal: LATE-RESPONSE written (%d bytes)", n)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}()
+	return ln.Addr().String(), got
+}

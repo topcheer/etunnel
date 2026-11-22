@@ -181,6 +181,12 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
             except ValueError:
                 continue
             if m.get("type") == "welcome":
+                # #322-6: reject newer protocol versions loudly (PROTOCOL.md
+                # §3) - decoding v2 traffic as v1 produces silent garbage.
+                if m.get("proto", 1) > 1:
+                    ws.close()
+                    raise RuntimeError(
+                        f"etunnel: server speaks protocol v{m['proto']}; update the SDK")
                 info = m
                 break
             if m.get("type") == "error":
@@ -270,7 +276,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                     if len(m) > MAX_WS_MSG:  # #243 M2: 128KiB read limit
                         close("read limit exceeded")
                         return
-                    try:  # #243 M1 parity: malformed control frames are ignored
+                    try:  # #243 M1 + #322-2 converged: unknown control types are ignored; malformed KNOWN frames are fatal server-side (PROTOCOL.md §3) - the client stays alive by skipping
                         msg = json.loads(m)
                     except ValueError:
                         continue

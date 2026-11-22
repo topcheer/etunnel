@@ -502,13 +502,12 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 	_ = brw.Flush()
 	_ = conn.SetWriteDeadline(time.Time{})
 
-	done := make(chan struct{}, 2)
+	done := make(chan bool, 2) // true = clean EOF (half close), false = hard hangup
 
 	// tunnel -> external. Write+Flush per chunk: the hijacked bufio.Writer
 	// otherwise buffers small frames (e.g. a single WebSocket frame) in its
 	// 4KB buffer and the TLS-path peer never sees them until close.
 	go func() {
-		defer func() { done <- struct{}{} }()
 		buf := make([]byte, protocol.MaxPayload)
 		for {
 			n, rerr := st.bodyPr.Read(buf)
@@ -535,16 +534,28 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 				s.metrics.bytesOut.Add(int64(n))
 			}
 			if rerr != nil {
+				if errors.Is(rerr, io.EOF) {
+					// #322-1 (M1): SDK FIN half-closes the visitor's write side;
+					// the visitor may still be reading post-FIN data - do NOT
+					// close the whole conn here.
+					if tc, ok := conn.(*net.TCPConn); ok {
+						_ = tc.CloseWrite()
+					} else {
+						_ = conn.Close()
+					}
+					done <- true // #322-1: clean half close
+					return
+				}
 				break
 			}
 		}
 		_ = brw.Flush()
 		_ = conn.Close() // signal EOF to the other direction
+		done <- false
 	}()
 
 	// external -> tunnel
 	go func() {
-		defer func() { done <- struct{}{} }()
 		buf := make([]byte, protocol.MaxPayload)
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(s.cfg.StreamIdleTimeout))
@@ -553,32 +564,57 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 				if sess.limiter != nil {
 					if lerr := sess.limiter.WaitN(sess.ctx, n); lerr != nil {
 						_ = conn.Close()
+						done <- false
 						return
 					}
 				}
 				if serr := sess.sendData(st.id, buf[:n]); serr != nil {
 					_ = conn.Close()
+					done <- false
 					return
 				}
 				s.metrics.bytesIn.Add(int64(n))
 			}
 			if rerr != nil {
+				if errors.Is(rerr, io.EOF) {
+					// #322-1 (M1): visitor FIN - tell the SDK with a FIN and stop
+					// reading; the reverse direction keeps flowing and the
+					// visitor's read side stays open. This used to send an RST
+					// and close the conn, truncating post-FIN local data.
+					_ = sess.sendFin(st.id)
+					done <- true // #322-1: clean half close
+					return
+				}
 				_ = sess.sendRst(st.id)
 				_ = conn.Close()
+				done <- false
 				return
 			}
 		}
 	}()
 
-	<-done
-	// #264: the first direction to exit (usually the visitor hanging up on
-	// a silent push-only app) cannot wake the other goroutine parked in
-	// bodyPr.Read - only a pump write, finish or abort can. Abort the
-	// stream so that read drains (finish also removes the stream slot),
-	// close the hijacked conn for good measure, then wait for the splice
-	// to wind down. Without this, serveUpgrade parks on the second <-done
-	// forever and leaks the handler goroutine, the tunnel->external
-	// goroutine and one MaxStreamsPerTunnel slot per visitor early exit.
+	first := <-done // true = clean EOF (half close), false = hard hangup
+	// #322-1 (M1): a clean EOF half closes - PROTOCOL.md §5: FIN half
+	// closes, so wait for the reverse direction instead of aborting on the
+	// first EOF. A hard hangup (false) reclaims the handler immediately:
+	// Stream.abort closes the body pipe, waking any parked sibling read
+	// (preserves the #264 leak guard).
+	if !first {
+		st.abort()
+		_ = conn.Close()
+		<-done
+		return
+	}
+	// #322-1 (M1): the reverse direction gets a bounded grace (2s) to drain
+	// its remaining bytes past the FIN; an SDK that never finishes inside
+	// the grace is aborted too (bounded #264 reclaim).
+	select {
+	case <-done:
+		st.finish()
+		_ = conn.Close()
+		return
+	case <-time.After(2 * time.Second):
+	}
 	st.abort()
 	_ = conn.Close()
 	<-done

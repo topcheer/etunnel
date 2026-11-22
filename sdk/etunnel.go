@@ -101,6 +101,7 @@ type Tunnel struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	out         chan wsOut
+	pri         chan wsOut // #322-3: priority frames (bye) - never dropped
 	closed      chan struct{}
 	closeOnce   sync.Once
 	closeReason atomic.Value // string
@@ -206,6 +207,7 @@ func newTunnel(ws *websocket.Conn, local string, routes []*compiledRoute, tctx c
 		ctx:       tctx,
 		cancel:    tcancel,
 		out:       make(chan wsOut, 256),
+		pri:       make(chan wsOut, 8), // #322-3
 		closed:    make(chan struct{}),
 		streams:   make(map[uint32]*clientStream),
 		onLog:     opts.OnLog,
@@ -415,7 +417,9 @@ func (t *Tunnel) Err() error {
 	return nil
 }
 
-// Close shuts the tunnel down.
+// Close shuts the tunnel down. The goodbye frame travels on a priority
+// channel (never dropped when the send queue is full) and the send loop
+// drains within a bounded budget, so Close always completes promptly.
 func (t *Tunnel) Close(reason string) {
 	t.closeOnce.Do(func() {
 		if reason == "" {
@@ -424,8 +428,10 @@ func (t *Tunnel) Close(reason string) {
 		t.closeReason.Store(reason)
 		// Enqueue bye before the signal so the writer flushes it first.
 		bye, _ := protocol.EncodeControl(&protocol.Bye{Type: protocol.MsgBye, Reason: reason})
+		// #322-3: bye travels on the priority channel - the ordinary queue
+		// can be full (256), which used to silently drop the goodbye.
 		select {
-		case t.out <- wsOut{text: true, data: bye}:
+		case t.pri <- wsOut{text: true, data: bye}:
 		default:
 		}
 		close(t.closed)
@@ -491,6 +497,14 @@ func (t *Tunnel) writeLoop() {
 	defer t.cancel()
 	for {
 		select {
+		case m := <-t.pri: // #322-3: priority frames bypass the ordinary queue
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			typ := websocket.MessageBinary
+			if m.text {
+				typ = websocket.MessageText
+			}
+			_ = t.ws.Write(ctx, typ, m.data)
+			cancel()
 		case m := <-t.out:
 			// Independent timeout so the bye still flushes during shutdown.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -505,7 +519,27 @@ func (t *Tunnel) writeLoop() {
 				return
 			}
 		case <-t.closed:
-			for {
+			// #322-3: ONE total drain budget (was 2s per queued frame - 256
+			// frames meant worst-case 8.5min); priority frames (bye) always
+			// flush, ordinary frames stop at the budget.
+			deadline := time.Now().Add(5 * time.Second)
+			drainPri := func() {
+				for {
+					select {
+					case m := <-t.pri:
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+						typ := websocket.MessageBinary
+						if m.text {
+							typ = websocket.MessageText
+						}
+						_ = t.ws.Write(ctx, typ, m.data)
+						cancel()
+					default:
+						return
+					}
+				}
+			}
+			for time.Now().Before(deadline) {
 				select {
 				case m := <-t.out:
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -515,13 +549,24 @@ func (t *Tunnel) writeLoop() {
 					}
 					_ = t.ws.Write(ctx, typ, m.data)
 					cancel()
-				default:
-					// Graceful close handshake, then release the reader.
-					_ = t.ws.Close(websocket.StatusNormalClosure, "bye")
-					t.cancel()
-					return
+				case <-time.After(100 * time.Millisecond):
+					drainPri()
+					// queue drained and quiet: finish now - waiting out the
+					// whole budget would delay t.cancel() on dead sockets
+					// (the #55 cancel contract, exercised by leak_test).
+					if len(t.out) == 0 {
+						drainPri()
+						_ = t.ws.Close(websocket.StatusNormalClosure, "bye")
+						t.cancel()
+						return
+					}
 				}
 			}
+			drainPri()
+			// Graceful close handshake, then release the reader.
+			_ = t.ws.Close(websocket.StatusNormalClosure, "bye")
+			t.cancel()
+			return
 		}
 	}
 }
@@ -567,6 +612,13 @@ func (t *Tunnel) readLoop() {
 			}
 			msg, err := protocol.DecodeControl(b)
 			if err != nil {
+				// #322-2 (M2): unknown control types are ignored (forward
+				// compat, PROTOCOL.md §3), but a malformed KNOWN type is a
+				// protocol violation and is fatal.
+				if !errors.Is(err, protocol.ErrUnknownControlType) {
+					t.Close("malformed control frame")
+					return
+				}
 				continue
 			}
 			switch m := msg.(type) {
@@ -581,6 +633,11 @@ func (t *Tunnel) readLoop() {
 				_ = t.sendJSON(&protocol.Pong{Type: protocol.MsgPong, TS: m.TS})
 			case *protocol.Pong:
 				t.lastPong.Store(time.Now().UnixNano())
+			case *protocol.ErrorMsg:
+				// #322-5: mid-session server errors used to vanish without a
+				// trace - record and end the tunnel with the real reason.
+				t.Close("server error: " + m.Message)
+				return
 			case *protocol.Bye:
 				t.Close(m.Reason)
 				return

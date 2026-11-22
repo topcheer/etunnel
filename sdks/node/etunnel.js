@@ -122,7 +122,18 @@ async function connect(server, local, opts = {}) {
       try {
         m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString());
       } catch { return; }
-      if (m.type === 'welcome') { clearTimeout(to); res(m); }
+      if (m.type === 'welcome') {
+        // #322-6: reject newer protocol versions loudly (PROTOCOL.md §3) -
+        // decoding v2 traffic as v1 produces silent garbage.
+        if (m.proto > 1) {
+          clearTimeout(to);
+          ws.close();
+          rej(Object.assign(new Error(`etunnel: server speaks protocol v${m.proto}; update the SDK`), { code: 'proto_version' }));
+          return;
+        }
+        clearTimeout(to);
+        res(m);
+      }
       else if (m.type === 'error') { clearTimeout(to); rej(Object.assign(new Error(`etunnel: server rejected: ${m.code}: ${m.message || ''}`), { code: m.code })); }
     };
   });
@@ -154,7 +165,7 @@ async function connect(server, local, opts = {}) {
     lastActivity = Date.now();
     if (typeof ev.data === 'string') {
       let m;
-      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1: ignore malformed frames
+      try { m = JSON.parse(ev.data); } catch { return; } // #243 M1 + #322-2 converged: unknown control types are ignored; malformed KNOWN frames are fatal server-side (PROTOCOL.md §3) - the client stays alive by skipping
       if (m.type === 'req') {
         // #243 M2: refuse a replayed live id or a stream beyond the cap
         // (Go registerClientStream parity) and tell the server with an RST.
