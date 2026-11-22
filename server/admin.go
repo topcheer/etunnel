@@ -89,6 +89,16 @@ func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 		s.adminFailsMu.Unlock()
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Token")), []byte(s.cfg.AdminToken)) != 1 {
 			s.adminFailsMu.Lock()
+			// #321 LOW6: bound the table - unauthenticated failures are
+			// attacker-controlled keys, so prune stale/expired entries when
+			// the map grows past a floor.
+			if len(s.adminFails) > 4096 {
+				for k2, st2 := range s.adminFails {
+					if time.Now().After(st2.blockedUntil) {
+						delete(s.adminFails, k2)
+					}
+				}
+			}
 			if s.adminFails[ip] == nil {
 				s.adminFails[ip] = &adminFailState{}
 			}

@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -55,9 +54,9 @@ func (s *Server) startTelegram(ctx context.Context) {
 	s.logf("telegram: admin bot enabled (chat %d)", s.tg.chatID)
 }
 
-func (s *Server) telegramAPI(method string, payload any) (map[string]any, error) {
+func (s *Server) telegramAPI(ctx context.Context, method string, payload any) (map[string]any, error) {
 	b, _ := json.Marshal(payload)
-	req, err := http.NewRequest(http.MethodPost, s.tg.apiBase+"/bot"+s.tg.token+"/"+method, strings.NewReader(string(b)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.tg.apiBase+"/bot"+s.tg.token+"/"+method, strings.NewReader(string(b)))
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +76,8 @@ func (s *Server) telegramAPI(method string, payload any) (map[string]any, error)
 	return out, nil
 }
 
-func (s *Server) tgSend(text string) {
-	_, _ = s.telegramAPI("sendMessage", map[string]any{
+func (s *Server) tgSend(ctx context.Context, text string) {
+	_, _ = s.telegramAPI(ctx, "sendMessage", map[string]any{
 		"chat_id":      s.tg.chatID,
 		"text":         text,
 		"reply_markup": tgMainMenu(),
@@ -116,7 +115,7 @@ func (s *Server) telegramPollLoop(ctx context.Context) {
 			return
 		default:
 		}
-		out, err := s.telegramAPI("getUpdates", map[string]any{
+		out, err := s.telegramAPI(ctx, "getUpdates", map[string]any{
 			"offset":          offset,
 			"timeout":         25,
 			"allowed_updates": []string{"message"},
@@ -131,25 +130,36 @@ func (s *Server) telegramPollLoop(ctx context.Context) {
 		}
 		updates, _ := out["result"].([]any)
 		for _, u := range updates {
-			m, _ := u.(map[string]any)
-			id, _ := m["update_id"].(float64)
-			offset = int(id) + 1
-			msg, _ := m["message"].(map[string]any)
-			if msg == nil {
-				continue
-			}
-			chat, _ := msg["chat"].(map[string]any)
-			chatID, _ := chat["id"].(float64)
-			// Whitelist: non-admin chats are dropped silently.
-			if int64(chatID) != s.tg.chatID {
-				continue
-			}
-			text, _ := msg["text"].(string)
-			if reply := s.handleAdminCommand(text); reply != "" {
-				s.tgSend(reply)
+			if next := s.dispatchTelegramUpdate(ctx, u); next > offset {
+				offset = next
 			}
 		}
 	}
+}
+
+// dispatchTelegramUpdate processes one getUpdates entry: advances past its
+// update_id, drops non-admin chats silently, and answers admin commands.
+// Extracted from telegramPollLoop so the whitelist/offset behavior is
+// directly testable without a live Telegram API (#323 M2).
+func (s *Server) dispatchTelegramUpdate(ctx context.Context, u any) int {
+	m, _ := u.(map[string]any)
+	id, _ := m["update_id"].(float64)
+	next := int(id) + 1
+	msg, _ := m["message"].(map[string]any)
+	if msg == nil {
+		return next
+	}
+	chat, _ := msg["chat"].(map[string]any)
+	chatID, _ := chat["id"].(float64)
+	// Whitelist: non-admin chats are dropped silently.
+	if int64(chatID) != s.tg.chatID {
+		return next
+	}
+	text, _ := msg["text"].(string)
+	if reply := s.handleAdminCommand(text); reply != "" {
+		s.tgSend(ctx, reply)
+	}
+	return next
 }
 
 // handleAdminCommand executes one whitelisted command and returns the reply.
@@ -326,13 +336,11 @@ func (s *Server) handleAdminCommand(text string) string {
 
 // notifyPayment pushes a purchase event to the admin chat (no-op when the
 // bot is disabled). Called from billing activation paths.
-var _ = sync.Once{}
-
 func (s *Server) notifyPayment(email, tier string) {
 	if !s.tg.enabled() {
 		return
 	}
-	s.tgSend(fmt.Sprintf("💰 %s purchased %s", email, tier))
+	s.tgSend(context.Background(), fmt.Sprintf("💰 %s purchased %s", email, tier))
 }
 
 // notifyPaymentFailure reports declined/failed payment attempts.
@@ -340,7 +348,7 @@ func (s *Server) notifyPaymentFailure(email, tier, reason string) {
 	if !s.tg.enabled() {
 		return
 	}
-	s.tgSend(fmt.Sprintf("⚠️ payment FAILED for %s (%s)%s", email, tier, prefixIfSet(reason)))
+	s.tgSend(context.Background(), fmt.Sprintf("⚠️ payment FAILED for %s (%s)%s", email, tier, prefixIfSet(reason)))
 }
 
 // tunnelOpenCooldown suppresses repeat tunnel-open notifications for the
@@ -363,12 +371,19 @@ func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
 		return
 	}
 	now := time.Now()
-	if last, ok := tunnelOpenSeen.Load(sess.sub); ok {
-		if t0, ok := last.(time.Time); ok && now.Sub(t0) < tunnelOpenCooldown {
+	// #323 LOW3: LoadOrStore makes the first-delivery claim atomic (two
+	// concurrent handshakes for the same fresh subdomain yield exactly one
+	// notification), and CompareAndSwap makes the post-cooldown renewal a
+	// single-winner claim as well.
+	if prev, loaded := tunnelOpenSeen.LoadOrStore(sess.sub, now); loaded {
+		t0, _ := prev.(time.Time)
+		if now.Sub(t0) < tunnelOpenCooldown {
 			return
 		}
+		if !tunnelOpenSeen.CompareAndSwap(sess.sub, prev, now) {
+			return // another handshake claimed the renewal slot
+		}
 	}
-	tunnelOpenSeen.Store(sess.sub, now)
 	owner := sess.accountEmail()
 	if owner == "" {
 		owner = "anonymous"
@@ -380,7 +395,7 @@ func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
 	// so a slow or hung Telegram API must not delay a new tunnel from
 	// serving. The synchronous cooldown decision above already prevents
 	// concurrent double-sends.
-	go s.tgSend(text)
+	go s.tgSend(context.Background(), text)
 }
 
 func prefixIfSet(reason string) string {
@@ -400,9 +415,6 @@ func (s *Server) telegramAlertPatrol(ctx context.Context) {
 			threshold = n
 		}
 	}
-	if threshold == 0 {
-		return
-	}
 	armed := true
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -411,15 +423,37 @@ func (s *Server) telegramAlertPatrol(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n := s.reg.Count()
-			if armed && n >= threshold {
-				s.tgSend(fmt.Sprintf("🚨 tunnel threshold: %d live (>= %d)", n, threshold))
-				armed = false
-			} else if !armed && n < threshold {
-				armed = true // re-arm so the next spike alerts again
+			// #323 M1: the tunnel-open cooldown map is swept on every tick
+			// regardless of the alert threshold - anonymous tunnels mint a
+			// fresh random subdomain per connect, so entries accumulate.
+			sweepTunnelOpenSeen(time.Now())
+			if threshold > 0 {
+				n := s.reg.Count()
+				if armed && n >= threshold {
+					s.tgSend(ctx, fmt.Sprintf("🚨 tunnel threshold: %d live (>= %d)", n, threshold))
+					armed = false
+				} else if !armed && n < threshold {
+					armed = true // re-arm so the next spike alerts again
+				}
 			}
 		}
 	}
+}
+
+// sweepTunnelOpenSeen removes tunnel-open cooldown entries older than the
+// cooldown window (#323 M1: anonymous tunnels mint a fresh subdomain per
+// connect, so the map grows without a periodic sweep). Returns the number
+// of removed entries. Inject `now` for tests.
+func sweepTunnelOpenSeen(now time.Time) int {
+	removed := 0
+	tunnelOpenSeen.Range(func(k, v any) bool {
+		if t0, ok := v.(time.Time); ok && now.Sub(t0) >= tunnelOpenCooldown {
+			tunnelOpenSeen.Delete(k)
+			removed++
+		}
+		return true
+	})
+	return removed
 }
 
 func humanBytes(n int64) string {
@@ -434,5 +468,3 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%dB", n)
 	}
 }
-
-var _ = io.Discard

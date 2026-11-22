@@ -48,34 +48,6 @@ func newFakeTelegram(t *testing.T) (*fakeTelegram, *httptest.Server) {
 	return f, srv
 }
 
-func newFakeTG(t *testing.T) (*fakeTelegram, *httptest.Server) {
-	t.Helper()
-	f := &fakeTelegram{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
-			var p map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&p)
-			f.mu.Lock()
-			f.sent = append(f.sent, fmt.Sprint(p["text"]))
-			f.mu.Unlock()
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
-		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
-			f.mu.Lock()
-			up := f.updates
-			f.mu.Unlock()
-			if up == "" {
-				up = "[]"
-			}
-			_, _ = w.Write([]byte(`{"ok":true,"result":` + up + `}`))
-		default:
-			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return f, srv
-}
-
 func newTGTestServer(t *testing.T, fake *httptest.Server, chatID int64) *Server {
 	t.Helper()
 	s := newBillingTestServer(t)

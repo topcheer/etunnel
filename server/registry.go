@@ -74,6 +74,59 @@ func (r *Registry) AcquireCustom(sub string, s *Session, acct *Account, limit in
 	return nil
 }
 
+// AcquireBounded atomically counts the account's live tunnels (all names,
+// plus the custom subset when checkCustom) and acquires sub in one critical
+// section (#321 M1: an RLock pre-check plus a separate Acquire let two
+// concurrent handshakes for one account each pass and exceed
+// tier.MaxTunnels). acct == nil (anonymous) skips the account bounds.
+// maxTunnels <= 0 means unlimited.
+func (r *Registry) AcquireBounded(sub string, s *Session, acct *Account, maxTunnels int, checkCustom bool, maxCustom int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.subs[sub]; ok && cur != s {
+		select {
+		case <-cur.closed:
+			// dead session, replace it below
+		default:
+			return ErrSubdomainTaken
+		}
+	}
+	if acct == nil {
+		r.subs[sub] = s
+		return nil
+	}
+	all, custom := 0, 0
+	for _, live := range r.subs {
+		if live == s || live.account == nil || live.account.APIKey != acct.APIKey {
+			continue
+		}
+		select {
+		case <-live.closed:
+			continue
+		default:
+			// live session: count it (non-blocking, like countForAccount)
+		}
+		all++
+		if live.custom {
+			custom++
+		}
+	}
+	if maxTunnels > 0 && all >= maxTunnels {
+		return ErrAccountQuota
+	}
+	if checkCustom && custom >= maxCustom {
+		return ErrAccountQuota
+	}
+	// #321 M1: mark custom inside the lock - the counting loop above reads
+	// this flag, and setting it only after release re-opened the exact
+	// TOCTOU this method exists to close.
+	if checkCustom {
+		s.custom = true
+	}
+	r.subs[sub] = s
+	return nil
+}
+
 // Release frees sub if it is currently held by s.
 func (r *Registry) Release(sub string, s *Session) {
 	r.mu.Lock()

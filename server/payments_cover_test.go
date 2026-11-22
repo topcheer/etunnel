@@ -116,11 +116,6 @@ func TestNowPaymentsIPNDedup(t *testing.T) {
 	if a.Tier != "starter" {
 		t.Fatalf("IPN did not activate: tier=%q", a.Tier)
 	}
-	paymentEventsMu.Lock()
-	for k, ts := range paymentEvents {
-		t.Logf("DEBUG pe[%q]=%v", k, ts)
-	}
-	paymentEventsMu.Unlock()
 
 	// Replay: suppressed (same payment id), still a 200 ack.
 	w2 := httptest.NewRecorder()

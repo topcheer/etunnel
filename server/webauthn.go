@@ -97,7 +97,58 @@ func (w *waSessions) put(id string, sd *webauthn.SessionData, email string) {
 			delete(w.exp, k)
 		}
 	}
+	// #321 LOW5: hard cap - the begin endpoint is unauthenticated, so the
+	// flow table must stay bounded; when full, drop the soonest-expiring
+	// ceremonies to make room.
+	const waFlowMax = 4096
+	for len(w.m) >= waFlowMax {
+		oldestID := ""
+		var oldestExp time.Time
+		for k, e := range w.exp {
+			if oldestID == "" || e.Before(oldestExp) {
+				oldestID, oldestExp = k, e
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		delete(w.m, oldestID)
+		delete(w.email, oldestID)
+		delete(w.exp, oldestID)
+	}
 	w.m[id], w.email[id], w.exp[id] = sd, email, now.Add(5*time.Minute)
+}
+
+// passkeyBeginRate caps unauthenticated login-begin calls per source IP
+// (#321 LOW5): a sliding one-minute window keyed by IP.
+type passkeyBeginRate struct {
+	windowStart time.Time
+	count       int
+}
+
+// allowPasskeyBegin reports whether ip may start another discoverable
+// login ceremony (max 30 per minute per source IP).
+func (s *Server) allowPasskeyBegin(ip string) bool {
+	const (
+		beginWindow = time.Minute
+		beginMax    = 30
+	)
+	s.passkeyBeginMu.Lock()
+	defer s.passkeyBeginMu.Unlock()
+	if s.passkeyBegins == nil {
+		s.passkeyBegins = map[string]*passkeyBeginRate{}
+	}
+	now := time.Now()
+	st, ok := s.passkeyBegins[ip]
+	if !ok || now.Sub(st.windowStart) >= beginWindow {
+		s.passkeyBegins[ip] = &passkeyBeginRate{windowStart: now, count: 1}
+		return true
+	}
+	if st.count >= beginMax {
+		return false
+	}
+	st.count++
+	return true
 }
 
 func (w *waSessions) take(id string) (*webauthn.SessionData, string, bool) {
@@ -241,6 +292,12 @@ func (s *Server) handlePasskeyLoginBegin(w http.ResponseWriter, r *http.Request)
 	inst := s.wa()
 	if inst == nil {
 		http.Error(w, "passkey not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// #321 LOW5: begin is unauthenticated and allocates a flow slot - bound
+	// it per source IP (sliding window via a simple counter).
+	if !s.allowPasskeyBegin(remoteIP(r)) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 	opts, sd, err := inst.BeginDiscoverableLogin()

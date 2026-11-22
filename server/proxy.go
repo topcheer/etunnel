@@ -479,10 +479,20 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 	defer st.abort()
 
 	// Write the 101 response with the local service's exact headers.
+	// #321 M2: res.Headers is tunnel-client controlled and replayed RAW onto
+	// the visitor's connection - validate names/values and skip anything
+	// carrying CR/LF or control bytes (response splitting / injected
+	// Set-Cookie).
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "HTTP/1.1 101 %s\r\n", http.StatusText(res.Status))
 	for k, vs := range res.Headers {
+		if !validHeaderName(k) {
+			continue
+		}
 		for _, v := range vs {
+			if !validHeaderValue(v) {
+				continue
+			}
 			fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 		}
 	}
@@ -512,6 +522,10 @@ func (s *Server) serveUpgrade(w http.ResponseWriter, r *http.Request, sess *Sess
 						break
 					}
 				}
+				// #321 LOW4: per-write idle deadline - a stalled visitor (TCP
+				// zero window) must not pin this goroutine and the stream slot
+				// indefinitely; the head-write deadline above was cleared.
+				_ = conn.SetWriteDeadline(time.Now().Add(s.cfg.StreamIdleTimeout))
 				if _, werr := brw.Write(buf[:n]); werr != nil {
 					break
 				}
@@ -965,4 +979,50 @@ func notFoundHTML(cfg Config, r *http.Request) string {
 func htmlEscapeText(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "\n", "\n")
 	return r.Replace(s)
+}
+
+// isTokenChar reports whether c is an RFC 7230 header-field name character
+// (tchar).
+func isTokenChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+}
+
+// validHeaderName reports whether name is a well-formed RFC 7230 header
+// field name (token charset, no separators or whitespace).
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if !isTokenChar(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// validHeaderValue reports whether value is safe to replay verbatim onto a
+// raw connection: printable ASCII or tab, and never CR/LF/NUL (#321 M2 -
+// a tunnel client must not be able to split the visitor's response).
+func validHeaderValue(v string) bool {
+	if v == "" {
+		return true
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '\r' || c == '\n' || c == 0 {
+			return false
+		}
+		if c < 0x20 && c != '\t' {
+			return false
+		}
+		if c > 0x7e {
+			return false
+		}
+	}
+	return true
 }

@@ -36,12 +36,16 @@ type Server struct {
 	regLimiter   *registerLimiter
 	adminFailsMu sync.Mutex
 	adminFails   map[string]*adminFailState
-	adminMux     *http.ServeMux
-	handler      http.Handler
-	adminHandler http.Handler
-	billing      BillingConfig
-	tg           telegramConfig
-	auth         oauthConfig
+	// passkeyBeginMu/passkeyBegins rate-limit the unauthenticated passkey
+	// login-begin endpoint (#321 LOW5).
+	passkeyBeginMu sync.Mutex
+	passkeyBegins  map[string]*passkeyBeginRate
+	adminMux       *http.ServeMux
+	handler        http.Handler
+	adminHandler   http.Handler
+	billing        BillingConfig
+	tg             telegramConfig
+	auth           oauthConfig
 	// WebAuthn (passkey) support: lazily-created relying party and the
 	// in-flight ceremony sessions shared by its handlers.
 	waOnce   sync.Once
@@ -76,13 +80,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		waFlow:     newWaSessions(),
-		cfg:        cfg,
-		reg:        newRegistry(),
-		accounts:   accounts,
-		metrics:    &metrics{startedAt: time.Now()},
-		regLimiter: &registerLimiter{seen: make(map[string]time.Time)},
-		adminFails: make(map[string]*adminFailState),
+		waFlow:        newWaSessions(),
+		cfg:           cfg,
+		reg:           newRegistry(),
+		accounts:      accounts,
+		metrics:       &metrics{startedAt: time.Now()},
+		regLimiter:    &registerLimiter{seen: make(map[string]time.Time)},
+		passkeyBegins: map[string]*passkeyBeginRate{},
+		adminFails:    make(map[string]*adminFailState),
 	}
 	// #93: persistence failures must reach the operator log, not vanish.
 	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }

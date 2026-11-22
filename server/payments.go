@@ -534,7 +534,8 @@ func (s *Server) activateShortDomain(email, product string) (string, error) {
 func (s *Server) writeSuccessKeyPage(w http.ResponseWriter, r *http.Request, tier, email, key string) {
 	lang := pickLang(r)
 	tr := func(k string) string { return T(lang, k) }
-	planLine := strings.ReplaceAll(strings.ReplaceAll(tr("bill.plan"), "{plan}", tier), "{email}", email)
+	esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	planLine := strings.ReplaceAll(strings.ReplaceAll(tr("bill.plan"), "{plan}", esc.Replace(tier)), "{email}", esc.Replace(email))
 	if se := s.sessionEmail(r); se == "" || se != email {
 		_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui">
 <h2>`+tr("bill.h1")+`</h2><p>`+planLine+`</p>
@@ -1021,6 +1022,7 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ev struct {
+		ID        string `json:"id"`
 		EventType string `json:"event_type"`
 		Resource  struct {
 			CustomID string `json:"custom_id"`
@@ -1032,12 +1034,20 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ev.EventType == "PAYMENT.CAPTURE.COMPLETED" {
-		email, tier, _ := strings.Cut(ev.Resource.CustomID, ":")
-		if _, err := s.activate(email, tier); err != nil {
-			// #198: 5xx so PayPal retries the webhook until activation lands.
-			s.logf("billing: paypal webhook activation failed: %v", err)
-			http.Error(w, "{\"error\":\"activation failed\"}", http.StatusInternalServerError)
-			return
+		// #321 LOW7: dedupe like Stripe/NOWPayments - a PayPal replay would
+		// re-activate and extend the subscription indefinitely.
+		if paymentEventSeen("paypal:" + ev.ID) {
+			s.logf("billing: paypal webhook replay suppressed (event %s)", ev.ID)
+		} else {
+			email, tier, _ := strings.Cut(ev.Resource.CustomID, ":")
+			if _, err := s.activate(email, tier); err != nil {
+				// #198: 5xx so PayPal retries the webhook until activation lands.
+				// Not marked seen, so the retry reaches activate().
+				s.logf("billing: paypal webhook activation failed: %v", err)
+				http.Error(w, "{\"error\":\"activation failed\"}", http.StatusInternalServerError)
+				return
+			}
+			markPaymentEvent("paypal:" + ev.ID)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1333,7 +1343,7 @@ func (s *Server) reapExpiredTiers(now time.Time) int {
 		if s.accounts.DowngradeToFree(email) {
 			s.logf("billing: subscription expired, %s downgraded to free", email)
 			if s.tg.enabled() {
-				s.tgSend(fmt.Sprintf("⏳ %s subscription expired - downgraded to free", email))
+				s.tgSend(context.Background(), fmt.Sprintf("⏳ %s subscription expired - downgraded to free", email))
 			}
 		}
 	}
