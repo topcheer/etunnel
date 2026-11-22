@@ -417,7 +417,9 @@ func (t *Tunnel) Err() error {
 	return nil
 }
 
-// Close shuts the tunnel down.
+// Close shuts the tunnel down. The goodbye frame travels on a priority
+// channel (never dropped when the send queue is full) and the send loop
+// drains within a bounded budget, so Close always completes promptly.
 func (t *Tunnel) Close(reason string) {
 	t.closeOnce.Do(func() {
 		if reason == "" {
