@@ -509,13 +509,21 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		http.Error(w, `{"error":"cannot act on another account"}`, http.StatusForbidden)
 		return
 	}
+	// #363: capture the CURRENT key under the store lock BEFORE anything can
+	// rotate it - LookupEmail hands out the live pointer, so reading
+	// acct.APIKey after ResetKey would observe the NEW key and make the
+	// kick-by-key a no-op (stolen-key tunnels survive). Session holders keep
+	// handshake copies of the OLD key and must be matched against it.
 	acct, ok := s.accounts.LookupEmail(email)
 	if !ok {
 		http.Error(w, `{"error":"no account"}`, http.StatusNotFound)
 		return
 	}
+	var currentKey string
+	s.accounts.Mutate(email, func(a *Account) { currentKey = a.APIKey })
 	switch action {
 	case "reset":
+		oldKey := currentKey
 		key, ok := s.accounts.ResetKey(email)
 		if !ok {
 			http.Error(w, `{"error":"reset failed"}`, http.StatusInternalServerError)
@@ -525,8 +533,8 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		// epoch so a stolen cookie cannot keep using the dashboard (the
 		// response still carries the new key; the caller re-logs in).
 		s.accounts.Mutate(email, func(a *Account) { a.SessionEpoch++ })
-		// #351: reset also tears down tunnels authenticated by the old key.
-		s.kickSessionsByAccount(acct.APIKey, "API key reset")
+		// #351/#363: reset tears down tunnels authenticated by the OLD key.
+		s.kickSessionsByAccount(oldKey, "API key reset")
 		writeJSON(w, http.StatusOK, map[string]string{"apiKey": key, "message": "API key reset (old key revoked)"})
 	case "cancel":
 		if acct.Tier == "free" {
@@ -547,10 +555,15 @@ func (s *Server) handleMeAction(w http.ResponseWriter, r *http.Request, action s
 		// #350: cascade-close the holder's tunnels INSTEAD of racing a
 		// pre-check - closing first makes the subsequent delete authoritative
 		// (a tunnel opened between check and delete would have survived).
-		if closed := s.kickSessionsByAccount(acct.APIKey, "account closed by owner"); closed > 0 {
+		if closed := s.kickSessionsByAccount(currentKey, "account closed by owner"); closed > 0 {
 			s.logf("portal: account %s closed, %d live tunnel(s) cascaded", email, closed)
 		}
-		s.accounts.Delete(acct.APIKey)
+		// #366: a failed persistence would resurrect the account on restart.
+		if err := s.accounts.DeleteWithError(acct.APIKey); err != nil {
+			s.logf("portal: account %s delete failed: %v", email, err)
+			http.Error(w, `{"error":"delete failed; the account may reappear after restart"}`, http.StatusInternalServerError)
+			return
+		}
 		http.SetCookie(w, &http.Cookie{Name: "et_session", Value: "", Path: "/", MaxAge: -1})
 		writeJSON(w, http.StatusOK, map[string]string{"message": "account closed"})
 	default:

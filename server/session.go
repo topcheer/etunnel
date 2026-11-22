@@ -159,10 +159,19 @@ func (s *Session) streamCount() int {
 // idempotent (closeOnce), so racing with the holder's own teardown is safe.
 // Returns the number of sessions closed.
 func (s *Server) kickSessionsByAccount(apiKey, reason string) int {
+	deadline := time.Now().Add(5 * time.Second) // #366: total kick budget
 	n := 0
 	for _, sess := range s.reg.Snapshot() {
 		if sess.account == nil || sess.account.APIKey != apiKey {
 			continue
+		}
+		if time.Now().After(deadline) {
+			// #366: Close is idempotent - the holder's own teardown (or a
+			// later cascade) finishes it; do not block the caller past the
+			// budget (ledger.recordClose inside Close can take seconds on
+			// PG). Only count sessions actually closed in this pass.
+			s.logf("kick: budget exhausted, %d closed, remainder self-terminates via TTL/close", n)
+			break
 		}
 		sess.Close(reason)
 		n++
@@ -476,6 +485,25 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sess.sub = sub
+	}
+
+	// #366: post-acquire re-check - a concurrent delete (or key reset)
+	// between the handshake's Snapshot(token) and the acquire above would
+	// leave a tunnel authenticated by a revoked key serving until TTL.
+	// Release + close if the token no longer resolves to this account.
+	if hello.Token != "" {
+		snapNow, still := s.accounts.Snapshot(hello.Token)
+		if !still || snapNow.APIKey != acct.APIKey {
+			s.logf("session %s: token revoked mid-handshake, releasing %s", sess.id, sess.sub)
+			if s.router != nil {
+				s.router.Release(sess.sub)
+			}
+			s.reg.Release(sess.sub, sess)
+			cancel()
+			releaseIPSlot()
+			s.wsErrorClose(ws, protocol.ErrCodeUnauthorized, "token revoked during connect - reconnect with a fresh key")
+			return
+		}
 	}
 
 	// Cluster: announce ownership (resume / custom / random all land here).
