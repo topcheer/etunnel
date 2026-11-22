@@ -606,79 +606,80 @@ fn serve(tx: mpsc::Sender<Message>, local: Local, sid: u32, st: StreamBuf) {
         matches!(k.to_ascii_lowercase().as_str(), "connection" | "transfer-encoding" | "keep-alive"
             | "upgrade" | "content-length" | "host" | "proxy-connection" | "te" | "trailer")
     };
-    let mut req = ureq::request(&st.method, &format!("http://{}{}", addr, path));
+    // #212: ureq 3 - explicit agent with http_status_as_error(false) so 4xx/
+    // 5xx responses arrive as values (2.x Error::Status parity: error
+    // responses keep their headers and body). Timeouts stay at the ureq
+    // defaults (unset), matching the previous 2.x configuration.
+    
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut rb = ureq::http::Request::builder()
+        .method(st.method.as_str())
+        .uri(format!("http://{}{}", addr, path));
     for (k, vs) in &st.headers {
         if hop(k) { continue; }
         for v in vs {
-            req = req.set(k, v);
+            rb = rb.header(k, v);
         }
     }
     let body = st.body.clone();
-    let resp = if st.method == "GET" || st.method == "HEAD" {
-        req.call()
-    } else {
-        req.send_bytes(&body)
-    };
-
-    // #243 M7: bodies are buffered; a response over the cap must not end
-    // with a clean FIN that fakes a complete 200 - detect and RST instead.
-    const BODY_CAP: usize = 64 * 1024 * 1024;
-    let mut truncated = false;
-    let (status, headers, out) = match resp {
-        Ok(r) => {
-            let status = r.status();
-            let mut hdrs: Vec<(String, String)> = Vec::new();
-            // #243 M6: all(name) returns every value - header(name)
-            // returns only the first, losing repeated headers (Set-Cookie).
-            for name in r.headers_names() {
-                if hop(&name) { continue; }
-                for v in r.all(&name) {
-                    hdrs.push((name.clone(), v.to_string()));
-                }
+    let resp = match rb.body(body) {
+        Ok(req) => match agent.run(req) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tx.send(Message::Text(format!(
+                    "{{\"type\":\"res\",\"streamId\":{},\"status\":502,\"headers\":{{\"Content-Type\":[\"text/html; charset=utf-8\"]}}}}", sid).into())).ok();
+                tx.send(frame(0x01, sid, local_error_page(&e.to_string()).as_bytes())).ok();
+                tx.send(frame(0x02, sid, b"")).ok();
+                None
             }
-            let mut buf = Vec::new();
-            let _ = r.into_reader().take(BODY_CAP as u64 + 1).read_to_end(&mut buf);
-            if buf.len() > BODY_CAP {
-                buf.truncate(BODY_CAP);
-                truncated = true;
-            }
-            (status, hdrs, buf)
-        }
-        Err(ureq::Error::Status(code, r)) => {
-            // #243 M6: error responses keep their headers (they were
-            // dropped entirely before) and get the same full-value scan.
-            let mut hdrs: Vec<(String, String)> = Vec::new();
-            for name in r.headers_names() {
-                if hop(&name) { continue; }
-                for v in r.all(&name) {
-                    hdrs.push((name.clone(), v.to_string()));
-                }
-            }
-            let mut buf = Vec::new();
-            let _ = r.into_reader().take(BODY_CAP as u64 + 1).read_to_end(&mut buf);
-            if buf.len() > BODY_CAP {
-                buf.truncate(BODY_CAP);
-                truncated = true;
-            }
-            (code, hdrs, buf)
-        }
+        },
         Err(e) => {
             tx.send(Message::Text(format!(
                 "{{\"type\":\"res\",\"streamId\":{},\"status\":502,\"headers\":{{\"Content-Type\":[\"text/html; charset=utf-8\"]}}}}", sid).into())).ok();
             tx.send(frame(0x01, sid, local_error_page(&e.to_string()).as_bytes())).ok();
             tx.send(frame(0x02, sid, b"")).ok();
-            return;
+            None
         }
     };
+    let Some(resp) = resp else { return };
 
-    let hdr_json = headers
+    // #243 M7: bodies are buffered; a response over the cap must not end
+    // with a clean FIN that fakes a complete 200 - detect and RST instead.
+    const BODY_CAP: usize = 64 * 1024 * 1024;
+    let mut truncated = false;
+    // #212: single response path (http_status_as_error(false)) - 2xx and
+    // 4xx/5xx both arrive here with headers + body (2.x had two branches).
+    let (parts, mut rbody) = resp.into_parts();
+    let status = parts.status.as_u16();
+    let mut hdrs: Vec<(String, String)> = Vec::new();
+    // #243 M6: get_all(name) returns every value - single get() returns
+    // only the first, losing repeated headers (Set-Cookie).
+    for name in parts.headers.keys() {
+        let name = name.as_str();
+        if hop(name) { continue; }
+        for v in parts.headers.get_all(name) {
+            hdrs.push((name.to_string(), String::from_utf8_lossy(v.as_bytes()).to_string()));
+        }
+    }
+    let mut buf = Vec::new();
+    let mut rd = rbody.as_reader();
+    let _ = std::io::Read::take(&mut rd, BODY_CAP as u64 + 1).read_to_end(&mut buf);
+    if buf.len() > BODY_CAP {
+        buf.truncate(BODY_CAP);
+        truncated = true;
+    }
+
+    let hdr_json = hdrs
         .iter()
         .map(|(k, v)| format!("\"{}\":[\"{}\"]", json_escape(k), json_escape(v)))
         .collect::<Vec<_>>()
         .join(",");
     tx.send(Message::Text(format!(
         "{{\"type\":\"res\",\"streamId\":{},\"status\":{},\"headers\":{{{}}}}}", sid, status, hdr_json).into())).ok();
-    for chunk in out.chunks(MAXP) {
+    for chunk in buf.chunks(MAXP) {
         tx.send(frame(0x01, sid, chunk)).ok();
     }
     if truncated {
@@ -850,10 +851,12 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
 
     let start_body = format!("{{\"redirect_uri\":\"http://127.0.0.1:{port}/callback\"}}");
     let start = ureq::post(&format!("{base}/auth/cli/start"))
-        .set("Content-Type", "application/json")
-        .send_string(&start_body)
+        .header("Content-Type", "application/json")
+        .send(start_body.as_bytes()) // #212: ureq 3 (send_string -> send)
         .map_err(|e| format!("etunnel: login start: {e}"))?
-        .into_string().map_err(|e| e.to_string())?;
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
     let auth_url = json_field(&start, "auth_url").ok_or("etunnel: login: empty start payload")?;
     let device_code = json_field(&start, "device_code").ok_or("etunnel: login: empty start payload")?;
     let mut opened = false;
@@ -905,10 +908,12 @@ pub fn etunnel_login<F: Fn(&str) -> std::io::Result<()>>(
 
     let ex_body = format!("{{\"device_code\":\"{device_code}\",\"code\":\"{code}\"}}");
     let ex = ureq::post(&format!("{base}/auth/cli/exchange"))
-        .set("Content-Type", "application/json")
-        .send_string(&ex_body)
+        .header("Content-Type", "application/json")
+        .send(ex_body.as_bytes()) // #212: ureq 3 (send_string -> send)
         .map_err(|e| format!("etunnel: login exchange: {e}"))?
-        .into_string().map_err(|e| e.to_string())?;
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
     let api_token = json_field(&ex, "api_token").filter(|t| !t.is_empty())
         .ok_or("etunnel: login: no api_token in exchange response")?;
     let subdomains = json_string_array(&ex, "subdomains").unwrap_or_default();
@@ -982,5 +987,120 @@ mod proto_gate_tests {
         assert!(gate(extract_num("{\"type\":\"welcome\",\"proto\":2}", "proto")));
         assert!(!gate(extract_num("{\"type\":\"welcome\",\"proto\":1}", "proto")));
         assert!(!gate(extract_num("{\"type\":\"welcome\"}", "proto")));
+    }
+}
+
+#[cfg(test)]
+mod ureq3_serve_tests {
+    // #212: focused coverage of the rewritten serve() (ureq 3 agent path) -
+    // the wssserver shell e2e is environment-flaky (fails identically on
+    // pristine main with ureq 2), so the http-client rewrite is verified
+    // in-process: a real local HTTP server answers, serve() replays the
+    // request through the ureq 3 agent, and the tunnel wire messages are
+    // asserted from the outbound channel.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+
+    fn serve_against(responder: fn(TcpStream)) -> (mpsc::Receiver<Message>, std::thread::JoinHandle<()>, u16) {
+        let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = ln.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (c, _) = ln.accept().unwrap();
+            responder(c);
+        });
+
+        let mut st = StreamBuf {
+            method: "GET".into(),
+            path: "/x?y=1".into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            size: 0,
+        };
+        st.headers.insert("X-Probe".into(), vec!["yes".into()]);
+        st.headers.insert("X-Multi".into(), vec!["a".into(), "b".into()]);
+
+        let (tx, rx) = mpsc::channel();
+        let local = Local::One(format!("127.0.0.1:{}", port));
+        let handle = std::thread::spawn(move || serve(tx, local, 1, st));
+        (rx, handle, port)
+    }
+
+    fn wire_msgs(rx: mpsc::Receiver<Message>) -> Vec<Message> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            let fin = matches!(m, Message::Binary(ref b) if b.first() == Some(&0x02));
+            out.push(m);
+            if fin {
+                break; // FIN ends the exchange
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn serve_replays_request_via_ureq3_and_forwards_response() {
+        fn responder(mut c: TcpStream) {
+            let mut buf = [0u8; 2048];
+            let n = c.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            assert!(req.starts_with("GET /x?y=1 "), "method/path/query: {}", req);
+            assert!(req.contains("x-probe: yes"), "lowercased probe header missing: {}", req);
+            assert!(req.contains("x-multi: a"), "multi-value header (a): {}", req);
+            assert!(req.contains("x-multi: b"), "multi-value header (b) lost (#243 M6): {}", req);
+            let body = b"ureq3-ok";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nx-reply: fine\r\n\r\n",
+                body.len()
+            );
+            c.write_all(resp.as_bytes()).unwrap();
+            c.write_all(body).unwrap();
+        }
+
+        let (rx, handle, _) = serve_against(responder as fn(TcpStream));
+        let msgs = wire_msgs(rx);
+
+        // res frame first
+        let first = msgs.first().expect("expected res text frame");
+        let Message::Text(t) = first else {
+            panic!("expected res text frame")
+        };
+        assert!(t.contains("\"status\":200"), "status: {}", t);
+        assert!(t.contains("\"x-reply\":[\"fine\"]"), "reply header: {}", t);
+        // multi-value REQUEST header fidelity is asserted in the responder
+        // above (x-multi: a AND b both arrive at the local service, #243 M6).
+
+        // DATA frame with the exact body bytes
+        let second = msgs.get(1).expect("expected DATA frame");
+        let Message::Binary(b) = second else {
+            panic!("expected DATA frame")
+        };
+        assert_eq!(b.first(), Some(&0x01));
+        assert!(b.windows(8).any(|w| w == b"ureq3-ok"), "body bytes missing");
+
+        // FIN last
+        let third = msgs.get(2).expect("expected FIN frame");
+        let Message::Binary(fin) = third else {
+            panic!("expected FIN frame")
+        };
+        assert_eq!(fin.first(), Some(&0x02));
+        handle.join().expect("serve thread must not panic (#212 rewrite)");
+    }
+
+    #[test]
+    fn serve_502_on_refused_local() {
+        // nothing listens on this port: ureq must surface a transport error
+        // and serve() must answer 502 + error page instead of hanging.
+        let (rx, handle, _) = serve_against(|mut c: TcpStream| {
+            let mut buf = [0u8; 2048];
+            let _ = c.read(&mut buf);
+        });
+        let msgs = wire_msgs(rx);
+        match msgs.first() {
+            Some(Message::Text(t)) => assert!(t.contains("\"status\":502"), "502 expected, got {}", t),
+            _ => panic!("expected 502 res frame"),
+        }
+        handle.join().expect("serve thread must not panic on transport error");
     }
 }
