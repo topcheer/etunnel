@@ -19,6 +19,7 @@
 package main
 
 import (
+	"os"
 	"context"
 	"flag"
 	"fmt"
@@ -55,6 +56,11 @@ func handle(c *websocket.Conn, mode string) {
 		return
 	}
 	welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`
+	// #338 batch 2: env-injectable welcome.proto for the SDK proto-gate tests
+	// (missing/unset = no proto field = v1 tolerance path).
+	if p := os.Getenv("ETUNNEL_FIXTURE_PROTO"); p != "" {
+		welcome = fmt.Sprintf(`{"type":"welcome","proto":%s,`, p) + welcome[len(`{"type":"welcome",`):]
+	}
 	if err := c.Write(ctx, websocket.MessageText, []byte(welcome)); err != nil {
 		return
 	}

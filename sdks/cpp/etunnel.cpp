@@ -459,6 +459,14 @@ int main(int argc, char **argv) {
             if (msg->get_opcode() == websocketpp::frame::opcode::text) {
                 std::string t = msg->get_payload();
                 if (t.find("\"type\":\"welcome\"") != std::string::npos) {
+                    // #338: PROTOCOL.md section 3 both-sides version gate -
+                    // reject newer protocols loudly; missing proto = v1.
+                    long proto = json_num_field(t, "proto");
+                    if (proto > 1) {
+                        std::cerr << "etunnel: proto_version: server speaks protocol v" << proto
+                                  << "; update the SDK" << std::endl;
+                        std::exit(2);
+                    }
                     g_resume = json_str_field(t, "resumeToken");
                     std::cout << "TUNNEL_URL: " << json_str_field(t, "url") << std::endl;
                     gotUrl = true;

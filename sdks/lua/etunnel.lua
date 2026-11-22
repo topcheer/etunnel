@@ -331,6 +331,12 @@ local function connect(server, local_port, token, subdomain, resume, routes)
     if not op then error("closed before welcome") end
     if op == 0x1 then
       if payload:find('"type":"welcome"', 1, true) then
+        -- #338: PROTOCOL.md section 3 both-sides version gate - reject
+        -- newer protocols loudly; missing proto = v1.
+        local pd = payload:match('"proto":(%d+)')
+        if pd and tonumber(pd) > 1 then
+          error("etunnel: proto_version: server speaks protocol v" .. pd .. "; update the SDK")
+        end
         url = json_field_str(payload, "url")
         resume_token = json_field_str(payload, "resumeToken")
         break

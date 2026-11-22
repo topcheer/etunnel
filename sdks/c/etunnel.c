@@ -536,6 +536,14 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
             if (m) {
                 const char *type = json_object_get_string(json_object_object_get(m, "type"));
                 if (type && !strcmp(type, "welcome")) {
+                    /* #338: PROTOCOL.md section 3 both-sides version gate -
+                     * reject newer protocols loudly; missing proto = v1. */
+                    json_object *jp = json_object_object_get(m, "proto");
+                    if (jp && json_object_get_int(jp) > 1) {
+                        fprintf(stderr, "etunnel: proto_version: server speaks protocol v%d; update the SDK\n",
+                            json_object_get_int(jp));
+                        exit(2);
+                    }
                     const char *rt = json_object_get_string(json_object_object_get(m, "resumeToken"));
                     if (rt) snprintf(g_resume, sizeof(g_resume), "%s", rt);
                     printf("TUNNEL_URL: %s\n",
