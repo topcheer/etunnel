@@ -245,8 +245,16 @@ public class Etunnel {
             Map<String, Object> m = Json.read(msgRaw);
             String type = str(m.get("type"));
             if ("welcome".equals(type)) {
+                // #338: PROTOCOL.md section 3 both-sides version gate - reject
+                // newer protocols loudly; a missing proto counts as v1.
+                Object proto = m.get("proto");
+                if (proto instanceof Number && ((Number) proto).intValue() > 1) {
+                    welcome.error = "proto_version: server speaks protocol v" + ((Number) proto).intValue() + "; update the SDK";
+                    welcome.latch.countDown();
+                } else {
                 welcome.value = m;
                 welcome.latch.countDown();
+                }
             } else if ("error".equals(type)) {
                 welcome.error = str(m.get("code")) + ": " + str(m.get("message"));
                 welcome.latch.countDown();

@@ -68,6 +68,16 @@ public class EtunnelTest {
         ok.latch.countDown();
         check(ok.await(1, TimeUnit.SECONDS, null) == val, "welcome value passthrough");
 
+        // #338: proto gate - a welcome advertising proto=2 is rejected
+        // loudly; a missing proto counts as v1 (PROTOCOL.md section 3).
+        Etunnel.Handler hg = new Etunnel.Handler(java.net.http.HttpClient.newHttpClient(), 3000, null);
+        hg.handleText("{\"type\":\"welcome\",\"proto\":2,\"url\":\"https://x.t.test\"}");
+        check(hg.welcome.error != null && hg.welcome.error.contains("proto_version"),
+            "proto=2 welcome must be rejected with proto_version (error=" + hg.welcome.error + ")");
+        Etunnel.Handler hv = new Etunnel.Handler(java.net.http.HttpClient.newHttpClient(), 3000, null);
+        hv.handleText("{\"type\":\"welcome\",\"url\":\"https://x.t.test\"}");
+        check(hv.welcome.error == null && hv.welcome.value != null, "missing proto defaults to v1 (accepted)");
+
         System.out.println(failures == 0 ? "ALL PASS" : failures + " FAILURES");
         if (failures > 0) System.exit(1);
     }
@@ -77,3 +87,4 @@ public class EtunnelTest {
         else { System.out.println("FAIL: " + what); failures++; }
     }
 }
+

@@ -571,4 +571,17 @@ class EtunnelSdkTest {
             ss.close()
         }
     }
+    @Test
+    fun welcomeProtoTooNewRejected() {
+        // #338: PROTOCOL.md section 3 both-sides version gate.
+        val (h, ws) = handlerWithWs()
+        h.handleText("""{"type":"welcome","proto":2,"url":"https://x.t.test"}""")
+        assertTrue("proto=2 welcome must be rejected", h.error!!.contains("proto_version"))
+
+        val (h1, _) = handlerWithWs()
+        h1.handleText("""{"type":"welcome","url":"https://x.t.test"}""")
+        assertTrue("missing proto defaults to v1 (accepted)", h1.info != null)
+        assertTrue(ws.bin.isEmpty())
+    }
+
 }
