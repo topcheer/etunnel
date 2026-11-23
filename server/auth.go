@@ -327,9 +327,13 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request, pro
 		s.accounts.ResetKey(id.email)
 		acct, _ = s.accounts.LookupEmail(id.email)
 	} else {
-		acct, err = s.accounts.Create(id.email, "free")
+		// #386: the provider-supplied email goes through the same shared
+		// validator as register/admin - an OAuth profile must not mint an
+		// account the admin API would reject.
+		acct, err = s.createAccountChecked(id.email, "free")
 		if err != nil {
-			http.Error(w, "account create failed", http.StatusInternalServerError)
+			s.logf("auth: %s account create refused: %v", provider, err)
+			http.Error(w, "account create failed", http.StatusUnprocessableEntity)
 			return
 		}
 		s.accounts.Mutate(id.email, func(a *Account) {
