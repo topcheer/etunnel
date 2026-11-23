@@ -202,10 +202,17 @@ jobs:
         run: |
           cd sdks/node
           V=$(node -p "require('./package.json').version")
-          if npm view @easytunnel/et-sdk@${V} version 2>/dev/null | grep -q "^${V}$"; then
+          # Idempotency (#411): only a not-found answer means "unpublished";
+          # any other probe failure must stop the job instead of letting
+          # `npm publish` blind-fire into an "already published" error.
+          if out=$(npm view "@easytunnel/et-sdk@${V}" version 2>&1) && [ "$out" = "$V" ]; then
             echo "npm: ${V} already published, skipping"
-          else
+          elif echo "$out" | grep -q "E404"; then
             npm publish --access public
+          else
+            echo "::error::npm probe failed unexpectedly for ${V} - refusing to blind-publish"
+            echo "$out"
+            exit 1
           fi
 
   publish-pypi:
@@ -250,9 +257,19 @@ jobs:
         id: gate
         run: |
           V=$(ruby -e "print Gem::Specification.load('sdks/ruby/etunnel.gemspec').version")
-          if curl -sf "https://rubygems.org/api/v1/gems/etunnel/versions/${V}.json" > /dev/null; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          fi
+          # /api/v1/gems/<gem>/versions/<v>.json does not exist (always 404, verified
+          # against 1.7.34 + 1.7.35) - use the versions list instead.
+          code=$(curl -s -o /tmp/rubygems-probe.json -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://rubygems.org/api/v1/versions/etunnel.json")
+          case "$code" in
+            200) if grep -q "\"number\":\"${V}\"" /tmp/rubygems-probe.json; then
+                   echo "rubygems: ${V} already published"
+                   echo "published=true" >> "$GITHUB_OUTPUT"
+                 else
+                   echo "rubygems: ${V} not published yet"
+                 fi ;;
+            404) echo "rubygems: gem not on rubygems.org yet" ;;
+            *) echo "::error::rubygems probe returned HTTP ${code} - refusing to blind-publish"; exit 1 ;;
+          esac
       - name: Set up Ruby
         if: steps.gate.outputs.published != 'true'
         uses: ruby/setup-ruby@v1
@@ -308,15 +325,18 @@ jobs:
       - name: push to NuGet (check-then-push, idempotent)
         run: |
           V=$(grep -m1 -o '<Version>[^<]*</Version>' sdks/csharp/Etunnel.csproj | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/')
-          if curl -sf "https://api.nuget.org/v3-flatcontainer/etunnel/${V}/etunnel.nuspec" > /dev/null; then
-            echo "nuget: ${V} already published, skipping"
-          else
-            for pkg in dist/packages/*.nupkg; do
-              dotnet nuget push "$pkg" \
-                --api-key "${{ steps.nugetlogin.outputs.NUGET_API_KEY }}" \
-                --source https://api.nuget.org/v3/index.json --skip-duplicate
-            done
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://api.nuget.org/v3-flatcontainer/etunnel/${V}/etunnel.nuspec")
+          case "$code" in
+            200) echo "nuget: ${V} already published, skipping" ;;
+            404)
+              for pkg in dist/packages/*.nupkg; do
+                dotnet nuget push "$pkg" \
+                  --api-key "${{ steps.nugetlogin.outputs.NUGET_API_KEY }}" \
+                  --source https://api.nuget.org/v3/index.json --skip-duplicate
+              done
+              ;;
+            *) echo "::error::nuget probe returned HTTP ${code} for ${V} - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-hex:
     # Hex Workload Identity (trusted publishing). Bootstrap: first release is
@@ -341,12 +361,15 @@ jobs:
         run: |
           cd sdks/elixir
           V=$(grep -oP '(?<=version: ")[^"]+' mix.exs | head -1)
-          if curl -sf "https://hex.pm/api/packages/etunnel/releases/$V" > /dev/null; then
-            echo "hex: ${V} already published, skipping"
-          else
-            mix deps.get
-            mix hex.publish --yes   # OIDC auto: id-token:write + no HEX_API_KEY
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://hex.pm/api/packages/etunnel/releases/$V")
+          case "$code" in
+            200) echo "hex: ${V} already published, skipping" ;;
+            404)
+              mix deps.get
+              mix hex.publish --yes   # OIDC auto: id-token:write + no HEX_API_KEY
+              ;;
+            *) echo "::error::hex.pm probe returned HTTP ${code} for ${V} - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-dart:
     # pub.dev automated publishing (OIDC): topcheer/etunnel + sdk-packages.yml
@@ -365,11 +388,16 @@ jobs:
       - name: dart pub publish (idempotent)
         run: |
           V=$(sed -n 's/^version: //p' sdks/dart/pubspec.yaml | head -1)
-          if curl -sf "https://pub.dev/api/packages/etunnel" | grep -q "\"$V\""; then
-            echo "pub.dev: ${V} already published, skipping"
-          else
-            cd sdks/dart && dart pub publish --force
-          fi
+          code=$(curl -s -o /tmp/pub-probe.json -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://pub.dev/api/packages/etunnel")
+          case "$code" in
+            200) if grep -q "\"$V\"" /tmp/pub-probe.json; then
+                   echo "pub.dev: ${V} already published, skipping"
+                 else
+                   cd sdks/dart && dart pub publish --force
+                 fi ;;
+            404) cd sdks/dart && dart pub publish --force ;;   # package not on pub.dev yet
+            *) echo "::error::pub.dev probe returned HTTP ${code} - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-jsr:
     # JSR (@ggcode/etunnel): scope linked to GitHub on jsr.io; deno publish
@@ -387,11 +415,16 @@ jobs:
       - name: deno publish (idempotent)
         run: |
           V=$(deno eval "const c=JSON.parse(await Deno.readTextFile('sdks/deno/deno.json'));console.log(c.version)")
-          if curl -sf "https://jsr.io/@ggcode/etunnel/meta.json" | grep -q "\"$V\""; then
-            echo "jsr: ${V} already published, skipping"
-          else
-            cd sdks/deno && deno publish --allow-dirty --no-check
-          fi
+          code=$(curl -s -o /tmp/jsr-probe.json -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://jsr.io/@ggcode/etunnel/meta.json")
+          case "$code" in
+            200) if grep -q "\"$V\"" /tmp/jsr-probe.json; then
+                   echo "jsr: ${V} already published, skipping"
+                 else
+                   cd sdks/deno && deno publish --allow-dirty --no-check
+                 fi ;;
+            404) cd sdks/deno && deno publish --allow-dirty --no-check ;;   # package not on JSR yet
+            *) echo "::error::JSR probe returned HTTP ${code} - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-central:
     # Maven Central (dev.ggcode namespace, verified via NS on the Portal).
@@ -428,11 +461,12 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           V=$(grep -m1 '<version>' sdks/java/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
-          if curl -sf "https://repo1.maven.org/maven2/dev/ggcode/etunnel/${V}/etunnel-${V}.pom" > /dev/null; then
-            echo "central: ${V} already published, skipping"
-          else
-            mvn -B -Pcentral -f sdks/java/pom.xml deploy
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://repo1.maven.org/maven2/dev/ggcode/etunnel/${V}/etunnel-${V}.pom")
+          case "$code" in
+            200) echo "central: ${V} already published, skipping" ;;
+            404) mvn -B -Pcentral -f sdks/java/pom.xml deploy ;;
+            *) echo "::error::Maven Central probe returned HTTP ${code} for ${V} - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-crates:
     # crates.io: long-lived account token in CARGO_REGISTRY_TOKEN (no OIDC
@@ -448,10 +482,15 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           V=$(grep -m1 '^version' sdks/rust/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          code=$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/etunnel/$V")
-          if [ "$code" = "200" ]; then echo "crates: $V already published"; else
-            cd sdks/rust && cargo publish --allow-dirty --token "$CARGO_REGISTRY_TOKEN"
-          fi
+          # crates.io answers 403 to requests without a User-Agent (#411) -
+          # that used to fall through to `cargo publish` and die on
+          # "already exists" during backfills. UA + 404-only semantics.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://crates.io/api/v1/crates/etunnel/$V")
+          case "$code" in
+            200) echo "crates: $V already published" ;;
+            404) cd sdks/rust && cargo publish --allow-dirty --token "$CARGO_REGISTRY_TOKEN" ;;
+            *) echo "::error::crates.io probe returned HTTP $code for $V - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-luarocks:
     needs: build
@@ -468,10 +507,12 @@ jobs:
           LR_KEY: ${{ secrets.LUAROCKS_API_KEY }}
         run: |
           V=$(grep -m1 '^version' sdks/lua/ggcode.etunnel-*-1.rockspec | sed 's/version = "\(.*\)-1"/\1/')
-          code=$(curl -s -o /dev/null -w '%{http_code}' "https://luarocks.org/modules/topcheer/ggcode.etunnel/${V}-1")
-          if [ "$code" = "200" ]; then echo "luarocks: $V already published"; else
-            cd sdks/lua && luarocks upload ggcode.etunnel-${V}-1.rockspec --api-key="$LR_KEY"
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://luarocks.org/modules/topcheer/ggcode.etunnel/${V}-1")
+          case "$code" in
+            200) echo "luarocks: $V already published" ;;
+            404) cd sdks/lua && luarocks upload ggcode.etunnel-${V}-1.rockspec --api-key="$LR_KEY" ;;
+            *) echo "::error::luarocks probe returned HTTP $code for $V - refusing to blind-publish"; exit 1 ;;
+          esac
 
   publish-clojars:
     # Clojure SDK keeps its own GAV (dev.ggcode:etunnel-clj) - it is a
@@ -497,12 +538,25 @@ jobs:
       - name: Deploy etunnel-clj (idempotent)
         run: |
           V=$(grep -m1 '<version>' sdks/clojure/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
-          code=$(curl -s -o /dev/null -w '%{http_code}' "https://repo.clojars.org/dev/ggcode/etunnel-clj/${V}/")
-          if [ "$code" = "200" ]; then echo "clojars: $V already published"; else
-            cd sdks/clojure && jar cf /tmp/etunnel-clj.jar etunnel.clj && \
-            mvn -q deploy:deploy-file -DrepositoryId=clojars -Durl=https://repo.clojars.org \
-              -Dfile=/tmp/etunnel-clj.jar -DpomFile=pom.xml
-          fi
+          # repo.clojars.org directory URLs are unreliable (404 for existing
+          # artifacts); the Clojars API is authoritative but blips 404 once in
+          # a while - retry once so a blip cannot trigger a blind redeploy.
+          probe() { curl -s -o /tmp/clojars-probe.json -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://clojars.org/api/artifacts/dev/ggcode/etunnel-clj"; }
+          code=$(probe); [ "$code" = "404" ] && { sleep 3; code=$(probe); }
+          case "$code" in
+            200) if grep -q "\"version\":\"$V\"" /tmp/clojars-probe.json; then
+                   echo "clojars: $V already published"
+                 else
+                   echo "clojars: $V not published yet"
+                   cd sdks/clojure && jar cf /tmp/etunnel-clj.jar etunnel.clj && \
+                   mvn -q deploy:deploy-file -DrepositoryId=clojars -Durl=https://repo.clojars.org \
+                     -Dfile=/tmp/etunnel-clj.jar -DpomFile=pom.xml
+                 fi ;;
+            404) cd sdks/clojure && jar cf /tmp/etunnel-clj.jar etunnel.clj && \
+                 mvn -q deploy:deploy-file -DrepositoryId=clojars -Durl=https://repo.clojars.org \
+                   -Dfile=/tmp/etunnel-clj.jar -DpomFile=pom.xml ;;   # artifact not on Clojars yet
+            *) echo "::error::clojars probe returned HTTP $code for $V - refusing to blind-publish"; exit 1 ;;
+          esac
   publish-android:
     # Maven Central (AAR, dev.ggcode:etunnel-android) - #260. Uses the OIDC
     # trusted-publishing pipeline (id-token:write + environment), same as the
@@ -543,10 +597,12 @@ jobs:
         run: |
           V=$(sed -n 's/.*coordinates("dev.ggcode", "etunnel-android", "\([^"]*\)").*/\1/p' sdks/android/build.gradle.kts)
           echo "etunnel-android version: $V"
-          if curl -sf "https://repo1.maven.org/maven2/dev/ggcode/etunnel-android/${V}/etunnel-android-${V}.pom" > /dev/null; then
-            echo "central: etunnel-android ${V} already published, skipping"
-            exit 0
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "etunnel-release-bot (github.com/topcheer/etunnel)" "https://repo1.maven.org/maven2/dev/ggcode/etunnel-android/${V}/etunnel-android-${V}.pom")
+          case "$code" in
+            200) echo "central: etunnel-android ${V} already published, skipping"; exit 0 ;;
+            404) echo "central: etunnel-android ${V} not published yet" ;;
+            *) echo "::error::Maven Central probe returned HTTP ${code} for ${V} - refusing to blind-publish"; exit 1 ;;
+          esac
           # OIDC trusted publishing: exchange the Actions JWT for short-lived
           # Central Portal credentials; fall back to the stored Portal token.
           USER=""
