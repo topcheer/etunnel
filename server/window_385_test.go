@@ -109,7 +109,9 @@ func TestHandshakeVsDeleteNoSurvivor(t *testing.T) {
 	// The delete lands ~40ms in, through the real admin delete handler (the
 	// route body: cascade kick + authoritative store delete).
 	var delCode int
+	delDone := make(chan struct{})
 	go func() {
+		defer close(delDone)
 		<-start
 		time.Sleep(40 * time.Millisecond)
 		r := httptest.NewRequest(http.MethodDelete, "/admin/accounts/"+acct.APIKey, nil)
@@ -120,6 +122,10 @@ func TestHandshakeVsDeleteNoSurvivor(t *testing.T) {
 	}()
 	close(start) // release workers + delete goroutine together
 	wg.Wait()
+	// The delete goroutine is not in wg: delCode is only safe to read once it
+	// has returned. Without this wait the race detector flagged a write/read
+	// pair here whenever the handler outlasted the handshakes (~2-5%/run).
+	<-delDone
 
 	mu.Lock()
 	subs := make([]string, 0, len(live))
