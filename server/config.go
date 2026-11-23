@@ -152,6 +152,12 @@ type Config struct {
 	// MaxStreamsPerTunnel limits concurrent HTTP streams per tunnel. 0 = default 256.
 	MaxStreamsPerTunnel int
 
+	// LedgerStrict restores the pre-#407 fail-closed behavior for the PG
+	// session ledger (ETUNNEL_PG_DSN): a startup connect/migrate failure
+	// aborts etunneld. Default false degrades to journal-only, logs a loud
+	// warning, and retries in the background every 30s. CLI: -ledger-strict.
+	LedgerStrict bool
+
 	HeaderWaitTimeout time.Duration // wait for client response headers (default 30s)
 	StreamIdleTimeout time.Duration // per-write deadline when proxying bodies (default 10m)
 	// StreamStallTimeout bounds how long one stream may block the shared

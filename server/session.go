@@ -604,9 +604,9 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	// grep/structured collection on purpose.
 	s.logf("session %s: open ip=%s sub=%s plan=%s account=%s custom=%t",
 		sess.id, sess.ip, sess.sub, tier.Name, sess.accountEmail(), sess.custom)
-	if err := s.ledger.recordOpen(sess); err != nil {
-		s.logf("session %s: ledger open failed: %v", sess.id, err)
-	}
+	// #407: off the handshake path entirely - the write runs in its own
+	// goroutine (snapshot taken here); failures are counted + sampled inside.
+	s.ledger.recordOpenAsync(sess)
 
 	// Telegram: push the tunnel-open event to the admin chat. Resume
 	// reconnects walk this same path - the per-subdomain cooldown inside
@@ -957,9 +957,9 @@ func (s *Session) Close(reason string) {
 		// sink never blocks the close path.
 		s.srv.logf("session %s: close ip=%s sub=%s dur=%s reason=%s streams=%d",
 			s.id, s.ip, s.sub, time.Since(s.started).Round(time.Second), reason, len(streams))
-		if err := s.srv.ledger.recordClose(s, reason, len(streams)); err != nil {
-			s.srv.logf("session %s: ledger close failed: %v", s.id, err)
-		}
+		// #407: off the close path - the subdomain slot below is released
+		// without waiting on PG; failures are counted + sampled inside.
+		s.srv.ledger.recordCloseAsync(s, reason, len(streams))
 		for _, st := range streams {
 			st.abort()
 		}

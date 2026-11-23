@@ -180,7 +180,7 @@ func TestSessionLedgerPGLifecycle(t *testing.T) {
 	if dsn == "" {
 		t.Skip("ET_PG_TEST_DSN not set")
 	}
-	lg, err := newSessionLedger(dsn)
+	lg, err := newSessionLedger(dsn, false, nil)
 	if err != nil {
 		t.Fatalf("ledger: %v", err)
 	}
@@ -232,6 +232,33 @@ func TestSessionLedgerPGLifecycle(t *testing.T) {
 
 	// housekeeping: the test row must not outlive the run
 	_, _ = lg.pool.Exec(context.Background(), `DELETE FROM sessions WHERE id=$1`, sess.id)
+
+	// #407: on the session path open and close are independent goroutines, so
+	// a close may land BEFORE its open. The close UPSERT must then produce a
+	// complete row, and the late open's ON CONFLICT DO NOTHING must not
+	// clobber the close columns.
+	sess2 := &Session{
+		ip:   "203.0.113.10",
+		sub:  "pgtest2",
+		tier: &Tier{Name: "pro"},
+		id:   fmt.Sprintf("sess-pgtest2-%d", time.Now().UnixNano()),
+	}
+	sess2.started = time.Now()
+	if err := lg.recordClose(sess2, "closed first", 1); err != nil {
+		t.Fatalf("recordClose before open: %v", err)
+	}
+	if err := lg.recordOpen(sess2); err != nil {
+		t.Fatalf("late recordOpen: %v", err)
+	}
+	var sub2, reason2 string
+	var closed3 *time.Time
+	err = lg.pool.QueryRow(context.Background(),
+		`SELECT sub, reason, closed FROM sessions WHERE id=$1`, sess2.id).
+		Scan(&sub2, &reason2, &closed3)
+	if err != nil || sub2 != "pgtest2" || reason2 != "closed first" || closed3 == nil {
+		t.Fatalf("close-before-open row wrong: err=%v sub=%q reason=%q closed=%v", err, sub2, reason2, closed3)
+	}
+	_, _ = lg.pool.Exec(context.Background(), `DELETE FROM sessions WHERE id=$1`, sess2.id)
 }
 
 // TestNilLedgerIsNoop: the no-DSN configuration calls the ledger methods on
