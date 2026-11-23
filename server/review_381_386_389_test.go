@@ -223,7 +223,7 @@ func TestPayPalAttributionLookupFailureRetries(t *testing.T) {
 				return
 			}
 			// #380/#391: real capture-lookup shape - TOP-LEVEL custom_id.
-			fmt.Fprint(w, `{"id":"CAP-389","custom_id":"pl389@x.com","status":"COMPLETED"}`)
+			fmt.Fprint(w, `{"id":"CAP-389","custom_id":"pl389@x.com:pro","status":"COMPLETED"}`)
 		default:
 			fmt.Fprint(w, `{"verification_status":"SUCCESS"}`)
 		}

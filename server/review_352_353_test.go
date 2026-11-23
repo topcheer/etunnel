@@ -63,7 +63,7 @@ func TestPayPalRefundRollsBackTier(t *testing.T) {
 			// #380: the REAL capture-lookup endpoint
 			// GET /v2/payments/captures/{id} returns the capture with a
 			// top-level custom_id.
-			fmt.Fprint(w, `{"id":"`+capID+`","custom_id":"rf352@x.com","status":"COMPLETED"}`)
+			fmt.Fprint(w, `{"id":"`+capID+`","custom_id":"rf352@x.com:pro","status":"COMPLETED"}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -114,7 +114,7 @@ func TestPayPalDisputeRollsBackTier(t *testing.T) {
 	if _, err := s.activate("ds352@x.com", "starter"); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"id":"evt-352b","event_type":"CUSTOMER.DISPUTE.CREATED","resource":{"custom_id":"ds352@x.com"}}`
+	body := `{"id":"evt-352b","event_type":"CUSTOMER.DISPUTE.CREATED","resource":{"custom_id":"ds352@x.com:starter"}}`
 	r := httptest.NewRequest(http.MethodPost, "/webhooks/paypal", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handlePayPalWebhook(w, r)

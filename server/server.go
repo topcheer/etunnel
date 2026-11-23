@@ -33,7 +33,11 @@ type Server struct {
 	// regLimiter throttles /api/register per source IP. Per instance rather
 	// than process-global: two Servers in one process (tests, embedders) must
 	// not share one bucket, which made repeated runs fail with 429.
-	regLimiter   *registerLimiter
+	regLimiter *registerLimiter
+	// kickWG tracks kickSessionsByAccount's async finisher (#396): Run's
+	// shutdown gives it a bounded wait so it is not left writing recordClose
+	// into a pool that is already closed. The finisher self-bounds at 30s.
+	kickWG       sync.WaitGroup
 	adminFailsMu sync.Mutex
 	adminFails   map[string]*adminFailState
 	// passkeyBeginMu/passkeyBegins rate-limit the unauthenticated passkey
@@ -351,6 +355,19 @@ func (s *Server) Run(ctx context.Context) error {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	// #396: give any kick finisher a short bounded grace to land its
+	// remaining closes before Run returns (it self-bounds at 30s; we only
+	// cover the common just-launched case and do not extend shutdown).
+	kickDone := make(chan struct{})
+	go func() {
+		s.kickWG.Wait()
+		close(kickDone)
+	}()
+	select {
+	case <-kickDone:
+	case <-time.After(2 * time.Second):
+		s.logf("shutdown: kick finisher still draining, leaving it to its own 30s budget")
 	}
 	return nil
 }
