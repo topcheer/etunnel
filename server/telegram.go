@@ -316,6 +316,20 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 		}
 		kb, body := tapRowsWith("tap an account+tier to upgrade:", rows, nil)
 		return body, kb
+	case "/bursts":
+		bursts := listBursts()
+		if len(bursts) == 0 {
+			return "no network is throttled right now (burst guard: " + fmt.Sprint(s.cfg.MaxTunnelsPerIP24PerMin) + "/min per /24)", nil
+		}
+		rows := make([]string, 0, len(bursts))
+		notes := make([]string, 0, len(bursts))
+		for _, b := range bursts {
+			rows = append(rows, "/unthrottle "+b.Prefix)
+			notes = append(notes, fmt.Sprintf("%s · %d in window · last %s · %s ago",
+				b.Prefix, b.Count, b.LastIP, time.Since(b.Last).Round(time.Second)))
+		}
+		kb, body := tapRowsWith("tap a network to unthrottle:", rows, notes)
+		return body, kb
 	}
 	return s.handleAdminCommand(text), nil
 }
@@ -340,6 +354,8 @@ func (s *Server) handleAdminCommand(text string) string {
 			"/whois <subdomain> - tunnel owner\n" +
 			"/key <email> - show API key\n" +
 			"/delete <email> - remove account\n" +
+			"/bursts - networks throttled by the tunnel burst guard\n" +
+			"/unthrottle <network> - clear a network's burst window\n" +
 			"/history [5|10|30] - tunnels opened in the last N minutes"
 	case "/history":
 		mins := 10
@@ -437,6 +453,28 @@ func (s *Server) handleAdminCommand(text string) string {
 			return "error: " + err.Error()
 		}
 		return email + " -> " + tier
+	case "/bursts":
+		bursts := listBursts()
+		if len(bursts) == 0 {
+			return "no network is throttled right now"
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "throttled networks (burst guard %d/min per /24):\n", s.cfg.MaxTunnelsPerIP24PerMin)
+		for _, r := range bursts {
+			fmt.Fprintf(&b, "%s · %d in window · last %s · %s ago\n", r.Prefix, r.Count, r.LastIP, time.Since(r.Last).Round(time.Second))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	case "/unthrottle":
+		if rest == "" || !validIP24Prefix(rest) {
+			return "usage: /unthrottle <network>  (e.g. 94.192.76 - as listed by /bursts)"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cleared, err := s.resetIP24(ctx, rest)
+		if err != nil {
+			return fmt.Sprintf("unthrottle %s failed: %v", rest, err)
+		}
+		return fmt.Sprintf("unthrottled %s (cleared %d counted handshakes)", rest, cleared)
 	case "/whois":
 		if rest == "" {
 			return "usage: /whois <subdomain>"

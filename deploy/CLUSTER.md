@@ -150,7 +150,8 @@ sequenceDiagram
 - **JSON store + replicas**: never combine. JSON is single-writer; with
   mesh + JSON each node has its own account universe.
 - **Limits without Redis**: per-instance. `max-tunnels-per-ip 5` across
-  3 instances allows up to 15 from one IP.
+  3 instances allows up to 15 from one IP; the /24 burst rate
+  (`max-tunnels-per-ip24-min`) multiplies the same way.
 - **Anonymous per-IP counter leak**: an instance killed with SIGKILL (not
   SIGTERM) leaves its Redis counter entry behind; it expires only via the
   TTL (set by the harness) or manual cleanup. SIGTERM drains cleanly.

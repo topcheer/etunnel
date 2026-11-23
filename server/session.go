@@ -349,6 +349,16 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			ipSlot = nil
 		}
 	}
+	// Burst guard (anonymous only): new tunnels per network prefix per minute.
+	// Runs before the per-IP slot is taken so a rejection needs no release.
+	// Observed: 8 tunnels in 40s from 94.192.76.1/.2/.3 - three IPs, one /24,
+	// each under the per-IP limit; rejected with too_many_tunnels so the
+	// client backs off, and the admin channel is paged once per prefix.
+	if acct == nil && !s.takeIP24Slot(r.Context(), ip) {
+		s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,
+			"too many new tunnels from your network, retry in a minute")
+		return
+	}
 	if acct == nil && s.cfg.MaxTunnelsPerIP > 0 && s.counter != nil {
 		if ipSlot = s.takeIPSlot(r.Context(), ip); ipSlot == nil {
 			s.wsErrorClose(ws, protocol.ErrCodeTooManyTunnels,

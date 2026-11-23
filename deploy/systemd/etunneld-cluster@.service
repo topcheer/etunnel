@@ -30,7 +30,8 @@ ExecStart=/opt/etunnel/etunneld \
   --acme-email ${ETUNNEL_ACME_EMAIL} \
   --acme-ca ${ETUNNEL_ACME_CA} \
   --accounts /var/lib/etunnel/accounts-%i.json \
-  --max-tunnels-per-ip 5
+  --max-tunnels-per-ip 5 \
+  --max-tunnels-per-ip24-min 6
 Restart=always
 RestartSec=3
 
