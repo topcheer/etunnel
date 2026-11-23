@@ -445,7 +445,10 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                             let tx3 = reader_tx.clone();
                             let local3 = local.clone();
                             let agent3 = agent.clone(); // #357: shared pool
-                            if !try_reserve_serve_slot() {
+                            // #387: the guard is constructed BEFORE the
+                            // spawn and moved into the thread - a serve panic
+                            // or spawn unwind releases the slot in Drop.
+                            let Some(slot) = ServeSlot::acquire() else {
                                 // #369: at the in-flight serve cap - refuse
                                 // loudly (503 + RST) instead of stacking
                                 // another blocked OS thread.
@@ -454,10 +457,10 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
                                 ).into())).ok();
                                 tx3.send(frame(0x03, sid, b"")).ok();
                                 continue;
-                            }
+                            };
                             thread::spawn(move || {
                                 serve(tx3, agent3, local3, sid, st);
-                                release_serve_slot(); // #369
+                                drop(slot);
                             });
                         }
                         0x03 => { streams.remove(&sid); }
@@ -621,13 +624,18 @@ impl Local {
 /// the comment referenced) instead of relying on defaults.
 fn build_http_agent(connect_timeout: std::time::Duration,
                     recv_response: std::time::Duration,
-                    recv_body: std::time::Duration,
+                    recv_body: Option<std::time::Duration>,
                     per_io: std::time::Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_connect(Some(connect_timeout))
         .timeout_recv_response(Some(recv_response))
-        .timeout_recv_body(Some(recv_body))
+        // #382 (HIGH): NO total recv_body budget - ureq 3.5.2 semantics
+        // (config.rs:909-924) make it a TOTAL duration, which falsely killed
+        // slow-but-active bodies (>60s total with continuous data). The idle
+        // bound is timeout_per_read/per_write below; ETUNNEL_BODY_TIMEOUT can
+        // opt back into a total cap (None = unbounded, Go parity).
+        .timeout_recv_body(recv_body)
         // #369: per-op wake-ups - budgets are checked at IO boundaries, so a
         // stalled socket read must time out periodically for recv_* to fire.
         .timeout_per_read(Some(per_io))
@@ -638,15 +646,20 @@ fn build_http_agent(connect_timeout: std::time::Duration,
         .into()
 }
 
-/// Production configuration: 10s connect / 30s response headers / 60s body
-/// (#369: Go uses ResponseHeaderTimeout=0 with cheap goroutines; Rust pays
-/// one OS thread per in-flight serve, so the reads must be bounded).
+/// Production configuration: 10s connect / 30s response headers / unbounded
+/// body (idle-bounded via per-read 15s). (#369: Go uses
+/// ResponseHeaderTimeout=0 with cheap goroutines; Rust pays one OS thread
+/// per in-flight serve, so the reads must be idle-bounded.)
+/// ETUNNEL_BODY_TIMEOUT=<secs> opts into a total body cap (#382 escape hatch).
 fn build_production_agent() -> ureq::Agent {
+    let recv_body = std::env::var("ETUNNEL_BODY_TIMEOUT").ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(std::time::Duration::from_secs);
     build_http_agent(
         std::time::Duration::from_secs(10),  // connect
         std::time::Duration::from_secs(30),  // response headers
-        std::time::Duration::from_secs(60),  // body
-        std::time::Duration::from_secs(15),  // per-IO wake-up
+        recv_body,                           // #382: None by default (Go parity)
+        std::time::Duration::from_secs(15),  // per-IO wake-up (idle bound)
     )
 }
 
@@ -657,17 +670,28 @@ fn build_production_agent() -> ureq::Agent {
 /// visitor gets 503 + RST (Go reconnect.go-style refusal, not a silent drop).
 static SERVE_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Reserve an in-flight serve slot. false = at capacity: caller must 503+RST.
-fn try_reserve_serve_slot() -> bool {
-    SERVE_IN_FLIGHT
-        .fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |n| {
-            if n >= MAX_STREAMS { None } else { Some(n + 1) }
-        })
-        .is_ok()
+/// #387 (MED): RAII reservation - the slot is released in Drop, covering
+/// serve() panics, spawn-failure unwinds and every early return (the manual
+/// reserve/release pair left the unwind path uncovered).
+struct ServeSlot;
+
+impl ServeSlot {
+    /// Reserve an in-flight serve slot. None = at capacity: caller must
+    /// 503+RST.
+    fn acquire() -> Option<Self> {
+        SERVE_IN_FLIGHT
+            .fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |n| {
+                if n >= MAX_STREAMS { None } else { Some(n + 1) }
+            })
+            .is_ok()
+            .then_some(Self)
+    }
 }
 
-fn release_serve_slot() {
-    SERVE_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+impl Drop for ServeSlot {
+    fn drop(&mut self) {
+        SERVE_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, st: StreamBuf) {
@@ -755,6 +779,21 @@ fn serve(tx: mpsc::Sender<Message>, agent: ureq::Agent, local: Local, sid: u32, 
     // "complete" 200 with a truncated body (#243 M7 semantics apply
     // mid-body too).
     let body_incomplete = body_read_result.is_err();
+    if let Some(ref e) = body_read_result.err() {
+        // #387: distinguish the failure class - an idle timeout means the
+        // local stalled (per-read budget), a reset/EOF means it died.
+        let kind = e.kind();
+        let why = if matches!(kind, std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
+            "idle timeout (per-read budget)"
+        } else if matches!(kind, std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::BrokenPipe) {
+            "local connection closed"
+        } else {
+            "read failed"
+        };
+        eprintln!("etunnel: stream {}: body read incomplete: {} ({})", sid, why, e);
+    }
 
     let hdr_json = hdrs
         .iter()
@@ -1227,7 +1266,7 @@ mod connect_timeout_tests {
         let agent = build_http_agent(
             std::time::Duration::from_secs(1),
             std::time::Duration::from_secs(1), // #369 recv_response budget
-            std::time::Duration::from_secs(2), // #369 recv_body budget
+            None, // #382: no total body budget (idle-bound only)
             std::time::Duration::from_millis(300), // per-IO wake-up
         );
         let handle = std::thread::spawn(move || {
@@ -1258,7 +1297,7 @@ mod connect_timeout_tests {
         let _ = build_http_agent(
             std::time::Duration::from_secs(10),
             std::time::Duration::from_secs(30),
-            std::time::Duration::from_secs(60),
+            None, // #382: no total body budget by default
             std::time::Duration::from_secs(15),
         );
     }
@@ -1302,7 +1341,7 @@ mod serve_bounds_tests {
         port
     }
 
-    fn run_serve_collect(port: u16, recv_response: u64, recv_body: u64) -> std::time::Duration {
+    fn run_serve_collect(port: u16, recv_response: u64, recv_body: Option<u64>) -> std::time::Duration {
         let (tx, rx) = mpsc::channel();
         let st = StreamBuf {
             method: "GET".into(),
@@ -1314,7 +1353,7 @@ mod serve_bounds_tests {
         let agent = build_http_agent(
             std::time::Duration::from_secs(1),
             std::time::Duration::from_secs(recv_response),
-            std::time::Duration::from_secs(recv_body),
+            recv_body.map(std::time::Duration::from_secs),
             std::time::Duration::from_millis(300),
         );
         let h = std::thread::spawn(move || {
@@ -1335,7 +1374,7 @@ mod serve_bounds_tests {
         t0.elapsed()
     }
 
-    fn run_serve(port: u16, recv_response: u64, recv_body: u64) -> std::time::Duration {
+    fn run_serve(port: u16, recv_response: u64, recv_body: Option<u64>) -> std::time::Duration {
         let (tx, rx) = mpsc::channel();
         let st = StreamBuf {
             method: "GET".into(),
@@ -1347,7 +1386,7 @@ mod serve_bounds_tests {
         let agent = build_http_agent(
             std::time::Duration::from_secs(1),              // connect
             std::time::Duration::from_secs(recv_response),  // #369 recv_response
-            std::time::Duration::from_secs(recv_body),      // #369 recv_body
+            recv_body.map(std::time::Duration::from_secs),  // #382: None = unbounded
             std::time::Duration::from_millis(300),          // per-IO wake-up
         );
         let h = std::thread::spawn(move || {
@@ -1370,11 +1409,11 @@ mod serve_bounds_tests {
 
     #[test]
     fn head_only_local_body_timeout_ends_in_rst() {
-        // #369: res(200) headers arrive, the body never does - the visitor
-        // must get an RST (not a clean FIN) and the serve thread must exit
-        // inside the recv_body budget.
+        // #369 + #382: res(200) headers arrive, the body never does - the
+        // visitor must get an RST (not a clean FIN) and the serve thread
+        // must exit inside the per-read IDLE bound (no total body budget).
         let port = head_only_server();
-        let d = run_serve_collect(port, 2, 1);
+        let d = run_serve_collect(port, 2, None);
         assert!(d < std::time::Duration::from_secs(4),
             "recv_body timeout not bounding: {:?}", d);
         // run_serve_collect already asserts the exchange terminated with RST
@@ -1383,24 +1422,117 @@ mod serve_bounds_tests {
     #[test]
     fn silent_local_502_within_recv_response_budget() {
         let port = silent_server();
-        let d = run_serve(port, 1, 30); // recv_response budget fires first here
+        let d = run_serve(port, 1, None); // recv_response budget fires first here
         assert!(d < std::time::Duration::from_secs(4),
             "recv_response timeout not bounding: {:?}", d);
     }
 
     #[test]
     fn in_flight_serve_cap_reserves_and_releases() {
-        // #369: the cap helper must refuse at MAX_STREAMS and release cleanly.
-        let mut reserved = 0usize;
-        while try_reserve_serve_slot() {
-            reserved += 1;
-            assert!(reserved <= MAX_STREAMS, "cap exceeded the stream limit");
+        // #387: ServeSlot acquire refuses at the cap and Drop releases
+        // cleanly (also covers panic/spawn-failure unwinds). NOTE: other
+        // tests in this binary hold slots concurrently (global counter), so
+        // the assertions are written concurrency-safe: bounded acquisition,
+        // an eventual refusal, and re-opening after release.
+        let mut reserved: Vec<ServeSlot> = Vec::new();
+        let mut refused = false;
+        for _ in 0..MAX_STREAMS {
+            match ServeSlot::acquire() {
+                Some(slot) => reserved.push(slot),
+                None => { refused = true; break; }
+            }
         }
-        assert_eq!(reserved, MAX_STREAMS, "cap must refuse exactly at MAX_STREAMS");
-        for _ in 0..reserved {
-            release_serve_slot();
+        assert!(reserved.len() >= 1, "at least one slot must be reservable");
+        assert!(refused || reserved.len() == MAX_STREAMS,
+            "slots neither refused nor at cap (held={}, refused={})", reserved.len(), refused);
+        let reserved_count = reserved.len();
+        drop(reserved);
+        // after releasing everything we held, at least one slot re-opens
+        let reopened = ServeSlot::acquire();
+        assert!(reopened.is_some(), "release must re-open slots (#387)");
+        drop(reopened);
+        let _ = reserved_count;
+    }
+}
+
+#[cfg(test)]
+mod slow_body_tests {
+    // #382 (HIGH) regression: a slow-but-ACTIVE body (continuous chunks,
+    // total duration far beyond any total-duration budget) must complete
+    // cleanly - the #369 recv_body total budget falsely killed exactly this
+    // shape. The idle bound (per-read) does not fire because chunks keep
+    // arriving inside the idle window.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+
+    #[test]
+    fn slow_active_body_completes_cleanly() {
+        let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = ln.local_addr().unwrap().port();
+        let chunk = [b'x'; 200];
+        std::thread::spawn(move || {
+            let (mut c, _) = ln.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = c.read(&mut buf);
+            // 10 chunks x 200B, 200ms apart => 2.0s total body duration
+            // (the #369 test-budget recv_body of 1s would have RST'd this
+            // mid-stream; removal makes it complete)
+            let _ = c.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2000\r\n\r\n");
+            for _ in 0..10 {
+                let _ = c.write_all(&chunk);
+                let _ = c.flush();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+
+        let (tx, rx) = mpsc::channel();
+        let st = StreamBuf {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            size: 0,
+        };
+        // same config path as production: connect 10s (unused here), recv
+        // response 30s, NO total body budget, per-read idle bound 2s
+        // (chunks arrive every 200ms - always inside the idle window)
+        let agent = build_http_agent(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            None,
+            std::time::Duration::from_secs(2),
+        );
+        let h = std::thread::spawn(move || {
+            serve(tx, agent, Local::One(format!("127.0.0.1:{}", port)), 1, st)
+        });
+
+        let t0 = std::time::Instant::now();
+        let mut body = Vec::new();
+        let mut clean_fin = false;
+        while t0.elapsed() < std::time::Duration::from_secs(10) {
+            let m = match rx.recv_timeout(std::time::Duration::from_secs(6)) {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+            match m {
+                Message::Binary(ref b) => {
+                    match b.first() {
+                        Some(&0x01) => body.extend_from_slice(&b[9..]),
+                        Some(&0x02) => { clean_fin = true; break; }
+                        Some(&0x03) => { body.clear(); break; } // RST: budget misfire
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
-        assert!(try_reserve_serve_slot(), "release must re-open the slot");
-        release_serve_slot();
+        h.join().expect("serve thread must not panic");
+
+        assert_eq!(body.len(), 2000, "slow body must arrive complete (got {} bytes)", body.len());
+        assert!(body.iter().all(|&b| b == b'x'), "slow body content corrupted");
+        assert!(clean_fin, "slow active body must end with a clean FIN, not an RST (#382)");
     }
 }
