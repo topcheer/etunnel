@@ -249,9 +249,25 @@ func TestResumeConcurrentOverQuotaRejected(t *testing.T) {
 		close1()
 	}
 
-	// Fire both resumes concurrently behind a start barrier.
+	// Fire both resumes concurrently behind a TWO-LEVEL barrier (#405).
+	//
+	// Level 1 (start) only aligns the goroutines' launch - it does NOT
+	// guarantee their handshakes overlap: with the old immediate closeFn()
+	// a serialized schedule let goroutine #1 receive its welcome AND release
+	// the quota slot before goroutine #2 even sent hello, so #2 legally
+	// reclaimed its custom name and the test misreported customWins=2.
+	//
+	// Level 2 (arrived) closes that window: each goroutine parks AFTER its
+	// welcome arrives and only releases (closeFn) once BOTH welcomes have
+	// arrived. The first resume therefore holds the single quota slot for the
+	// entire decision window, so the second resume MUST hit the in-lock quota
+	// path (AcquireBounded) and fall through to a random subdomain - which is
+	// the invariant under test.
 	start := make(chan struct{})
 	var wg sync.WaitGroup
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	release := make(chan struct{})
 	welcomes := make(chan protocol.Welcome, 2)
 	for _, tok := range tokens {
 		tok := tok
@@ -263,10 +279,14 @@ func TestResumeConcurrentOverQuotaRejected(t *testing.T) {
 				Token: acct.APIKey, Resume: tok,
 			})
 			welcomes <- w
+			arrived.Done() // level 2: my welcome is in
+			<-release      // hold the slot until BOTH welcomes have arrived
 			closeFn()
 		}()
 	}
 	close(start)
+	arrived.Wait() // both handshakes completed while the slot was still held
+	close(release)
 	wg.Wait()
 	close(welcomes)
 
