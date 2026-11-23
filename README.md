@@ -273,6 +273,12 @@ localized governing-language note.
   default 6 per minute; /24 for IPv4, /64 for IPv6). Bursts that rotate
   inside one NAT pool are rejected with `too_many_tunnels` and page the
   Telegram admin channel once per prefix per 10 minutes.
+- Optional offline geolocation (`-geoip-db <ip2region v4 xdb>`, `-geoip-db6`
+  for IPv6): Telegram tunnel-open and burst alerts gain the visitor's
+  country / region / ISP (e.g. `ip 94.192.76.3 (Saudi Arabia · Eastern
+  Province · Mobily)`). The lookup runs only inside the async push, never on
+  the handshake or proxy path, and stays on the box - no third-party API.
+  Download the xdb once (see `deploy/RUNBOOK.md` §1b); empty flag = off.
 - Heartbeats both ways (`ping`/`pong` plus WS ping), stalled streams are reset
   instead of freezing the tunnel.
 - Accounts persist to a JSON file with atomic writes.
