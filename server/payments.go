@@ -1223,13 +1223,25 @@ type paypalEventResource struct {
 // is reported separately from "genuinely not attributable" so the webhook
 // can answer 5xx and let PayPal retry instead of silently losing the
 // rollback (#389, the #198 retry pattern).
+// customIDEmail strips the tier suffix from a PayPal custom_id. The server
+// writes custom_id as "email:tier" (paypalCreateOrder; the activation path
+// has always Cut it), so rollback attribution must Cut too. #394: the
+// rollback path returned the raw value, and since both store backends match
+// DowngradeToFree by exact email, "email:tier" never matched - the rollback
+// silently no-oped and markPaymentEvent then pinned the event as seen,
+// losing refunds/lost disputes permanently.
+func customIDEmail(cid string) string {
+	email, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(cid)), ":")
+	return email
+}
+
 func (s *Server) paypalRollbackEmail(customID string, links []struct {
 	Rel string `json:"rel"`
 	H   string `json:"href"`
 }, disputedTx []struct {
 	SellerTransactionID string `json:"seller_transaction_id"`
 }) (string, bool) {
-	if email := strings.ToLower(strings.TrimSpace(customID)); email != "" {
+	if email := customIDEmail(customID); email != "" {
 		return email, false
 	}
 	transient := false
@@ -1242,7 +1254,7 @@ func (s *Server) paypalRollbackEmail(customID string, links []struct {
 		// object carries a TOP-LEVEL custom_id.
 		if cap, err := s.paypalGetCapture(seg); err == nil {
 			if cid, _ := cap["custom_id"].(string); strings.TrimSpace(cid) != "" {
-				return strings.ToLower(strings.TrimSpace(cid)), false
+				return customIDEmail(cid), false
 			}
 		} else {
 			transient = true
@@ -1252,7 +1264,7 @@ func (s *Server) paypalRollbackEmail(customID string, links []struct {
 		// #380: seller_transaction_id IS the capture id for disputes.
 		if cap, err := s.paypalGetCapture(dt.SellerTransactionID); err == nil {
 			if cid, _ := cap["custom_id"].(string); strings.TrimSpace(cid) != "" {
-				return strings.ToLower(strings.TrimSpace(cid)), false
+				return customIDEmail(cid), false
 			}
 		} else {
 			transient = true

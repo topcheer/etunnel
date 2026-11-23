@@ -77,6 +77,12 @@ type Session struct {
 	closed    chan struct{}
 	closeOnce sync.Once
 	closeMsg  atomic.Value // string
+	// claimed is set once the cluster router claim for s.sub succeeded
+	// (#396): Close releases the subdomain cluster-wide only for claimed
+	// sessions, so a kick hitting a pre-claim handshake no longer broadcasts
+	// a spurious mesh release that a peer would misapply to its own owner
+	// mapping (same class #389 fixed at the recheck).
+	claimed atomic.Bool
 	// byePending holds the bye message when the outbound queue was too full to
 	// take it: writeLoop writes it after draining, so the close reason is
 	// never silently lost (#12 review).
@@ -178,7 +184,12 @@ func (s *Server) kickSessionsByAccount(apiKey, reason string) int {
 		// independent 30s budget - Close is idempotent, and the caller
 		// (delete/rollback handlers) must not block on PG-bound ledger work.
 		s.logf("kick: budget exhausted after %d closed; finishing %d remainder async (30s budget)", n, len(remainder))
+		// #396: track the finisher so Run's shutdown can wait for it
+		// (bounded) instead of leaving a goroutine writing recordClose into a
+		// pool that is already closed.
+		s.kickWG.Add(1)
 		go func() {
+			defer s.kickWG.Done()
 			background := time.NewTimer(30 * time.Second)
 			defer background.Stop()
 			for _, sess := range remainder {
@@ -535,6 +546,7 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			s.wsErrorClose(ws, protocol.ErrCodeServerShutdown, "cluster routing unavailable, try again")
 			return
 		}
+		sess.claimed.Store(true)
 	}
 
 	sess.hostname = sess.sub + "." + s.cfg.Domain
@@ -883,7 +895,12 @@ func (s *Session) Close(reason string) {
 		// close path so a flapping mesh cannot hold this Once (and the four
 		// goroutines waiting on it) hostage. Its result was already
 		// best-effort everywhere.
-		if s.srv != nil && s.srv.router != nil && s.sub != "" {
+		// #396: only CLAIMED sessions release - a kick that lands between
+		// registry acquire and the router claim must not broadcast a mesh
+		// release for a name nobody owns here; a peer receiving it would
+		// delete its own owner mapping for that subdomain (self-heals via
+		// 10s rebroadcast, but still). Mirrors the #389 recheck gate.
+		if s.srv != nil && s.srv.router != nil && s.sub != "" && s.claimed.Load() {
 			go s.srv.router.Release(s.sub)
 		}
 		// Cluster: drop the anonymous per-IP slot this session owns, back to

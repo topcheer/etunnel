@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -53,6 +54,9 @@ type pgAccountStore struct {
 	pool   *pgxpool.Pool
 	poll   time.Duration
 	cancel context.CancelFunc
+	// #395: optional test seam for DeleteWithError's DELETE; nil in
+	// production (execDelete falls through to pool.Exec).
+	deleteExec func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 
 	// #389: tombstones for accounts deleted locally while a loadAll pass is
 	// in flight - the pass's snapshot still contains the deleted row, and
@@ -73,6 +77,16 @@ func (s *pgAccountStore) tombstone(key string) {
 		s.recentlyDeleted = map[string]time.Time{}
 	}
 	s.recentlyDeleted[key] = time.Now()
+	s.delMu.Unlock()
+}
+
+// untombstone retracts a tombstone (#395): DeleteWithError writes the
+// tombstone BEFORE the PG DELETE so an in-flight loadAll cannot resurrect
+// the row; if the DELETE itself fails the row is still live in PG and the
+// tombstone must not keep hiding it from loadAll for the TTL.
+func (s *pgAccountStore) untombstone(key string) {
+	s.delMu.Lock()
+	delete(s.recentlyDeleted, key)
 	s.delMu.Unlock()
 }
 
@@ -289,6 +303,17 @@ func (s *pgAccountStore) Delete(key string) bool {
 // DeleteWithError deletes and reports the Exec failure (#366): on failure
 // the in-memory account is NOT removed, so the 5s loadAll poll cannot
 // resurrect a row that was never deleted.
+//
+// #395: the tombstone is written BEFORE the PG round trip, not after
+// unlock. The old order left the whole Exec window (network IO, possibly
+// seconds on a slow/overloaded PG) tombstone-free, so a loadAll pass whose
+// sweep ran inside that window carried the doomed row into the swap and
+// resurrected the deleted account - its revoked key kept authenticating -
+// until the next poll. With the tombstone first, any sweep that starts
+// after the delete began filters the row; the residual overlap (a sweep
+// that started before the tombstone) is bounded by the normal <=1-poll
+// staleness. On Exec failure the tombstone is retracted: the row is still
+// live in PG and must not be hidden from loadAll for the TTL.
 func (s *pgAccountStore) DeleteWithError(key string) error {
 	s.mu.Lock()
 	a, ok := s.byKey[key]
@@ -296,15 +321,27 @@ func (s *pgAccountStore) DeleteWithError(key string) error {
 		s.mu.Unlock()
 		return errAccountNotFound
 	}
-	if _, err := s.pool.Exec(context.Background(), `DELETE FROM accounts WHERE api_key=$1`, key); err != nil {
+	s.tombstone(key) // #395: BEFORE Exec - see above; also covers #389 in-flight loads
+	if _, err := s.execDelete(context.Background(), `DELETE FROM accounts WHERE api_key=$1`, key); err != nil {
+		s.untombstone(key)
 		s.mu.Unlock()
 		return fmt.Errorf("pg delete %s: %w", key, err)
 	}
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
 	s.mu.Unlock()
-	s.tombstone(key) // #389: suppress the row in any in-flight loadAll
 	return nil
+}
+
+// execDelete is the seam DeleteWithError runs its DELETE through. In
+// production it is pool.Exec; tests substitute a controllable stand-in to
+// freeze the delete mid-flight and race a loadAll sweep+swap against it
+// (#395). The field is nil in production stores.
+func (s *pgAccountStore) execDelete(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if s.deleteExec != nil {
+		return s.deleteExec(ctx, sql, args...)
+	}
+	return s.pool.Exec(ctx, sql, args...)
 }
 
 func (s *pgAccountStore) ResetKey(email string) (string, bool) {
