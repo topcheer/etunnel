@@ -59,8 +59,11 @@ func TestPayPalRefundRollsBackTier(t *testing.T) {
 			fmt.Fprint(w, `{"access_token":"tok","expires_in":3600}`)
 		case strings.HasSuffix(r.URL.Path, "/verify-webhook-signature"):
 			fmt.Fprint(w, `{"verification_status":"SUCCESS"}`)
-		case strings.HasSuffix(r.URL.Path, "/orders/"+capID+"/capture"):
-			fmt.Fprint(w, `{"id":"`+capID+`","custom_id":"rf352@x.com","status":"completed","purchase_units":[{"custom_id":"rf352@x.com"}]}`)
+		case strings.HasSuffix(r.URL.Path, "/captures/"+capID):
+			// #380: the REAL capture-lookup endpoint
+			// GET /v2/payments/captures/{id} returns the capture with a
+			// top-level custom_id.
+			fmt.Fprint(w, `{"id":"`+capID+`","custom_id":"rf352@x.com","status":"COMPLETED"}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -349,5 +352,170 @@ func TestNowPaymentsExpiredKeepsTier(t *testing.T) {
 	}
 	if a, _ := s.accounts.LookupEmail("ne@x.com"); a.Tier != "starter" {
 		t.Fatalf("expired IPN cleared a paid entitlement (#365): %q", a.Tier)
+	}
+}
+
+// #383: dispute.closed with status=lost rolls back (real Dispute shape:
+// charge id + status, no outcome sub-object).
+func TestStripeDisputeLostRollsBackTier(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.StripeWebhookSecret = "whsec"
+	if _, err := s.activate("dl@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/charges/ch_dl") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"ch_dl","receipt_email":"dl@x.com","metadata":{"email":"dl@x.com"}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer stub.Close()
+	oldBase, oldClient := stripeAPIBase, stripeHTTP
+	stripeAPIBase = stub.URL
+	stripeHTTP = &http.Client{Timeout: oldClient.Timeout}
+	t.Cleanup(func() { stripeAPIBase, stripeHTTP = oldBase, oldClient })
+
+	body := `{"id":"evt_dl","type":"charge.dispute.closed","data":{"object":{"charge":"ch_dl","status":"lost","metadata":{}}}}`
+	w := httptest.NewRecorder()
+	s.handleStripeWebhook(w, stripeSignedBody(t, "whsec", body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dispute.closed webhook: %d", w.Code)
+	}
+	if a, _ := s.accounts.LookupEmail("dl@x.com"); a.Tier != "free" {
+		t.Fatalf("lost dispute did not roll back tier: %q (#383)", a.Tier)
+	}
+}
+
+// #383: dispute.closed with status=won keeps the entitlement (real shape).
+func TestStripeDisputeWonKeepsTier(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.StripeWebhookSecret = "whsec"
+	if _, err := s.activate("dw@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"evt_dw","type":"charge.dispute.closed","data":{"object":{"charge":"ch_dw","status":"won","metadata":{}}}}`
+	w := httptest.NewRecorder()
+	s.handleStripeWebhook(w, stripeSignedBody(t, "whsec", body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dispute.closed webhook: %d", w.Code)
+	}
+	if a, _ := s.accounts.LookupEmail("dw@x.com"); a.Tier != "pro" {
+		t.Fatalf("won dispute rolled back the tier (#383): %q", a.Tier)
+	}
+}
+
+// #384: PayPal RESOLVED with outcome_code RESOLVED_BUYER_FAVORS rolls back
+// (uppercase canonical value).
+func TestPayPalResolvedBuyerFavorsRollsBack(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.PayPalWebhookID = "wh1"
+	s.billing.PayPalClientID = "cid"
+	s.billing.PayPalSecret = "sec"
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/captures/CAP-BF") {
+			// #380: real capture-lookup endpoint, top-level custom_id.
+			fmt.Fprint(w, `{"id":"CAP-BF","custom_id":"bf@x.com","status":"COMPLETED"}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/oauth2/token") {
+			fmt.Fprint(w, `{"access_token":"tok","expires_in":3600}`)
+			return
+		}
+		fmt.Fprint(w, `{"verification_status":"SUCCESS"}`)
+	}))
+	defer pp.Close()
+	oldClient := paypalHTTP
+	paypalHTTP = &http.Client{Transport: rewriteTransport{base: pp.URL}, Timeout: oldClient.Timeout}
+	resetPayPalTokenCache()
+	t.Cleanup(func() { paypalHTTP = oldClient; resetPayPalTokenCache() })
+
+	if _, err := s.activate("bf@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"evt-bf","event_type":"CUSTOMER.DISPUTE.RESOLVED","resource":{"outcome_code":"RESOLVED_BUYER_FAVORS","disputed_transactions":[{"seller_transaction_id":"CAP-BF"}],"links":[{"rel":"up","href":"https://api-m.paypal.com/v2/payments/captures/CAP-BF"}]}}`
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/paypal", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handlePayPalWebhook(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("resolved webhook: %d", w.Code)
+	}
+	if a, _ := s.accounts.LookupEmail("bf@x.com"); a.Tier != "free" {
+		t.Fatalf("buyer-favor resolution did not roll back: %q (#384)", a.Tier)
+	}
+}
+
+// #384: legacy lowercase outcome_code values keep working.
+func TestPayPalResolvedLegacyLowercase(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.PayPalWebhookID = "wh1"
+	s.billing.PayPalClientID = "cid"
+	s.billing.PayPalSecret = "sec"
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/captures/CAP-LC") {
+			// #380: real capture-lookup endpoint, top-level custom_id.
+			fmt.Fprint(w, `{"id":"CAP-LC","custom_id":"lc@x.com","status":"COMPLETED"}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/oauth2/token") {
+			fmt.Fprint(w, `{"access_token":"tok","expires_in":3600}`)
+			return
+		}
+		fmt.Fprint(w, `{"verification_status":"SUCCESS"}`)
+	}))
+	defer pp.Close()
+	oldClient := paypalHTTP
+	paypalHTTP = &http.Client{Transport: rewriteTransport{base: pp.URL}, Timeout: oldClient.Timeout}
+	resetPayPalTokenCache()
+	t.Cleanup(func() { paypalHTTP = oldClient; resetPayPalTokenCache() })
+
+	if _, err := s.activate("lc@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	// legacy buyer_favor lowercase -> rollback applies.
+	w := httptest.NewRecorder()
+	s.handlePayPalWebhook(w, httptest.NewRequest(http.MethodPost, "/webhooks/paypal",
+		strings.NewReader(`{"id":"evt-lc","event_type":"CUSTOMER.DISPUTE.RESOLVED","resource":{"outcome_code":"buyer_favor","disputed_transactions":[{"seller_transaction_id":"CAP-LC"}]}}`)))
+	if a, _ := s.accounts.LookupEmail("lc@x.com"); a.Tier != "free" {
+		t.Fatalf("legacy lowercase buyer_favor did not roll back (#384 compat): %q", a.Tier)
+	}
+}
+
+// #384: merchant-favor RESOLVED outcomes (RESOLVED_SELLER_FAVORS etc.) keep
+// the entitlement - this pins the skip-rollback gate whose break semantics
+// previously leaked through an inner switch into the rollback path.
+func TestPayPalResolvedSellerFavorsKeepsTier(t *testing.T) {
+	s := newBillingTestServer(t)
+	s.billing.PayPalWebhookID = "wh1"
+	s.billing.PayPalClientID = "cid"
+	s.billing.PayPalSecret = "sec"
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/oauth2/token") {
+			fmt.Fprint(w, `{"access_token":"tok","expires_in":3600}`)
+			return
+		}
+		// No capture lookup is expected on the keep path; the verify call
+		// (and anything else) answers SUCCESS so the handler proceeds.
+		fmt.Fprint(w, `{"verification_status":"SUCCESS"}`)
+	}))
+	defer pp.Close()
+	oldClient := paypalHTTP
+	paypalHTTP = &http.Client{Transport: rewriteTransport{base: pp.URL}, Timeout: oldClient.Timeout}
+	resetPayPalTokenCache()
+	t.Cleanup(func() { paypalHTTP = oldClient; resetPayPalTokenCache() })
+
+	if _, err := s.activate("sf@x.com", "pro"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"evt-sf","event_type":"CUSTOMER.DISPUTE.RESOLVED","resource":{"outcome_code":"RESOLVED_SELLER_FAVORS","disputed_transactions":[{"seller_transaction_id":"CAP-SF"}]}}`
+	r := httptest.NewRequest(http.MethodPost, "/webhooks/paypal", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handlePayPalWebhook(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("resolved webhook: %d", w.Code)
+	}
+	if a, _ := s.accounts.LookupEmail("sf@x.com"); a.Tier != "pro" {
+		t.Fatalf("merchant-favor resolution rolled back the entitlement: %q (#384)", a.Tier)
 	}
 }
