@@ -159,22 +159,38 @@ func (s *Session) streamCount() int {
 // idempotent (closeOnce), so racing with the holder's own teardown is safe.
 // Returns the number of sessions closed.
 func (s *Server) kickSessionsByAccount(apiKey, reason string) int {
-	deadline := time.Now().Add(5 * time.Second) // #366: total kick budget
+	deadline := time.Now().Add(5 * time.Second) // #366: caller-facing budget
 	n := 0
+	var remainder []*Session
 	for _, sess := range s.reg.Snapshot() {
 		if sess.account == nil || sess.account.APIKey != apiKey {
 			continue
 		}
 		if time.Now().After(deadline) {
-			// #366: Close is idempotent - the holder's own teardown (or a
-			// later cascade) finishes it; do not block the caller past the
-			// budget (ledger.recordClose inside Close can take seconds on
-			// PG). Only count sessions actually closed in this pass.
-			s.logf("kick: budget exhausted, %d closed, remainder self-terminates via TTL/close", n)
-			break
+			remainder = append(remainder, sess)
+			continue
 		}
 		sess.Close(reason)
 		n++
+	}
+	if len(remainder) > 0 {
+		// #385: the remainder is finished in a background goroutine with an
+		// independent 30s budget - Close is idempotent, and the caller
+		// (delete/rollback handlers) must not block on PG-bound ledger work.
+		s.logf("kick: budget exhausted after %d closed; finishing %d remainder async (30s budget)", n, len(remainder))
+		go func() {
+			background := time.NewTimer(30 * time.Second)
+			defer background.Stop()
+			for _, sess := range remainder {
+				select {
+				case <-background.C:
+					s.logf("kick: background finisher timed out, %d sessions left to their own TTL", len(remainder))
+					return
+				default:
+				}
+				sess.Close(reason)
+			}
+		}()
 	}
 	return n
 }

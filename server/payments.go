@@ -767,11 +767,11 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 				Amount         int64  `json:"amount"`
 				AmountRefunded int64  `json:"amount_refunded"`
 				// Dispute events carry a Dispute object: its own (usually
-				// empty) metadata, the disputed charge id, and the outcome.
-				Charge         string `json:"charge"`
-				DisputeOutcome struct {
-					Outcome string `json:"outcome"` // won | lost | null
-				} `json:"outcome"`
+				// empty) metadata, the disputed charge id, and a status
+				// (#383: won/warning_closed keep the entitlement, lost
+				// rolls it back).
+				Charge               string `json:"charge"`
+				Status               string `json:"status"`
 				DisputedTransactions []struct {
 					SellerTransactionID string `json:"seller_transaction_id"`
 				} `json:"disputed_transactions"`
@@ -839,12 +839,18 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// #364/#365: a closed dispute where the MERCHANT won means the money
-		// stays - no rollback.
-		if ev.Type == "charge.dispute.closed" && ev.Data.Object.DisputeOutcome.Outcome == "won" {
-			s.logf("billing: stripe dispute won by merchant - keeping entitlement")
-			w.WriteHeader(http.StatusOK)
-			return
+		// #383: a closed dispute reads data.object.status (the Dispute
+		// object's own field) - won or warning_closed (merchant keeps funds)
+		// keeps the entitlement; lost means the chargeback settled against
+		// the merchant and the rollback applies.
+		if ev.Type == "charge.dispute.closed" {
+			st := ev.Data.Object.Status
+			if st == "won" || st == "warning_closed" {
+				s.logf("billing: stripe dispute closed %s - keeping entitlement", st)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			s.logf("billing: stripe dispute closed %s - rolling back", st)
 		}
 
 		switch {
@@ -1043,6 +1049,15 @@ func (s *Server) paypalCaptureOrder(orderID string) (map[string]any, error) {
 	return s.paypalReq("POST", "/v2/checkout/orders/"+url.PathEscape(orderID)+"/capture", map[string]any{})
 }
 
+// paypalGetCapture is the READ-ONLY GET /v2/payments/captures/{id} fetch
+// (#380: the rollback attribution previously misused the orders-capture
+// endpoint, which is a WRITE capture action, not a lookup; PayPal's real
+// capture-lookup endpoint is /v2/payments/captures/{id}). Returns the
+// capture object; meta via paypalOrderMeta (top-level custom_id).
+func (s *Server) paypalGetCapture(captureID string) (map[string]any, error) {
+	return s.paypalReq("GET", "/v2/payments/captures/"+url.PathEscape(captureID), nil)
+}
+
 func paypalOrderMeta(order map[string]any) (email, tier string) {
 	units, _ := order["purchase_units"].([]any)
 	if len(units) == 0 {
@@ -1089,9 +1104,10 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 			DisputedTransactions []struct {
 				SellerTransactionID string `json:"seller_transaction_id"`
 			} `json:"disputed_transactions"`
-			DisputeOutcome struct {
-				Outcome string `json:"outcome"` // buyer_favor | seller_favor | resolved | null
-			} `json:"dispute_outcome"`
+			// #384: RESOLVED carries outcome_code (RESOLVED_BUYER_FAVORS |
+			// RESOLVED_WITH_PAYOUT | RESOLVED_SELLER_FAVORS |
+			// RESOLVED_WITHOUT_REFUND); legacy lowercase tolerated.
+			OutcomeCode string `json:"outcome_code"`
 		} `json:"resource"`
 	}
 	if err := json.Unmarshal(body, &ev); err != nil {
@@ -1126,14 +1142,21 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 			s.logf("billing: paypal webhook replay suppressed (event %s)", ev.ID)
 			break
 		}
-		// #365: RESOLVED only rolls back when the buyer won / was refunded;
-		// a merchant win keeps the money AND the entitlement.
-		if ev.EventType == "CUSTOMER.DISPUTE.RESOLVED" &&
-			ev.Resource.DisputeOutcome.Outcome != "buyer_favor" &&
-			ev.Resource.DisputeOutcome.Outcome != "resolved" {
-			s.logf("billing: paypal dispute resolved in merchant favor (%s) - keeping entitlement",
-				ev.Resource.DisputeOutcome.Outcome)
-			break
+		// #384: RESOLVED rolls back only when the money went back to the
+		// buyer: RESOLVED_BUYER_FAVORS / RESOLVED_WITH_PAYOUT (legacy
+		// lowercase tolerated). Merchant-favor outcomes keep the entitlement.
+		// NOTE: a switch inside this case body cannot express "skip the
+		// rollback" (break would only exit the inner switch), so the gate is
+		// a boolean and the skip is an outer-switch break.
+		if ev.EventType == "CUSTOMER.DISPUTE.RESOLVED" {
+			code := strings.ToUpper(ev.Resource.OutcomeCode)
+			buyerFavor := code == "RESOLVED_BUYER_FAVORS" || code == "RESOLVED_WITH_PAYOUT" ||
+				code == "BUYER_FAVOR" || code == "RESOLVED"
+			if !buyerFavor {
+				s.logf("billing: paypal dispute resolved in merchant favor (%s) - keeping entitlement",
+					ev.Resource.OutcomeCode)
+				break // outer event-type switch: no rollback for this event
+			}
 		}
 		// #365: attribution is event-shape specific. custom_id may ride the
 		// resource directly (older integrations); otherwise REFUNDED's
@@ -1193,16 +1216,19 @@ func (s *Server) paypalRollbackEmail(customID string, links []struct {
 			continue
 		}
 		seg := l.H[strings.LastIndexByte(l.H, '/')+1:]
-		if cap, err := s.paypalCaptureOrder(seg); err == nil {
-			if email, _ := paypalOrderMeta(cap); email != "" {
-				return email
+		// #380: real capture-lookup endpoint (read-only GET); the capture
+		// object carries a TOP-LEVEL custom_id.
+		if cap, err := s.paypalGetCapture(seg); err == nil {
+			if cid, _ := cap["custom_id"].(string); strings.TrimSpace(cid) != "" {
+				return strings.ToLower(strings.TrimSpace(cid))
 			}
 		}
 	}
 	for _, dt := range disputedTx {
-		if cap, err := s.paypalCaptureOrder(dt.SellerTransactionID); err == nil {
-			if email, _ := paypalOrderMeta(cap); email != "" {
-				return email
+		// #380: seller_transaction_id IS the capture id for disputes.
+		if cap, err := s.paypalGetCapture(dt.SellerTransactionID); err == nil {
+			if cid, _ := cap["custom_id"].(string); strings.TrimSpace(cid) != "" {
+				return strings.ToLower(strings.TrimSpace(cid))
 			}
 		}
 	}
