@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -264,6 +265,17 @@ func validAccountEmail(email string) bool {
 	return true
 }
 
+// createAccountChecked mints an account only for emails that pass the ONE
+// shared validator (#386): the public register endpoint, the admin API and
+// the OAuth claim path all funnel through here, so no path can mint an
+// email another path would reject.
+func (s *Server) createAccountChecked(email, tier string) (*Account, error) {
+	if !validAccountEmail(email) {
+		return nil, fmt.Errorf("invalid account email %q", email)
+	}
+	return s.accounts.Create(email, tier)
+}
+
 func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -303,7 +315,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "valid email required", http.StatusBadRequest)
 			return
 		}
-		a, err := s.accounts.Create(req.Email, req.Tier)
+		a, err := s.createAccountChecked(req.Email, req.Tier)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -359,7 +371,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email)) // match the OAuth paths: Bob@x.com == bob@x.com
-	if !strings.Contains(req.Email, "@") || len(req.Email) > 254 {
+	// #386: the register path and the admin path MUST share one validator -
+	// the previous inline check (contains @ + <=254) let the public endpoint
+	// mint multi-@ / control-char / dotless-domain accounts the admin API
+	// rejects, and the dirty emails surfaced on tap buttons.
+	if !validAccountEmail(req.Email) {
 		http.Error(w, "invalid email", http.StatusBadRequest)
 		return
 	}
