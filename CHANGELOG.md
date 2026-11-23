@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.35 — 2026-11-24
+
+- **fix (reliability)**: PG session ledger resilience - when Postgres is unreachable at startup the server now degrades to journal-only instead of exiting, with a 30s background reconnect loop; optional fail-closed mode via `-ledger-strict` / `ETUNNEL_LEDGER_STRICT`; runtime ledger ctx budget raised 3s -> 10s; pool tuned to Max 4 / Min 1 / HealthCheck 1m; `/stats` gains `ledger_mode`, `ledger_failed_total`, `ledger_reconnects` (PR #408). Refs #407 - the infrastructure decision stays open
+- test: two-level barrier in `TestResumeConcurrentOverQuotaRejected` fixes the flaky overlap (#405) (PR #406)
+- docs: ops deploy record - v1.7.34 (offline ip2region + geo labels) live on t.etun.uk (PR #404)
+
 ## v1.7.34 — 2026-11-23
 
 - feat: offline ip2region geolocation for Telegram pushes - tunnel-open notifications, burst alerts and `/whois` now carry the visitor's region; new dependency `github.com/lionsoul2014/ip2region/binding/golang` (go.mod/go.sum tidied), flags `-geoip-db` / `-geoip-db6`, fully offline (no third-party lookup); README/privacy page updated and RUNBOOK §1b documents the setup steps (PR #402)
