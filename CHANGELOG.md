@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.33 — 2026-11-23
+
+- **security / abuse-resistance**: /24 burst guard - new anonymous tunnels are now rate-limited per network prefix per minute via `-max-tunnels-per-ip24-min` (default 6), closing the subnet-rotation burst pattern seen in the field from 94.192.76.0/24; operators get Telegram `/bursts` (list currently throttled prefixes) and `/unthrottle` (lift a prefix's throttle) plus README/CLUSTER/systemd documentation (PR #399)
+
 ## v1.7.32 — 2026-11-23
 
 - **security (HIGH)**: PayPal rollback attribution Cut - custom_id-based rollbacks now attribute to the right account (#394); PG tombstone ordering fixed (#395); kick release gate enforced (#396) (PR #397)
