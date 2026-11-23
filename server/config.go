@@ -140,6 +140,10 @@ type Config struct {
 	RequireToken bool
 	// MaxTunnelsPerIP limits concurrent anonymous tunnels per source IP. 0 = unlimited.
 	MaxTunnelsPerIP int
+	// MaxTunnelsPerIP24PerMin limits NEW anonymous tunnels per network prefix
+	// (/24 IPv4, /64 IPv6) per minute. Catches burst scans that rotate inside
+	// one NAT pool, which the per-IP limit never sees. 0 = unlimited.
+	MaxTunnelsPerIP24PerMin int
 	// MaxStreamsPerTunnel limits concurrent HTTP streams per tunnel. 0 = default 256.
 	MaxStreamsPerTunnel int
 

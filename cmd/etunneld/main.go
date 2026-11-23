@@ -36,6 +36,7 @@ func main() {
 		accountsFile = flag.String("accounts", "/var/lib/etunnel/accounts.json", "accounts store file")
 		requireToken = flag.Bool("require-token", false, "reject anonymous tunnels")
 		maxPerIP     = flag.Int("max-tunnels-per-ip", 5, "max concurrent anonymous tunnels per IP (0=unlimited)")
+		maxPerIP24   = flag.Int("max-tunnels-per-ip24-min", 6, "max NEW anonymous tunnels per network prefix (/24) per minute (0=unlimited)")
 		maxStreams   = flag.Int("max-streams", 256, "max concurrent streams per tunnel")
 		tiersFile    = flag.String("tiers", "", "custom tiers JSON file")
 		defaultTier  = flag.String("free-tier", "free", "tier for anonymous tunnels")
@@ -44,21 +45,22 @@ func main() {
 	flag.Parse()
 
 	cfg := server.Config{
-		Domain:              *domain,
-		AliasDomain:         *aliasDom,
-		Addr:                *addr,
-		HTTPAddr:            *httpAddr,
-		AdminAddr:           *adminAddr,
-		AdminToken:          *adminToken,
-		TrustForwardedFor:   *trustFwd,
-		WSPath:              *wsPath,
-		TLS:                 server.TLSConfig{Mode: *tlsMode, CertFile: *certFile, KeyFile: *keyFile, CacheDir: *acmeDir, ACMEEmail: *acmeEmail, ACMECA: *acmeCA, DNSProvider: *dnsProv},
-		AccountsFile:        *accountsFile,
-		RequireToken:        *requireToken,
-		MaxTunnelsPerIP:     *maxPerIP,
-		MaxStreamsPerTunnel: *maxStreams,
-		DefaultTier:         *defaultTier,
-		DefaultPaidTier:     *defaultPaid,
+		Domain:                  *domain,
+		AliasDomain:             *aliasDom,
+		Addr:                    *addr,
+		HTTPAddr:                *httpAddr,
+		AdminAddr:               *adminAddr,
+		AdminToken:              *adminToken,
+		TrustForwardedFor:       *trustFwd,
+		WSPath:                  *wsPath,
+		TLS:                     server.TLSConfig{Mode: *tlsMode, CertFile: *certFile, KeyFile: *keyFile, CacheDir: *acmeDir, ACMEEmail: *acmeEmail, ACMECA: *acmeCA, DNSProvider: *dnsProv},
+		AccountsFile:            *accountsFile,
+		RequireToken:            *requireToken,
+		MaxTunnelsPerIP:         *maxPerIP,
+		MaxTunnelsPerIP24PerMin: *maxPerIP24,
+		MaxStreamsPerTunnel:     *maxStreams,
+		DefaultTier:             *defaultTier,
+		DefaultPaidTier:         *defaultPaid,
 	}
 
 	if *tiersFile != "" {

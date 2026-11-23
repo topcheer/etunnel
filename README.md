@@ -269,6 +269,10 @@ localized governing-language note.
   cap that scales with the tier (`Tier.MaxTunnels`, rejection code
   `limit_reached`), per-tunnel stream cap (`-max-streams`), plan TTL and
   bandwidth (token bucket, both directions).
+- New anonymous tunnels per network prefix (`-max-tunnels-per-ip24-min`,
+  default 6 per minute; /24 for IPv4, /64 for IPv6). Bursts that rotate
+  inside one NAT pool are rejected with `too_many_tunnels` and page the
+  Telegram admin channel once per prefix per 10 minutes.
 - Heartbeats both ways (`ping`/`pong` plus WS ping), stalled streams are reset
   instead of freezing the tunnel.
 - Accounts persist to a JSON file with atomic writes.
@@ -361,9 +365,13 @@ TELEGRAM_ADMIN_CHAT_ID=123456789   # your chat id
 `/status`, `/tunnels`, `/accounts`, `/kick <subdomain>`,
 `/delete <email>`, `/key <email>`, `/tier <email> <tier>`,
 `/whois <subdomain>`, `/tunnel <subdomain>`, `/history [5|10|30]`,
+`/bursts`, `/unthrottle <network>`,
 `/help`. Called without arguments, `/whois`, `/kick`,
-`/delete`, `/key` and `/tier` reply with a tappable list of ready-made
-commands built from live tunnels and accounts. Only the whitelisted chat is
+`/delete`, `/key`, `/tier` and `/bursts` reply with a tappable list of ready-made
+commands built from live tunnels, accounts and throttled networks.
+`/bursts` lists the networks the burst guard is currently throttling
+(count, last IP, age); tapping a row sends `/unthrottle`, which clears that
+network's window so its next handshake is evaluated fresh. Only the whitelisted chat is
 answered; payments and tunnel-open events push a notification to it.
 Long polling - no public webhook.
 
