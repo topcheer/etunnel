@@ -101,6 +101,7 @@ sequenceDiagram
 ## Shared services
 
 - `ETUNNEL_PG_DSN` - accounts in Postgres (auto-migrated schema, 5s poll). Without it: local JSON store (single writer only).
+  - The same DSN also enables the session audit ledger (`sessions` table). If Postgres is unreachable at startup the ledger degrades to journal-only - the process keeps serving, logs a `WARN session ledger ... DEGRADED` line and retries every 30s; audit rows written meanwhile are lost (counted on `/stats` as `ledger_failed_total`, `ledger_reconnects` counts recoveries, `ledger_mode` is `pg` | `journal-only` | `off`). Pass `-ledger-strict` (or `ETUNNEL_LEDGER_STRICT=1`) to abort startup instead (#407).
 - `ETUNNEL_REDIS_URL` - exact global per-IP / per-account limits. Without it: per-instance limits.
 - `SESSION_SECRET` - required in any multi-instance mode: signs session cookies AND resume tokens.
 - `ETUNNEL_ADVERTISE` / `ETUNNEL_JOIN` - mesh only; gossip port is advertise+100 (or `ETUNNEL_GOSSIP_PORT`).

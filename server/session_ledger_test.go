@@ -180,7 +180,7 @@ func TestSessionLedgerPGLifecycle(t *testing.T) {
 	if dsn == "" {
 		t.Skip("ET_PG_TEST_DSN not set")
 	}
-	lg, err := newSessionLedger(dsn)
+	lg, err := newSessionLedger(dsn, false, nil)
 	if err != nil {
 		t.Fatalf("ledger: %v", err)
 	}

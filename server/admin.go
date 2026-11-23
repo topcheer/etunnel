@@ -238,7 +238,12 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		"requestsTotal": s.metrics.requestsTotal.Load(),
 		"bytesIn":       s.metrics.bytesIn.Load(),
 		"bytesOut":      s.metrics.bytesOut.Load(),
-		"tunnels":       tunnels,
+		// Session ledger (#407): mode + counters. Always present ("off" when
+		// no DSN) so dashboards never see a missing series.
+		"ledger_mode":         s.ledger.mode(),
+		"ledger_failed_total": s.ledger.failedTotal(),
+		"ledger_reconnects":   s.ledger.reconnectsTotal(),
+		"tunnels":             tunnels,
 	})
 }
 

@@ -43,6 +43,7 @@ func main() {
 		tiersFile    = flag.String("tiers", "", "custom tiers JSON file")
 		defaultTier  = flag.String("free-tier", "free", "tier for anonymous tunnels")
 		defaultPaid  = flag.String("paid-tier", "starter", "tier for new registrations")
+		ledgerStrict = flag.Bool("ledger-strict", func() bool { v := os.Getenv("ETUNNEL_LEDGER_STRICT"); return v == "true" || v == "1" }(), "fail startup when the PG session ledger (ETUNNEL_PG_DSN) cannot connect/migrate; default degrades to journal-only and retries every 30s (#407) (env ETUNNEL_LEDGER_STRICT)")
 	)
 	flag.Parse()
 
@@ -65,6 +66,7 @@ func main() {
 		MaxStreamsPerTunnel:     *maxStreams,
 		DefaultTier:             *defaultTier,
 		DefaultPaidTier:         *defaultPaid,
+		LedgerStrict:            *ledgerStrict,
 	}
 
 	if *tiersFile != "" {

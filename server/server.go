@@ -251,24 +251,43 @@ func (r *statusRecorder) WriteHeader(code int) {
 func (s *Server) Accounts() accountBackend { return s.accounts }
 
 // Run starts all listeners and blocks until ctx is done.
+// setupLedger wires the PG session ledger (#69 Tier 2): same DSN knob as the
+// account store, independent of cluster mode - a single node with
+// ETUNNEL_PG_DSN gets session rows too. No DSN: ledger stays nil
+// (nil-method no-ops) and the journal lines are the only record.
+//
+// #407: a connect/migrate failure no longer takes the process down. Default
+// behavior degrades to journal-only, logs a loud warning and starts the
+// background reconnect loop; cfg.LedgerStrict (-ledger-strict) restores the
+// fail-closed error return.
+func (s *Server) setupLedger(ctx context.Context) error {
+	dsn := os.Getenv("ETUNNEL_PG_DSN")
+	if dsn == "" {
+		return nil
+	}
+	lg, err := newSessionLedger(dsn, s.cfg.LedgerStrict, s.logf)
+	if err != nil {
+		return err // -ledger-strict: fail closed as before #407
+	}
+	s.ledger = lg
+	lg.startRetry(ctx) // degraded -> background reconnect; no-op when up
+	return nil
+}
+
 func (s *Server) Run(ctx context.Context) error {
 	if cc, closers, err := setupCluster(ctx); err != nil {
 		return err
 	} else {
 		s.applyCluster(ctx, cc, closers)
 	}
-	// Session ledger (#69 Tier 2): same DSN knob as the account store, but
-	// independent of cluster mode - a single node with ETUNNEL_PG_DSN gets
-	// session rows too. No DSN: ledger stays nil (nil-method no-ops) and the
-	// journal lines are the only record.
-	if dsn := os.Getenv("ETUNNEL_PG_DSN"); dsn != "" {
-		lg, err := newSessionLedger(dsn)
-		if err != nil {
-			return err
-		}
-		s.ledger = lg
-		defer lg.Close()
+	// Session ledger (#69 Tier 2) with #407 resilience: a PG outage at
+	// startup degrades to journal-only (retrying in the background) unless
+	// -ledger-strict is set, in which case setupLedger returns the error and
+	// Run aborts exactly as before #407.
+	if err := s.setupLedger(ctx); err != nil {
+		return err
 	}
+	defer s.ledger.Close() // nil-safe; also stops the retry loop
 	go func() {
 		<-ctx.Done()
 		s.Drain() // healthz flips to 503: LB removes us before sessions die
