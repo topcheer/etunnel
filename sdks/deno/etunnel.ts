@@ -185,7 +185,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.onerror = () => rej(new Error('ws: connect failed'));
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-deno/1.7.34', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-deno/1.7.35', resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
     const to = setTimeout(() => {
