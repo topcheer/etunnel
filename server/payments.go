@@ -815,6 +815,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		if email == "" {
 			email = strings.ToLower(strings.TrimSpace(ev.Data.Object.ReceiptEmail))
 		}
+		disputeLookupFailed := false
 		if email == "" && ev.Data.Object.Charge != "" {
 			if ch, err := s.stripeReq("GET", "/v1/charges/"+url.PathEscape(ev.Data.Object.Charge), nil); err == nil {
 				if meta, ok := ch["metadata"].(map[string]any); ok {
@@ -825,6 +826,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				s.logf("billing: stripe dispute charge lookup failed: %v", err)
+				disputeLookupFailed = true // #389: transient - the retry must re-run the lookup
 			}
 			email = strings.ToLower(strings.TrimSpace(email))
 		}
@@ -848,6 +850,14 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch {
+		case email == "" && disputeLookupFailed:
+			// #389: the reverse lookup failed transiently - answering 200
+			// tells the provider "delivered" and the rollback is lost
+			// forever. 5xx + no mark makes the provider re-post (#198
+			// pattern); a genuinely non-etunnel charge never sets the flag.
+			s.logf("billing: stripe %s (%s) charge lookup failed - 5xx for provider retry", ev.Type, ev.ID)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		case email == "":
 			s.logf("billing: stripe %s (%s) has no attributable email; no rollback", ev.Type, ev.ID)
 		case paymentEventSeen("stripe:" + ev.ID):
@@ -1140,7 +1150,14 @@ func (s *Server) handlePayPalWebhook(w http.ResponseWriter, r *http.Request) {
 		// resource is a REFUND whose capture is linked via links[rel=up],
 		// and DISPUTES are attributed via disputed_transactions reverse
 		// lookup - if neither resolves, log and skip (never guess).
-		email := s.paypalRollbackEmail(ev.Resource.CustomID, ev.Resource.Links, ev.Resource.DisputedTransactions)
+		email, lookupFailed := s.paypalRollbackEmail(ev.Resource.CustomID, ev.Resource.Links, ev.Resource.DisputedTransactions)
+		if email == "" && lookupFailed {
+			// #389: transient capture-lookup failure - 5xx + no mark so
+			// PayPal retries and the rollback is not lost (#198 pattern).
+			s.logf("billing: paypal %s (%s) capture lookup failed - 5xx for provider retry", ev.EventType, ev.ID)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		if email == "" {
 			s.logf("billing: paypal %s (%s) could not be attributed to an account; no rollback", ev.EventType, ev.ID)
 			break
@@ -1179,15 +1196,20 @@ type paypalEventResource struct {
 // links[rel=up] (href ends in /captures/<id>), and disputes are attributed
 // via disputed_transactions[].seller_transaction_id. Returns "" when
 // neither resolves - callers log and skip rather than guess.
+// returns (email, transientLookupFailed): a failed capture reverse-lookup
+// is reported separately from "genuinely not attributable" so the webhook
+// can answer 5xx and let PayPal retry instead of silently losing the
+// rollback (#389, the #198 retry pattern).
 func (s *Server) paypalRollbackEmail(customID string, links []struct {
 	Rel string `json:"rel"`
 	H   string `json:"href"`
 }, disputedTx []struct {
 	SellerTransactionID string `json:"seller_transaction_id"`
-}) string {
+}) (string, bool) {
 	if email := strings.ToLower(strings.TrimSpace(customID)); email != "" {
-		return email
+		return email, false
 	}
+	transient := false
 	for _, l := range links {
 		if l.Rel != "up" {
 			continue
@@ -1195,18 +1217,22 @@ func (s *Server) paypalRollbackEmail(customID string, links []struct {
 		seg := l.H[strings.LastIndexByte(l.H, '/')+1:]
 		if cap, err := s.paypalCaptureOrder(seg); err == nil {
 			if email, _ := paypalOrderMeta(cap); email != "" {
-				return email
+				return email, false
 			}
+		} else {
+			transient = true
 		}
 	}
 	for _, dt := range disputedTx {
 		if cap, err := s.paypalCaptureOrder(dt.SellerTransactionID); err == nil {
 			if email, _ := paypalOrderMeta(cap); email != "" {
-				return email
+				return email, false
 			}
+		} else {
+			transient = true
 		}
 	}
-	return ""
+	return "", transient
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

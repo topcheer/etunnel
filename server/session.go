@@ -494,10 +494,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	if hello.Token != "" {
 		snapNow, still := s.accounts.Snapshot(hello.Token)
 		if !still || snapNow.APIKey != acct.APIKey {
+			// #389: the subdomain was acquired in the registry but NOT yet
+			// claimed into the cluster router (the claim happens below) -
+			// releasing the router here is a spurious release on an
+			// unclaimed name. Only the registry acquire needs unwinding.
 			s.logf("session %s: token revoked mid-handshake, releasing %s", sess.id, sess.sub)
-			if s.router != nil {
-				s.router.Release(sess.sub)
-			}
 			s.reg.Release(sess.sub, sess)
 			cancel()
 			releaseIPSlot()

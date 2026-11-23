@@ -53,6 +53,49 @@ type pgAccountStore struct {
 	pool   *pgxpool.Pool
 	poll   time.Duration
 	cancel context.CancelFunc
+
+	// #389: tombstones for accounts deleted locally while a loadAll pass is
+	// in flight - the pass's snapshot still contains the deleted row, and
+	// swapping it in would resurrect the account until the next poll.
+	delMu           sync.Mutex
+	recentlyDeleted map[string]time.Time
+}
+
+// recentDeleteTTL bounds how long a deletion tombstone suppresses
+// loadAll rows. It only needs to outlive the longest in-flight loadAll
+// (a single SELECT pass); 60s is generous and cannot mask a same-key
+// re-create (keys are random, never reused).
+const recentDeleteTTL = 60 * time.Second
+
+func (s *pgAccountStore) tombstone(key string) {
+	s.delMu.Lock()
+	if s.recentlyDeleted == nil {
+		s.recentlyDeleted = map[string]time.Time{}
+	}
+	s.recentlyDeleted[key] = time.Now()
+	s.delMu.Unlock()
+}
+
+// sweepTombstones drops resurrected rows from a freshly loaded map set and
+// expires stale tombstones.
+func (s *pgAccountStore) sweepTombstones(byKey map[string]*Account, byMail map[string]*Account) {
+	s.delMu.Lock()
+	defer s.delMu.Unlock()
+	if len(s.recentlyDeleted) == 0 {
+		return
+	}
+	cutoff := time.Now().Add(-recentDeleteTTL)
+	for k, at := range s.recentlyDeleted {
+		if at.Before(cutoff) {
+			delete(s.recentlyDeleted, k)
+			continue
+		}
+		if a, ok := byKey[k]; ok {
+			// row is from a pre-delete snapshot: drop it
+			delete(byKey, k)
+			delete(byMail, a.Email)
+		}
+	}
 }
 
 func newPgAccountStore(dsn string) (*pgAccountStore, error) {
@@ -145,6 +188,8 @@ func (s *pgAccountStore) loadAll(ctx context.Context) error {
 		byKey[a.APIKey] = a
 		byMail[a.Email] = a
 	}
+	// #389: drop rows deleted while this pass was in flight.
+	s.sweepTombstones(byKey, byMail)
 	s.mu.Lock()
 	s.byKey, s.byMail = byKey, byMail
 	s.mu.Unlock()
@@ -258,6 +303,7 @@ func (s *pgAccountStore) DeleteWithError(key string) error {
 	delete(s.byKey, key)
 	delete(s.byMail, a.Email)
 	s.mu.Unlock()
+	s.tombstone(key) // #389: suppress the row in any in-flight loadAll
 	return nil
 }
 

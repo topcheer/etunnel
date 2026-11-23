@@ -191,15 +191,41 @@ const telegramMsgLimit = 4096
 // based, not row-count based). The tail reports the true omitted count and
 // points at /tunnels//accounts for the full lists.
 func tapRows(rows []string) ([][]string, string) {
+	return tapRowsWith("", rows, nil)
+}
+
+// tapRowsWith is tapRows with the two review-batch-B refinements: header is
+// the caller's lead line and counts against the byte budget (the truncated
+// body must leave room for text the caller unconditionally prepends,
+// #389), and notes carries same-length human-readable body lines - the
+// keyboard buttons stay EXACTLY rows[i] because a tap re-sends the button
+// text as a command (#381: an owner suffix like "/kick sub (a@x.com)" or an
+// unseparated "/kick subanonymous" fails reg.Lookup and the button is
+// dead). maxTappableRows bounds the keyboard (#389: the cap existed only as
+// a dead constant; a huge registry must not flood the client UI).
+func tapRowsWith(header string, rows []string, notes []string) ([][]string, string) {
+	if notes == nil {
+		notes = rows
+	}
+	if len(notes) != len(rows) {
+		panic("tapRowsWith: notes/rows length mismatch")
+	}
 	kept := 0
 	var b strings.Builder
+	b.WriteString(header)
+	if header != "" {
+		b.WriteByte('\n')
+	}
 	// Reserve room for the tail line (~80 bytes covers the widest count).
 	const tailAllowance = 96
-	for _, r := range rows {
-		if b.Len()+len(r)+1 > telegramMsgLimit-tailAllowance {
+	for i := range rows {
+		if kept == maxTappableRows {
 			break
 		}
-		b.WriteString(r)
+		if b.Len()+len(notes[i])+1 > telegramMsgLimit-tailAllowance {
+			break
+		}
+		b.WriteString(notes[i])
 		b.WriteByte('\n')
 		kept++
 	}
@@ -241,18 +267,20 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 		}
 		verb := strings.TrimPrefix(cmd, "/") // whois | kick
 		rows := make([]string, 0, len(sessions))
+		notes := make([]string, 0, len(sessions))
 		for _, sess := range sessions {
+			// #381: the button text is the bare command - a tapped row is
+			// re-sent verbatim, so any suffix breaks reg.Lookup. The owner
+			// summary lives on the body line, which is not clickable.
 			owner := "anonymous"
 			if sess.account != nil {
-				owner = " (" + sess.account.Email + ")"
+				owner = sess.account.Email
 			}
-			// #367: single merged list - the tap row itself carries the
-			// owner summary; no second owners block (double-write + the
-			// two lists could disagree past truncation).
-			rows = append(rows, cmd+" "+sess.Subdomain()+owner)
+			rows = append(rows, cmd+" "+sess.Subdomain())
+			notes = append(notes, cmd+" "+sess.Subdomain()+" ("+owner+")")
 		}
-		kb, body := tapRows(rows)
-		return "tap a tunnel to " + verb + ":\n" + body, kb
+		kb, body := tapRowsWith("tap a tunnel to "+verb+":", rows, notes)
+		return body, kb
 	case "/delete", "/key":
 		accts := s.accounts.List()
 		if len(accts) == 0 {
@@ -266,8 +294,8 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 		for _, a := range accts {
 			rows = append(rows, cmd+" "+a.Email)
 		}
-		kb, body := tapRows(rows)
-		return "tap an account to " + verb + ":\n" + body, kb
+		kb, body := tapRowsWith("tap an account to "+verb+":", rows, nil)
+		return body, kb
 	case "/tier":
 		accts := s.accounts.List()
 		upgrades := make([]string, 0, len(s.cfg.Tiers))
@@ -286,8 +314,8 @@ func (s *Server) handleAdminCommandKB(text string) (string, [][]string) {
 				rows = append(rows, "/tier "+a.Email+" "+up)
 			}
 		}
-		kb, body := tapRows(rows)
-		return "tap an account+tier to upgrade:\n" + body, kb
+		kb, body := tapRowsWith("tap an account+tier to upgrade:", rows, nil)
+		return body, kb
 	}
 	return s.handleAdminCommand(text), nil
 }
