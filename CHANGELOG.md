@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.7.32 — 2026-11-23
+
+- **security (HIGH)**: PayPal rollback attribution Cut - custom_id-based rollbacks now attribute to the right account (#394); PG tombstone ordering fixed (#395); kick release gate enforced (#396) (PR #397)
+- fixes (rust): body budget semantics + ServeSlot guard (#382, #387) (PR #390)
+- fixes (billing/session): capture-lookup GET, dispute outcome shapes, kick budget finisher + true-window regression (#380, #383, #384, #385) (PR #391)
+- fixes (tg/admin/billing): tap buttons executable, one shared email validator, review-batch LOWs (#381, #386, #389) (PR #392)
+
+Closes #394 #395 #396 #382 #387 #380 #383 #384 #385 #381 #386 #389
+
 ## v1.7.31 — 2026-11-23
 
 - republish: version-manifest bump only, no code changes since v1.7.30 - re-anchors the ledger after v1.7.30's tag initially shipped without the deno/etunnel.ts + rust/Cargo.lock source stamps (fixed via #377), which made the sdk-packages version gate reject the first v1.7.30 tag and left its registry publish incomplete; this bump re-stamps every manifest (all four in-source client stamps included) and re-runs the full publish pipeline so registry artifacts land cleanly
