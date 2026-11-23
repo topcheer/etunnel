@@ -49,6 +49,7 @@ type Server struct {
 	adminHandler   http.Handler
 	billing        BillingConfig
 	tg             telegramConfig
+	geo            geoLookup // offline ip2region lookups for admin pushes (nil = off)
 	auth           oauthConfig
 	// WebAuthn (passkey) support: lazily-created relying party and the
 	// in-flight ceremony sessions shared by its handlers.
@@ -95,6 +96,26 @@ func New(cfg Config) (*Server, error) {
 	}
 	// #93: persistence failures must reach the operator log, not vanish.
 	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }
+	// Offline geolocation for Telegram pushes. A configured but unusable xdb
+	// fails startup loudly rather than silently dropping the feature.
+	geo, err := newGeoIP(cfg.GeoIPDB, cfg.GeoIPDB6)
+	if err != nil {
+		return nil, err
+	}
+	s.geo = geo
+	if geo != nil {
+		which := ""
+		if cfg.GeoIPDB != "" {
+			which = "v4"
+		}
+		if cfg.GeoIPDB6 != "" {
+			if which != "" {
+				which += "+"
+			}
+			which += "v6"
+		}
+		s.logf("geoip: ip2region loaded (%s) - region labels on telegram pushes", which)
+	}
 	// #18: a corrupt accounts file was preserved aside at load - say so,
 	// loudly, instead of silently running on an empty store.
 	if accounts.recoveryNote != "" {

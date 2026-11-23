@@ -484,9 +484,9 @@ func (s *Server) handleAdminCommand(text string) string {
 			return "no such tunnel: " + rest
 		}
 		if sess.account == nil {
-			return rest + ": anonymous (free plan)"
+			return rest + ": anonymous (free plan) · ip " + sess.RemoteIP() + s.geoSuffix(sess.RemoteIP())
 		}
-		return fmt.Sprintf("%s: %s [%s]", rest, sess.account.Email, sess.account.Tier)
+		return fmt.Sprintf("%s: %s [%s] · ip %s%s", rest, sess.account.Email, sess.account.Tier, sess.RemoteIP(), s.geoSuffix(sess.RemoteIP()))
 	case "/key":
 		if rest == "" {
 			return "usage: /key <email>"
@@ -591,14 +591,18 @@ func (s *Server) notifyTunnelOpen(sess *Session, plan string) {
 	if owner == "" {
 		owner = "anonymous"
 	}
-	text := fmt.Sprintf("🚇 tunnel open: %s (%s) — plan %s · owner %s · ip %s",
-		sess.sub, sess.url, plan, owner, sess.ip)
 	// #review: send asynchronously - tgSend's HTTP client has a 40s
 	// timeout, and this runs on the handshake path before readLoop starts,
 	// so a slow or hung Telegram API must not delay a new tunnel from
 	// serving. The synchronous cooldown decision above already prevents
-	// concurrent double-sends.
-	go s.tgSend(context.Background(), text)
+	// concurrent double-sends. The geo lookup is built inside the goroutine
+	// for the same reason: it must never sit on the handshake path.
+	sub, url, ip := sess.sub, sess.url, sess.RemoteIP()
+	go func() {
+		text := fmt.Sprintf("🚇 tunnel open: %s (%s) — plan %s · owner %s · ip %s%s",
+			sub, url, plan, owner, ip, s.geoSuffix(ip))
+		s.tgSend(context.Background(), text)
+	}()
 }
 
 func prefixIfSet(reason string) string {

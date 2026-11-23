@@ -176,7 +176,10 @@ it expires.</li>
 <li><strong>Custom subdomains</strong> - the names you register on your account.</li>
 <li><strong>Technical data</strong> - the IP address and User-Agent of connecting
 clients, request metadata for tunnels, and aggregate byte counts, kept to
-operate the service, rate-limit abuse and diagnose faults. Lawful basis:
+operate the service, rate-limit abuse and diagnose faults. When the operator
+enables the offline IP database, connecting IPs are also resolved to a country,
+region and ISP label - locally, inside the server - to annotate admin alerts;
+no address is sent to a third-party lookup service. Lawful basis:
 legitimate interest in running a secure service.</li>
 <li><strong>Session cookie</strong> - one HttpOnly cookie (<code>et_session</code>)
 holding a signed value of your email, so you stay logged in. During the

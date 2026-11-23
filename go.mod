@@ -8,6 +8,7 @@ require (
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/hashicorp/memberlist v0.7.0
 	github.com/jackc/pgx/v5 v5.13.0
+	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20261121125702-cba49ef11b40
 	github.com/redis/go-redis/v9 v9.23.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/time v0.16.0

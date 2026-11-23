@@ -37,6 +37,8 @@ func main() {
 		requireToken = flag.Bool("require-token", false, "reject anonymous tunnels")
 		maxPerIP     = flag.Int("max-tunnels-per-ip", 5, "max concurrent anonymous tunnels per IP (0=unlimited)")
 		maxPerIP24   = flag.Int("max-tunnels-per-ip24-min", 6, "max NEW anonymous tunnels per network prefix (/24) per minute (0=unlimited)")
+		geoIPDB      = flag.String("geoip-db", "", "ip2region IPv4 xdb file: adds visitor region to telegram notifications (empty=off)")
+		geoIPDB6     = flag.String("geoip-db6", "", "ip2region IPv6 xdb file (optional, same purpose as -geoip-db)")
 		maxStreams   = flag.Int("max-streams", 256, "max concurrent streams per tunnel")
 		tiersFile    = flag.String("tiers", "", "custom tiers JSON file")
 		defaultTier  = flag.String("free-tier", "free", "tier for anonymous tunnels")
@@ -58,6 +60,8 @@ func main() {
 		RequireToken:            *requireToken,
 		MaxTunnelsPerIP:         *maxPerIP,
 		MaxTunnelsPerIP24PerMin: *maxPerIP24,
+		GeoIPDB:                 *geoIPDB,
+		GeoIPDB6:                *geoIPDB6,
 		MaxStreamsPerTunnel:     *maxStreams,
 		DefaultTier:             *defaultTier,
 		DefaultPaidTier:         *defaultPaid,

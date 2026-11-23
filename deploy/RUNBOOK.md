@@ -20,6 +20,16 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o etu
 shasum -a 256 etunneld   # 记录完整 sha256，写入下方部署记录表
 ```
 
+## 1b. 离线 IP 库（可选，一次性；telegram 推送带地区）
+
+```bash
+# 官方 ip2region v4 xdb（Apache-2.0，~11MB，纯离线，不外发访客 IP）
+curl -L -o /var/lib/etunnel/ip2region_v4.xdb \
+  https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb
+```
+
+systemd 单元加 `--geoip-db /var/lib/etunnel/ip2region_v4.xdb`（IPv6 另加 `--geoip-db6 ..._v6.xdb`）。文件缺失/版本不符会在**启动时**报错而不是静默失效；验收：启动日志含 `geoip: ip2region loaded (v4)`，部署后首条 🚇 推送 ip 后带 `(国家 · 省 · ISP)`。更新库 = 覆盖文件 + restart。
+
 ## 2. 传输与远端核对
 
 ```bash

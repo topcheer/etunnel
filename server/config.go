@@ -144,6 +144,11 @@ type Config struct {
 	// (/24 IPv4, /64 IPv6) per minute. Catches burst scans that rotate inside
 	// one NAT pool, which the per-IP limit never sees. 0 = unlimited.
 	MaxTunnelsPerIP24PerMin int
+	// GeoIPDB / GeoIPDB6 are optional ip2region xdb files (IPv4 / IPv6) used
+	// to add the visitor's region to Telegram notifications. Lookups happen
+	// only in the async push paths, never on the handshake path. Empty = off.
+	GeoIPDB  string
+	GeoIPDB6 string
 	// MaxStreamsPerTunnel limits concurrent HTTP streams per tunnel. 0 = default 256.
 	MaxStreamsPerTunnel int
 

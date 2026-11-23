@@ -216,7 +216,7 @@ func (s *Server) alertIP24Burst(pfx, ip string, n int, c Counter) {
 	if !claimIP24Alert(ctx, c, pfx) {
 		return
 	}
-	text := fmt.Sprintf("🛑 tunnel burst: network %s opened more than %d tunnels in 60s (last ip %s, count %d) — likely scan/abuse, consider blocking the range",
-		pfx, s.cfg.MaxTunnelsPerIP24PerMin, ip, n)
+	text := fmt.Sprintf("🛑 tunnel burst: network %s opened more than %d tunnels in 60s (last ip %s%s, count %d) — likely scan/abuse, consider blocking the range",
+		pfx, s.cfg.MaxTunnelsPerIP24PerMin, ip, s.geoSuffix(ip), n)
 	go s.tgSend(context.Background(), text)
 }
