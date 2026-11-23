@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -223,6 +224,83 @@ func TestLedger407StartupDegradesThenRecovers(t *testing.T) {
 		t.Fatalf("after Close mode %q, want journal-only", got)
 	}
 	lg.startRetry(context.Background()) // must not spawn after Close (startOnce)
+}
+
+// blackholeDSN listens, accepts and never answers: pgx's TCP connect
+// succeeds and its startup message then waits for the whole ctx budget. That
+// gives a PG-mode ledger whose writes hang, so any caller-side blocking is
+// observable.
+func blackholeDSN(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		for _, c := range conns {
+			c.Close()
+		}
+		mu.Unlock()
+	})
+	return "postgres://u:p@" + ln.Addr().String() + "/db?sslmode=disable"
+}
+
+// #407 item 4: the session path must never wait on PG. With a 10s write
+// budget a synchronous write on a stalled link would hold the handshake out
+// of its serve loop - and hold the subdomain slot on close - for 10s.
+func TestLedger407AsyncWritesNeverBlockCaller(t *testing.T) {
+	// Degraded: the wrapper returns at once and the lost row is still counted.
+	lg, err := newSessionLedger(closedPortDSN(t), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lg.Close)
+	t0 := time.Now()
+	lg.recordOpenAsync(ledgerTestSession("a1"))
+	if d := time.Since(t0); d > 500*time.Millisecond {
+		t.Fatalf("degraded recordOpenAsync blocked the caller %s", d)
+	}
+	waitFor407(t, "degraded async write to be counted", func() bool { return lg.failedTotal() == 1 })
+
+	// PG mode against a blackhole: the writes hang for the full 10s budget,
+	// yet handshake (open) and close path (close) must return immediately.
+	// Built directly (not via newSessionLedger) so startup does not itself
+	// wait on the blackhole; lazyPool performs no I/O at construction.
+	bh := blackholeDSN(t)
+	lg2 := &sessionLedger{dsn: bh, retryInterval: ledgerRetryInterval, stop: make(chan struct{}), pool: lazyPool(t, bh)}
+	lg2.logf = func(string, ...any) {}
+	t0 = time.Now()
+	lg2.recordOpenAsync(ledgerTestSession("a2"))
+	lg2.recordCloseAsync(ledgerTestSession("a3"), "done", 2)
+	if d := time.Since(t0); d > 500*time.Millisecond {
+		t.Fatalf("PG-mode async writes blocked the caller %s - writes must be off the handshake/close path", d)
+	}
+	// Not lg2.Close(): pool.Close would wait for the blackholed Exec (10s).
+	// Detach instead; the stuck goroutines end with their own ctx.
+	lg2.stopOnce.Do(func() { close(lg2.stop) })
+	lg2.mu.Lock()
+	lg2.pool = nil
+	lg2.mu.Unlock()
+
+	// nil ledger: no goroutine, no panic.
+	var none *sessionLedger
+	none.recordOpenAsync(ledgerTestSession("n"))
+	none.recordCloseAsync(ledgerTestSession("n"), "x", 0)
 }
 
 // ② -ledger-strict: the pre-#407 fail-closed behavior is still available.

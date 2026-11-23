@@ -42,9 +42,14 @@ package server
 //     logs are sampled to one line per minute so an outage cannot flood
 //     journald.
 //
-// The session path keeps its non-blocking semantics: writes are best-effort
-// calls made off the handshake's critical decisions and never alter the
-// outcome of a connect or close.
+// The session path never waits on PG (#407 item 4): recordOpenAsync and
+// recordCloseAsync snapshot the row on the caller's goroutine and run the
+// write on a new one, so the handshake proceeds to the serve loop and the
+// close path releases the subdomain slot immediately - not after a slow
+// link, not after the 10s budget. Because open and close are then
+// independent goroutines, recordClose is an UPSERT: a close that lands
+// before its open still produces a complete row, and the late open's
+// ON CONFLICT DO NOTHING is a no-op.
 
 import (
 	"context"
@@ -322,14 +327,63 @@ func (l *sessionLedger) reconnectsTotal() int64 {
 	return l.reconnects.Load()
 }
 
+// ledgerRow is the session snapshot taken on the caller's goroutine so the
+// write goroutine never reads Session fields concurrently.
+type ledgerRow struct {
+	id, ip, sub, plan, account string
+	started                    time.Time
+	closed                     time.Time
+	durationS                  int
+	reason                     string
+	streams                    int
+}
+
+func openRow(sess *Session) ledgerRow {
+	return ledgerRow{id: sess.id, ip: sess.ip, sub: sess.sub, plan: sess.tier.Name, account: sess.accountEmail(), started: sess.started}
+}
+
+func closeRow(sess *Session, reason string, streams int) ledgerRow {
+	r := openRow(sess)
+	r.closed = time.Now()
+	r.durationS = int(time.Since(sess.started).Seconds())
+	r.reason = reason
+	r.streams = streams
+	return r
+}
+
+// recordOpenAsync / recordCloseAsync are the session-path entry points
+// (#407): snapshot now, write in the background. A nil ledger spawns nothing.
+// Failures are counted and sampled inside the write, exactly as for the
+// synchronous forms.
+func (l *sessionLedger) recordOpenAsync(sess *Session) {
+	if l == nil {
+		return
+	}
+	r := openRow(sess)
+	go func() { _ = l.writeOpen(r) }()
+}
+
+func (l *sessionLedger) recordCloseAsync(sess *Session, reason string, streams int) {
+	if l == nil {
+		return
+	}
+	r := closeRow(sess, reason, streams)
+	go func() { _ = l.writeClose(r) }()
+}
+
 // recordOpen inserts the session row (idempotent on the PK: a server restart
 // re-runs opens only for new sessions, but a re-insert is an UPDATE no-op).
-// Errors are returned for callers/tests; the ledger has already counted the
-// loss and emitted a sampled log line (#407).
+// Synchronous form for tests and the live lifecycle check; the session path
+// uses recordOpenAsync. Errors are returned for the caller; the ledger has
+// already counted the loss and emitted a sampled log line (#407).
 func (l *sessionLedger) recordOpen(sess *Session) error {
 	if l == nil {
 		return nil
 	}
+	return l.writeOpen(openRow(sess))
+}
+
+func (l *sessionLedger) writeOpen(r ledgerRow) error {
 	pool, err := l.live()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ledgerWriteTimeout)
@@ -338,31 +392,40 @@ func (l *sessionLedger) recordOpen(sess *Session) error {
 			`INSERT INTO sessions (id, ip, sub, plan, account, started)
 			 VALUES ($1, $2, $3, $4, $5, $6)
 			 ON CONFLICT (id) DO NOTHING`,
-			sess.id, sess.ip, sess.sub, sess.tier.Name, sess.accountEmail(), sess.started)
+			r.id, r.ip, r.sub, r.plan, r.account, r.started)
 	}
 	if err != nil {
-		l.noteFailure("open", sess.id, err)
+		l.noteFailure("open", r.id, err)
 	}
 	return err
 }
 
 // recordClose fills the closed/duration/reason/streams columns of the row.
+// UPSERT (not UPDATE) so it is correct even when it lands before its own
+// open row (see the package comment). Synchronous form; the session path
+// uses recordCloseAsync.
 func (l *sessionLedger) recordClose(sess *Session, reason string, streams int) error {
 	if l == nil {
 		return nil
 	}
+	return l.writeClose(closeRow(sess, reason, streams))
+}
+
+func (l *sessionLedger) writeClose(r ledgerRow) error {
 	pool, err := l.live()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), ledgerWriteTimeout)
 		defer cancel()
-		dur := time.Since(sess.started)
 		_, err = pool.Exec(ctx,
-			`UPDATE sessions SET closed = $2, duration_s = $3, reason = $4, streams = $5
-			 WHERE id = $1`,
-			sess.id, time.Now(), int(dur.Seconds()), reason, streams)
+			`INSERT INTO sessions (id, ip, sub, plan, account, started, closed, duration_s, reason, streams)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 ON CONFLICT (id) DO UPDATE SET
+			   closed = EXCLUDED.closed, duration_s = EXCLUDED.duration_s,
+			   reason = EXCLUDED.reason, streams = EXCLUDED.streams`,
+			r.id, r.ip, r.sub, r.plan, r.account, r.started, r.closed, r.durationS, r.reason, r.streams)
 	}
 	if err != nil {
-		l.noteFailure("close", sess.id, err)
+		l.noteFailure("close", r.id, err)
 	}
 	return err
 }
