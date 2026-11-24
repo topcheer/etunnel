@@ -56,6 +56,9 @@ else
 endif
 	cd $(Sdks)/clojure && clojure -M -e '(load-file "etunnel.clj")' > /dev/null && echo "clojure: ok"
 	cd $(Sdks)/ruby && ruby -c lib/etunnel.rb > /dev/null && echo "ruby: ok"
+	# gem build gate: the gemspec lists bin/etunnel explicitly; a missing file only
+	# fails at release time (v1.7.36 pack-ruby). Build the gem, then discard it.
+	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent >/dev/null && rm -f etunnel-*.gem && echo "ruby: gem ok"
 	cd $(Sdks)/perl && perl -c etunnel.pl > /dev/null && echo "perl: ok"
 	# README structure gate: SDK READMEs are hand-written (the generators are
 	# retired), so the sections the docs index and coding agents rely on can
