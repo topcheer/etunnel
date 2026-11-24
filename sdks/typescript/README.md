@@ -21,15 +21,14 @@ npm install @easytunnel/et-sdk
 ```
 
 Node >= 22 runs `.ts` directly (type stripping; verified on 22.23.5 and 26.13.1)
-or compile with `tsc`. `@easytunnel/et-sdk` needs version **>= 1.7.36** (see
-[Known issues](#known-issues)).
+or compile with `tsc`. Verified with `etunnel.ts` and `@easytunnel/et-sdk` 1.7.36.
 
 ## AI agent quick-start (copy this prompt)
 
 ```text
 Integrate etunnel (TypeScript SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `@easytunnel/et-sdk` on npm (plain JS, no bundled types), version >= 1.7.36 - there is no `etunnel-ts` package on npm · Install: `npm install @easytunnel/et-sdk`
+- Package: `@easytunnel/et-sdk` on npm (plain JS, no bundled types) - there is no `etunnel-ts` package on npm; or vendor the typed `etunnel.ts` · Install: `npm install @easytunnel/et-sdk`
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 // ESM only: a .mts file, or "type": "module" in package.json
@@ -62,7 +61,25 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-Embed through the npm package, from an ESM file (`.mts`, or `.ts` with
+With the vendored file (install option A) - typed, no build step. Importing it is
+side-effect free since 1.7.36 (earlier versions also started the CLI):
+
+```ts
+import { connect } from './etunnel.ts';
+
+const tunnel = await connect('wss://t.etun.uk/tunnel', 3000);
+console.log('TUNNEL_URL: ' + tunnel.url);
+console.log('plan:', tunnel.plan);
+
+process.on('SIGINT', () => { tunnel.close(); process.exit(0); });
+```
+
+Run it with `node app.mts` (type stripping; verified on Node 22.23.5 and
+26.13.1). ESM only: a `.mts` file, or `.ts` in a package that is not
+`"type": "commonjs"`. Do not run this file through a strict `tsc` build - see
+Known issues.
+
+Or through the npm package (option B), from an ESM file (`.mts`, or `.ts` with
 `"type": "module"` in package.json):
 
 ```ts
@@ -106,10 +123,6 @@ declare module '@easytunnel/et-sdk' {
 }
 ```
 
-The vendored `etunnel.ts` exports the same API with real types
-(`connect`, `login`, `normalizeRoutes`, `routeFor`; `Options`, `Tunnel`,
-`Route`, `Credentials`), but importing it also starts the CLI in 1.7.35 - see
-[Known issues](#known-issues).
 
 ## API
 
@@ -181,20 +194,25 @@ Semantics (identical in every SDK, pinned by tests): longest prefix wins; matchi
 - **`etunnel-ts` is not on npm.** `https://registry.npmjs.org/etunnel-ts` answers
   404 (checked 2026-11-24). `sdks/typescript/package.json` keeps the name, but
   nothing is published under it — do not `npm install etunnel-ts`.
-- **Embedding the vendored `etunnel.ts` (<= 1.7.35) opens a second tunnel.** Its
-  run-directly guard is always true, so `import { connect } from './etunnel.ts'`
-  also starts the CLI supervisor (another tunnel to port 3000, plus
-  SIGINT/SIGTERM handlers that exit the process). Until that is fixed use the
-  vendored file as a CLI only and embed through install option B.
-- **`@easytunnel/et-sdk` 1.7.0-1.7.35 are broken** (published without
-  `route.js`). Install >= 1.7.36.
+- **`tsc --strict` rejects `etunnel.ts` 1.7.36 itself** (TypeScript 5.9,
+  `@types/node` 22, `module`/`moduleResolution` `NodeNext`): six errors -
+  `frame()` is declared with a `Buffer` payload but is called with a
+  `Uint8Array` / without a payload (lines 284, 285, 301, 325), a
+  `Buffer<ArrayBufferLike>` body mismatch (line 319) and, when the file would
+  compile to CommonJS, the `import.meta` main guard (line 417). Runtime under
+  Node's type stripping is unaffected; the npm-package path with the declaration
+  file below type-checks clean. Not fixed yet.
+- **Fixed in 1.7.36.** Importing the vendored `etunnel.ts` (<= 1.7.35) also
+  started the CLI supervisor - a second tunnel plus SIGINT/SIGTERM handlers on
+  the importing process; and `@easytunnel/et-sdk` 1.7.0-1.7.35 were published
+  without `route.js`. Both verified fixed against 1.7.36.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `etunnel: local address is required` with `routes` | `connect(server, null, { routes })` - `null` is rejected | pass any port as `local`; it is unused when `routes` is set |
-| Two `TUNNEL_URL:` lines after `import { connect } from './etunnel.ts'` | the vendored file also starts its CLI (see Known issues) | embed through `@easytunnel/et-sdk`, or use the vendored file as a CLI only |
+| Two `TUNNEL_URL:` lines after `import { connect } from './etunnel.ts'` | `etunnel.ts` <= 1.7.35 also started its CLI (fixed in 1.7.36) | upgrade to 1.7.36 |
 | `TS7016` / `implicitly has an 'any' type` | the npm package ships no `.d.ts` | add the declaration file from the Embed section |
 | `Cannot use import statement outside a module` / `TS1309` | the `.ts` file lives in a CommonJS project | use `.mts`, or `"type": "module"` in package.json |
-| `Cannot find module './route'` on import / `npx` | npm 1.7.0-1.7.35 (published without `route.js`) | install >= 1.7.36 |
+| `Cannot find module './route'` on import / `npx` | npm 1.7.0-1.7.35 (published without `route.js`) | upgrade to >= 1.7.36 |

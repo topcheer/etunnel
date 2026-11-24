@@ -19,9 +19,17 @@ deno add jsr:@ggcode/etunnel
 Deno >= 1.38 (declared; verified on 2.9.8). `deno add` writes an import-map
 entry to `deno.json` (`"@ggcode/etunnel": "jsr:@ggcode/etunnel@^x.y.z"`), so
 `import { connect } from '@ggcode/etunnel'` works too. The `jsr:` prefix is
-required: `deno add @ggcode/etunnel` fails (looked up on npm). Deno >= 2.9
-skips versions published less than 24 h ago by default, so `deno add` may pin
-the previous release right after a new one ships.
+required: `deno add @ggcode/etunnel` fails (looked up on npm).
+
+Deno >= 2.9 refuses versions published less than 24 h ago by default (minimum
+dependency age). A fresh release is therefore neither selected by
+`deno add` (measured right after 1.7.36 shipped: it pinned `^1.7.34`) nor by
+an explicit constraint - `deno add jsr:@ggcode/etunnel@1.7.36` and
+`deno info jsr:@ggcode/etunnel@1.7.36` both fail with "blocked by the minimum
+dependency age policy" / "Could not find version". To use a release that is
+less than 24 h old, opt in explicitly:
+`deno add --minimum-dependency-age=0 jsr:@ggcode/etunnel@1.7.36` (and pass the
+same flag to `deno run`), or wait a day.
 
 ## AI agent quick-start (copy this prompt)
 
@@ -157,4 +165,4 @@ Semantics (identical in every SDK, pinned by tests): longest prefix wins; matchi
 | `NotCapable: Requires env access to "ETUNNEL_SERVER"` | CLI run with `--allow-net` only | add `--allow-env` (the scoped form is in the CLI section) |
 | `npm:@ggcode/etunnel was not found, but a matching jsr package exists` | `deno add @ggcode/etunnel` without the `jsr:` prefix | `deno add jsr:@ggcode/etunnel` |
 | `etunnel: local address is required` with `routes` | `connect(server, null, { routes })` - `null` is rejected | pass any port as `local`; it is unused when `routes` is set |
-| `deno add` pins the previous version | Deno >= 2.9 skips versions published < 24 h ago | wait, or `deno add jsr:@ggcode/etunnel@<version>` |
+| `deno add` pins the previous version, or `jsr:@ggcode/etunnel@<new>` is "blocked by the minimum dependency age policy" | Deno >= 2.9 refuses versions published < 24 h ago | wait a day, or opt in with `--minimum-dependency-age=0` (on `deno add` and `deno run`) |

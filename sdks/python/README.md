@@ -15,16 +15,15 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 pip install etunnel
 ```
 
-Python >= 3.8 (package metadata; verified on 3.15), `websocket-client` installed
-automatically. Use version **>= 1.7.36**: 1.7.29-1.7.35 on PyPI are rejected by
-current servers (see [Known issues](#known-issues)).
+Python >= 3.8 (package metadata; verified on 3.15 with `etunnel` 1.7.36 from
+PyPI), `websocket-client` installed automatically.
 
 ## AI agent quick-start (copy this prompt)
 
 ```text
 Integrate etunnel (Python SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `etunnel` on PyPI, version >= 1.7.36 (1.7.29-1.7.35 are rejected by current servers) · Install: `pip install etunnel`
+- Package: `etunnel` on PyPI · Install: `pip install etunnel`
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 from etunnel import connect
@@ -92,10 +91,10 @@ keep the process alive; `connect()` never blocks.
 |---|---|---|
 | `token` | `str` | paid-plan API key: custom subdomain + longer TTL (CLI: `ETUNNEL_TOKEN`) |
 | `subdomain` | `str` | request this subdomain instead of a random one (paid plans; CLI: `ETUNNEL_SUBDOMAIN`) |
-| `client` | `str` | client identifier sent in `hello` (default `etunnel-python/1.0`) |
+| `client` | `str` | client identifier sent in `hello` (default `etunnel-python/<package version>`, e.g. `etunnel-python/1.7.36`) |
 | `resume` | `str` | `resumeToken` of an earlier tunnel: reclaim the same subdomain |
 | `routes` | `list[dict]` | multi-target routing, see below; each dict has `prefix`, `addr` and optional `strip`. Pass `None` as `local` |
-| `on_close` | `callable(reason)` | called when the tunnel ends: your `close()`, a server `bye`, a ping timeout or a dropped socket (see [Known issues](#known-issues)) |
+| `on_close` | `callable(reason)` | called once when the tunnel ends: your `close()`, a server `bye`, a ping timeout or a dropped socket |
 
 ## Environment variables
 
@@ -142,22 +141,18 @@ Semantics (identical in every SDK, pinned by tests): longest prefix wins; matchi
 
 ## Known issues
 
-- **PyPI 1.7.29-1.7.35 cannot connect to etunneld >= 1.7.29.** `connect()` fails
-  with `WebSocketBadStatusException: Handshake status 403 Forbidden ...
-  browser-origin tunnels are not supported; use the SDK`: `websocket-client`
-  sends an `Origin` header by default, and the server rejects every tunnel
-  handshake that carries one. The fix (suppressing the header) needs a release
-  **>= 1.7.36**.
-- **`on_close` fires twice on an explicit `close()`** (seen on 1.7.35 against a
-  real server): first with the server's `read closed` bye echo, then with your
-  own reason. Do not reconnect from inside `on_close` without guarding against
-  the second call.
+- **Fixed in 1.7.36.** 1.7.29-1.7.35 could not connect to etunneld >= 1.7.29:
+  `websocket-client` sent an `Origin` header and the server answered
+  `Handshake status 403 Forbidden ... browser-origin tunnels are not supported`.
+  Also fixed: `on_close` fired twice on an explicit `close()`, and `hello.client`
+  was a stale `etunnel-python/1.0` (now `etunnel-python/<package version>`).
+  All three verified against 1.7.36 from PyPI.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Handshake status 403 Forbidden ... browser-origin tunnels are not supported` | 1.7.29-1.7.35 send an `Origin` header; servers >= 1.7.29 refuse it | install >= 1.7.36 (see Known issues) |
+| `Handshake status 403 Forbidden ... browser-origin tunnels are not supported` | 1.7.29-1.7.35 send an `Origin` header; servers >= 1.7.29 refuse it | upgrade to >= 1.7.36 |
 | `TypeError: connect() missing 1 required positional argument` | `connect(server, opts={...})` - `opts` is not a keyword-only argument | `connect(server, None, {...})`, or `connect(server, 3000, {...})` |
 | The tunnel is gone right after `connect()` returns | the worker threads are daemons and the main thread exited | keep the process alive (see the Embed section) |
-| `on_close` runs twice on `close()` | server `bye` echo plus your own call (see Known issues) | guard the callback against a second run |
+| `on_close` runs twice on `close()` | server `bye` echo plus your own call (fixed in 1.7.36) | upgrade to >= 1.7.36 |

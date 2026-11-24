@@ -14,15 +14,14 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 npm install @easytunnel/et-sdk
 ```
 
-Requires Node >= 22. Use version **>= 1.7.36**: 1.7.0-1.7.35 on npm are broken
-(see [Known issues](#known-issues)).
+Requires Node >= 22 (verified with `@easytunnel/et-sdk` 1.7.36 from npm).
 
 ## AI agent quick-start (copy this prompt)
 
 ```text
 Integrate etunnel (Node.js SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `@easytunnel/et-sdk` on npm, version >= 1.7.36 (1.7.0-1.7.35 are broken) · Install: `npm install @easytunnel/et-sdk`
+- Package: `@easytunnel/et-sdk` on npm · Install: `npm install @easytunnel/et-sdk`
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 import { connect } from '@easytunnel/et-sdk';   // ESM: .mjs, or "type": "module"
@@ -152,18 +151,17 @@ Semantics (identical in every SDK, pinned by tests): longest prefix wins; matchi
 
 ## Known issues
 
-- **npm 1.7.0-1.7.35 are broken.** The package was published without `route.js`
-  (the `files` whitelist missed it when multi-target routing landed in 1.7.0):
-  `require('@easytunnel/et-sdk')` throws `Cannot find module './route'` and
-  `npx @easytunnel/et-sdk 3000` exits on start. Fixed in the repository; install
-  **>= 1.7.36**. A warm npx cache can still run an older, working copy and hide
-  the crash — with an empty cache `npx @easytunnel/et-sdk@1.7.35` fails.
+- **Fixed in 1.7.36.** npm 1.7.0-1.7.35 were published without `route.js`, so
+  `require('@easytunnel/et-sdk')` threw `Cannot find module './route'` and
+  `npx @easytunnel/et-sdk 3000` exited on start. 1.7.36 ships the file (verified
+  from the registry with an empty npm cache), and the publish job now
+  smoke-tests the tarball before uploading.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Cannot find module './route'` on `require` / `npx` | npm 1.7.0-1.7.35 (published without `route.js`) | install >= 1.7.36; retest with an empty npx cache |
+| `Cannot find module './route'` on `require` / `npx` | npm 1.7.0-1.7.35 (published without `route.js`) | upgrade to >= 1.7.36; retest with an empty npx cache |
 | `etunnel: local address is required` | `connect(server)` without `local` or `routes` | pass a port, or `null` together with `opts.routes` |
 | `404 page not found (no route matches this path)` | `routes` table has no `/` fallback | add `{ prefix: '/', addr: '127.0.0.1:3000' }` |
 | `etunnel: ws: cannot connect to <server>` | wrong `ETUNNEL_SERVER` / server not reachable (a bad Host answers `404 - no tunnel here`) | check the WebSocket URL, e.g. `curl -sI https://t.etun.uk/` |
