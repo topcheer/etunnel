@@ -12,7 +12,7 @@
   3. **绝不深夜无备份换装**；
   4. prod 服务器 ssh 仅在任务契约明示时使用，不做计划外操作；
   5. 生产 `SESSION_SECRET` 必须设置且保持稳定（同一把 key 管 OAuth 会话 cookie + `resumeToken` HMAC）：换了或丢了，重启后全员登出、断线重连只能拿到新随机子域；
-  6. **发版 tag 推送账号**：打 `vX.Y.Z` tag 的 `git push` 必须用 **topcheer** 账号（推前 `gh auth status` 确认）——JSR 按 triggering actor 鉴权，`ggaidev` 不是 `ggcode` scope 成员，用它推 tag 会让 publish-jsr 报 `actorNotScopeMember`（v1.7.35 实证）；若已误推，由 topcheer 账号 `gh run rerun <run-id> --failed` 补发即可。
+  6. **发版 tag 推送账号**：打 `vX.Y.Z` tag 的 `git push` 必须用 **topcheer** 账号（推前 `gh auth status` 确认）——JSR 按 triggering actor 鉴权，`ggaidev` 不是 `ggcode` scope 成员，用它推 tag 会让 publish-jsr 报 `actorNotScopeMember`（v1.7.35 实证）。若已误推：**`gh run rerun --failed` 无效**（rerun 保留原 actor=ggaidev），正确做法是切到 topcheer（`gh auth switch -u topcheer`）后删掉并重推**同一个** tag 对象（`git push origin :refs/tags/vX.Y.Z && git push origin refs/tags/vX.Y.Z`）——注意删 tag 会**连带删除 GitHub Release 对象**，重推后用 `gh release create vX.Y.Z --verify-tag --latest --notes-file <CHANGELOG 段>` 重建。
 
 ## 1. 构建（本地，可复现）
 
