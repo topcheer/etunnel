@@ -4,7 +4,7 @@ defmodule Etunnel.MixProject do
   def project do
     [
       app: :etunnel,
-      version: "1.7.35",
+      version: "1.7.36",
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       deps: deps(),

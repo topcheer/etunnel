@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.36 — 2026-11-25
+
+- **fix (sdks, P0)**: npm `@easytunnel/et-sdk` 1.7.0-1.7.35 shipped without `route.js` (package `files` whitelist) - `require()` and the CLI crashed on every install; fixed + CI now smoke-tests the packed tarball before publishing (PR #419)
+- **fix (sdks, P0)**: Python SDK sent an `Origin` header and was rejected with 403 by etunneld >= 1.7.29 ("browser-origin tunnels are not supported") - `suppress_origin=True`; `on_close` no longer fires twice on explicit close; `hello.client` carries the real version (PR #420)
+- **fix (sdks, P0)**: Elixir `Etunnel.start_link/1` crashed with `KeyError :last_pong` on the first frame (missing state keys); Ruby CLI/embed hit `SystemStackError` in `tunnel.close` on Ruby 4 - tunnel is now a plain class (PR #420)
+- **fix (sdks, P0)**: C SDK sent an `Origin` header and could not connect to any current server (403); Android AAR's `Etunnel` class was `internal` + default package, unusable from consumer apps - now `dev.ggcode.etunnel.Etunnel` (PR #416, #423)
+- **fix (sdks, P1)**: Clojure `etunnel-clj` pom declared no dependencies (cheshire) and printed `DBG stored-ok` per request; TypeScript vendored file started the CLI supervisor on import; root `Package.swift` broke SPM consumers (`import etunnel`); Dart pub archive had no `lib/` (not importable) and percent-encoded request paths; Lua rockspec fetched a stale `v1.4.0` tag; Rust gained a library target (PR #421, #423)
+- **fix (sdks, P2)**: Scala one-shot mode printed `Tunnel(<url>,<resumeToken>)` instead of `TUNNEL_URL: <url>`; harmonyos `oh-package.json5` is now version-stamped; cpp CMake hint names the real `ASIO_INCLUDE_DIR` (PR #423)
+- **docs**: every SDK README, README/PROTOCOL/PACKAGING and examples were re-verified by running each command and snippet against a live etunneld; every README carries a copyable **AI agent quick-start** prompt; new `llms.txt`; both README generators retired in favour of a `make verify` structure gate (PR #415-#419, #422)
+
 ## v1.7.35 — 2026-11-24
 
 - **fix (reliability)**: PG session ledger resilience - when Postgres is unreachable at startup the server now degrades to journal-only instead of exiting, with a 30s background reconnect loop; optional fail-closed mode via `-ledger-strict` / `ETUNNEL_LEDGER_STRICT`; runtime ledger ctx budget raised 3s -> 10s; pool tuned to Max 4 / Min 1 / HealthCheck 1m; `/stats` gains `ledger_mode`, `ledger_failed_total`, `ledger_reconnects` (PR #408). Refs #407 - the infrastructure decision stays open
