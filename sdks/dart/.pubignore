@@ -1,0 +1,3 @@
+# Test infrastructure ships with the repo, not with the pub.dev archive (#417 E26).
+tests/
+testtools/

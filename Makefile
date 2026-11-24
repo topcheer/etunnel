@@ -117,7 +117,7 @@ pack-swift: prereq
 endif
 
 pack-dart: prereq
-	cd $(Sdks)/dart && tar czf ../../$(PACK)/etunnel-dart-$(V).tar.gz etunnel.dart pubspec.yaml README.md
+	cd $(Sdks)/dart && tar czf ../../$(PACK)/etunnel-dart-$(V).tar.gz etunnel.dart lib/etunnel.dart bin/etunnel.dart pubspec.yaml README.md
 
 pack-ruby: prereq
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent \
