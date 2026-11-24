@@ -715,7 +715,12 @@ int main(int argc, char **argv) {
         cc.port = port;
         cc.path = path;
         cc.host = host;
-        cc.origin = host;
+        /* No Origin header. SDK clients never send one; etunneld >= v1.7.29
+         * rejects any Origin with 403 "browser-origin tunnels are not
+         * supported" (server/session.go handleTunnelWS, #321), which made the
+         * CLI unable to connect to real servers while the test fixture - not
+         * checking Origin - kept the suite green. */
+        cc.origin = NULL;
         cc.protocol = "etunnel-v1";
         if (ssl) cc.ssl_connection = LCCSCF_USE_SSL;
 

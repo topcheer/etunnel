@@ -15,6 +15,10 @@
 //
 // Flags: -listen (default 127.0.0.1:0), -plain (no TLS; the C client tests
 // use ws:// so no certificate dance is needed - LWS verifies by default).
+//
+// Like etunneld >= v1.7.29, the fixture refuses the WebSocket upgrade with
+// 403 when the request carries an Origin header (server/session.go
+// handleTunnelWS, #321): SDK clients never send one, browsers always do.
 package main
 
 import (
@@ -158,6 +162,16 @@ func main() {
 	fmt.Println(ln.Addr().String()) // stdout protocol: tests read this line
 
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Mirror etunneld >= v1.7.29 (server/session.go handleTunnelWS, #321):
+		// reject browser-origin upgrades with 403 before touching the socket.
+		// Without this the stub accepted anything, so a client that sent
+		// `Origin: <host>` passed every test here while the real server
+		// refused it (the C client did exactly that until the fix).
+		if origin := r.Header.Get("Origin"); origin != "" {
+			fmt.Printf("ORIGIN_REJECTED %s\n", origin)
+			http.Error(w, "browser-origin tunnels are not supported; use the SDK", http.StatusForbidden)
+			return
+		}
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"etunnel-v1"}})
 		if err != nil {
 			return

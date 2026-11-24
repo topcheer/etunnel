@@ -35,20 +35,21 @@ libwebsockets 5.1.0, libcurl 8.7.1, json-c 0.19 and OpenSSL 4.1.0 on macOS and
 by CI's `make pack-c` on Ubuntu 22.04; `sudo make install` and the `apt` line
 were not executed on the machine that verified this document.
 
-> **Known issue in `etunnel` <= 1.7.35:** the CLI sends an `Origin` header
-> (`cc.origin = host` in `main()`), which `etunneld` v1.7.29 and later reject
-> with HTTP 403 - the client prints
-> `etunnel: connection error: HS: ws upgrade response not 101` and (by
-> default) keeps retrying. The fix is to not send `Origin` (`cc.origin = NULL`);
-> apply that one-line change before `make` until a release carries it. Every
-> run below was verified with that change applied.
+> **Fixed in source, not yet released:** clients `etunnel` <= 1.7.35 send an
+> `Origin` header, which `etunneld` v1.7.29 and later reject with HTTP 403 -
+> they print `etunnel: connection error: HS: ws upgrade response not 101` and
+> (by default) keep retrying. The source here no longer sends `Origin`
+> (regression test: `tests/test_no_origin.sh`, and the test fixture now
+> rejects `Origin` like the real server). Build from this repository until a
+> release newer than 1.7.35 ships; the 1.7.35 binary still works against
+> servers older than v1.7.29. Everything below was run from the fixed source.
 
 ## AI agent quick-start (copy this prompt)
 
 ```text
 Integrate etunnel (C SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: none to install - single-file CLI sdks/c/etunnel.c (libwebsockets, libcurl, json-c, OpenSSL via pkg-config) · Install: cd sdks/c && make && sudo make install
+- Package: none to install - single-file CLI sdks/c/etunnel.c (libwebsockets, libcurl, json-c, OpenSSL via pkg-config) · Install: cd sdks/c && make && sudo make install (build from this source: the released <= 1.7.35 binary sends an Origin header and is rejected by servers >= v1.7.29)
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (ETUNNEL_TOKEN; a free key holds one static subdomain).
 - Minimal embed (verified against the SDK source) - the C SDK is a CLI, not a library, so spawn it and read the URL line:
   etunnel <PORT> > /tmp/etunnel.log 2>&1 &            # or: ./etunnel <PORT> after make
