@@ -20,18 +20,12 @@ ifeq ($(V),unknown)
 $(error VERSION file missing or empty - refusing to pack with unknown version)
 endif
 
-.PHONY: all verify pack-all clean-pkgs $(PACK) prereq check-versions docs
+.PHONY: all verify pack-all clean-pkgs $(PACK) prereq check-versions
 
 all: pack-all
 
 prereq:
 	@mkdir -p $(PACK)
-
-# ---------- documentation ----------
-# Regenerates the 19 per-language READMEs under sdks/ from one template so the
-# install/embed/API sections stay in sync with the code.
-docs:
-	python3 scripts/gen_sdk_readmes.py
 
 # ---------- verification (compile-only, no artifacts) ----------
 check-versions:
@@ -63,6 +57,17 @@ endif
 	cd $(Sdks)/clojure && clojure -M -e '(load-file "etunnel.clj")' > /dev/null && echo "clojure: ok"
 	cd $(Sdks)/ruby && ruby -c lib/etunnel.rb > /dev/null && echo "ruby: ok"
 	cd $(Sdks)/perl && perl -c etunnel.pl > /dev/null && echo "perl: ok"
+	# README structure gate: SDK READMEs are hand-written (the generators are
+	# retired), so the sections the docs index and coding agents rely on can
+	# silently disappear. Fail with the list of what is missing.
+	@fail=0; for f in $(Sdks)/*/README.md sdk/README.md; do \
+	  miss=""; \
+	  grep -qE '^## Install' "$$f" || miss="$$miss Install"; \
+	  grep -qE '^## CLI' "$$f" || miss="$$miss CLI"; \
+	  grep -qE '^## Embed' "$$f" || miss="$$miss Embed"; \
+	  grep -qE '^## AI agent quick-start' "$$f" || miss="$$miss AI-agent-prompt"; \
+	  if [ -n "$$miss" ]; then echo "README structure: $$f missing:$$miss"; fail=1; fi; \
+	done; [ $$fail -eq 0 ] && echo "readme structure: ok"
 
 # ---------- per-language pack targets ----------
 pack-node: prereq

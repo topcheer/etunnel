@@ -1,0 +1,59 @@
+# etunnel
+
+> etunnel exposes a service running on your machine (localhost:3000, a CI runner, a container behind NAT) at a public HTTPS URL. The SDK client opens one outbound WebSocket to an etunnel server, receives a random subdomain with automatic TLS, and the server relays visitor requests to the local service. No signup for the anonymous tier (random subdomain, 4h lifetime, 1 Mbps); an API key adds a static subdomain, longer lifetime and 10 Mbps. 22 SDKs share one wire protocol; the server is a single self-hostable Go binary with ACME built in. Live deployment: wss://t.etun.uk/tunnel.
+
+Quick start (Node >= 22): `npx @easytunnel/et-sdk 3000` prints `TUNNEL_URL: https://<sub>.t.etun.uk`. Go: `go get github.com/topcheer/etunnel/sdk` then `etunnel.Connect(ctx, etunnel.Options{Server: "wss://t.etun.uk/tunnel", LocalAddr: "127.0.0.1:3000"})`. Every SDK honours `ETUNNEL_SERVER`, `ETUNNEL_LOCAL`, `ETUNNEL_TOKEN`, `ETUNNEL_SUBDOMAIN`, `ETUNNEL_RECONNECT=0`.
+
+Copy-paste prompt for coding agents: the "Give this to your AI agent" section of the README.
+
+## Core docs
+
+- [README](https://github.com/topcheer/etunnel/blob/main/README.md): product overview, quick start, SDK table, plans, server flags and endpoints, tunnel policy, operations, agent prompt
+- [sdks/README.md](https://github.com/topcheer/etunnel/blob/main/sdks/README.md): pick-a-language table (package, install command, entry point, what is really published), capability matrix, CLI invocations, agent prompt
+- [PROTOCOL.md](https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md): normative wire protocol - frames, hello/welcome, error codes, heartbeat, resume tokens, edge policy, limits
+- [PACKAGING.md](https://github.com/topcheer/etunnel/blob/main/PACKAGING.md): which registry publishes which SDK, the 12 CI publish jobs, release flow, known packaging gaps
+- [AGENTS.md](https://github.com/topcheer/etunnel/blob/main/AGENTS.md): repository conventions for coding agents
+- [CHANGELOG.md](https://github.com/topcheer/etunnel/blob/main/CHANGELOG.md): release history
+- [CREDENTIALS.md](https://github.com/topcheer/etunnel/blob/main/CREDENTIALS.md): every environment variable and OAuth app
+
+## SDK reference
+
+- [Go (reference)](https://github.com/topcheer/etunnel/blob/main/sdk/README.md): `github.com/topcheer/etunnel/sdk` - streaming bodies and WebSocket pass-through
+- [Node.js](https://github.com/topcheer/etunnel/blob/main/sdks/node/README.md): `@easytunnel/et-sdk` on npm
+- [TypeScript](https://github.com/topcheer/etunnel/blob/main/sdks/typescript/README.md): single-file `etunnel.ts`
+- [Deno](https://github.com/topcheer/etunnel/blob/main/sdks/deno/README.md): `@ggcode/etunnel` on JSR
+- [Python](https://github.com/topcheer/etunnel/blob/main/sdks/python/README.md): `etunnel` on PyPI
+- [Java](https://github.com/topcheer/etunnel/blob/main/sdks/java/README.md): `dev.ggcode:etunnel` on Maven Central
+- [Kotlin](https://github.com/topcheer/etunnel/blob/main/sdks/kotlin/README.md): single-file `Etunnel.kt`
+- [Scala](https://github.com/topcheer/etunnel/blob/main/sdks/scala/README.md): single-file `Etunnel.scala`
+- [C#](https://github.com/topcheer/etunnel/blob/main/sdks/csharp/README.md): `etunnel` on NuGet
+- [Rust](https://github.com/topcheer/etunnel/blob/main/sdks/rust/README.md): `etunnel` on crates.io (CLI)
+- [Swift](https://github.com/topcheer/etunnel/blob/main/sdks/swift/README.md): SwiftPM package, iOS 16+ / macOS 13+
+- [Dart](https://github.com/topcheer/etunnel/blob/main/sdks/dart/README.md): `etunnel` on pub.dev
+- [Ruby](https://github.com/topcheer/etunnel/blob/main/sdks/ruby/README.md): `etunnel` on RubyGems
+- [PHP](https://github.com/topcheer/etunnel/blob/main/sdks/php/README.md): `ggcode/etunnel` on Packagist
+- [Perl](https://github.com/topcheer/etunnel/blob/main/sdks/perl/README.md): single-file `etunnel.pl`
+- [Lua](https://github.com/topcheer/etunnel/blob/main/sdks/lua/README.md): `ggcode.etunnel` on LuaRocks
+- [Clojure](https://github.com/topcheer/etunnel/blob/main/sdks/clojure/README.md): `dev.ggcode/etunnel-clj` on Clojars
+- [Elixir](https://github.com/topcheer/etunnel/blob/main/sdks/elixir/README.md): `etunnel` on hex.pm
+- [C](https://github.com/topcheer/etunnel/blob/main/sdks/c/README.md): single-file client, built with make
+- [C++](https://github.com/topcheer/etunnel/blob/main/sdks/cpp/README.md): single-file client, built with cmake
+- [Android](https://github.com/topcheer/etunnel/blob/main/sdks/android/README.md): `dev.ggcode:etunnel-android` AAR on Maven Central
+- [HarmonyOS](https://github.com/topcheer/etunnel/blob/main/sdks/harmonyos/README.md): single-file ArkTS `Etunnel.ets`
+
+## Operating a server
+
+- [deploy/CLUSTER.md](https://github.com/topcheer/etunnel/blob/main/deploy/CLUSTER.md): single / mesh / sticky modes, Postgres and Redis stores
+- [deploy/RUNBOOK.md](https://github.com/topcheer/etunnel/blob/main/deploy/RUNBOOK.md): production runbook, TLS modes, geolocation database
+- [deploy/docker-compose.yml](https://github.com/topcheer/etunnel/blob/main/deploy/docker-compose.yml), [deploy/helm](https://github.com/topcheer/etunnel/tree/main/deploy/helm), [deploy/systemd](https://github.com/topcheer/etunnel/tree/main/deploy/systemd): deployment templates
+- [examples/README.md](https://github.com/topcheer/etunnel/blob/main/examples/README.md): runnable examples per language
+
+## Gotchas
+
+- Only the Go SDK streams bodies and relays WebSocket (101) upgrades. Every other SDK is buffer-based: fine for webhooks, JSON APIs and dashboards; not for SSE, large uploads or WebSockets.
+- The tunnel WebSocket refuses handshakes that carry a browser `Origin` header (HTTP 403); run SDKs server-side, not in a browser page.
+- A static subdomain needs an API key (a free key allows one) and the name must be claimed on `/me` first; the server rejects unknown names with `subdomain_plan`.
+- Reconnects replay a signed `resumeToken` (30-minute window) to keep the same subdomain; the server needs a stable `SESSION_SECRET` for that to survive a restart.
+- Multi-target routing (`-route /api=127.0.0.1:8080,strip -route /=3000`, or the SDK's `routes` option) is client-side: longest prefix wins on segment boundaries, `strip` keeps the query string, no match answers 404.
+- Match server errors on the `code` field of the `error` message (`subdomain_taken`, `limit_reached`, `too_many_tunnels`, `unauthorized`, ...), never on the message text.
+- Registry status differs per SDK at the current version; check the "Install" column of sdks/README.md before recommending a package (TypeScript, Kotlin, Scala, Perl, HarmonyOS, C and C++ are source-only; npm 1.7.35 and earlier are broken).

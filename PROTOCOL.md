@@ -53,8 +53,11 @@ bytes    9..9+N   payload
 | 0x02 | FIN  | sender finished writing on this stream |
 | 0x03 | RST  | abort the stream (peer gone / error) |
 
-Constraints: N ≤ 32768; larger bodies are chunked across DATA frames. Empty
-payloads are legal (typical for FIN). Client frames MUST be masked per
+Constraints: N ≤ 32768 (`protocol.MaxPayload`); larger bodies are chunked across
+DATA frames. Empty payloads are legal (typical for FIN). One frame per
+WebSocket message: bytes trailing the frame inside the same message are a
+malformed frame (#322-4), and an unknown kind byte, an oversize length or a
+short payload all fail with `protocol.ErrBadFrame`. Client frames MUST be masked per
 RFC 6455; server frames are unmasked. (Robustness: the server also accepts
 frames delivered with the *text* opcode — it sniffs the first byte: JSON
 control messages start with `{`, frames with a kind byte.)
@@ -62,6 +65,14 @@ control messages start with `{`, frames with a kind byte.)
 ## Control messages
 
 ### 1. Handshake
+
+Transport prerequisites: the upgrade negotiates subprotocol `etunnel-v1`, the
+first message must be a **text** `hello` within 15 s, and the HTTP upgrade
+request must not carry an `Origin` header - browsers always send one, SDK
+clients never do, so a handshake with `Origin` is refused with HTTP 403 before
+the WebSocket is even accepted (#321: a cross-site page must not be able to
+open anonymous tunnels against the visitor's per-IP quota). Browser-side
+JavaScript cannot open a tunnel; run the Deno/Node SDK server-side.
 
 Client → server:
 
@@ -75,7 +86,9 @@ Client → server:
   `CustomDomains: 1` (config.go), so a free key can claim one static subdomain.
   Tunnels with no key get a random `word-word-<6-char>` name (base32,
   visually-unambiguous alphabet). The quota is per tier; exceeding it is
-  rejected with `subdomain_plan`.
+  rejected with `limit_reached`. An authenticated request must also pass the
+  ownership gate: the name has to be in the account's domain list (claimed at
+  `/me` first), otherwise `subdomain_plan`.
 - `token` is the API key from `/api/register`
 - `resume` is the `resumeToken` from a **previous** `welcome`. When valid the
   server hands back the **same subdomain** the client had before the
@@ -155,15 +168,20 @@ Error codes (complete registry; every SDK surfaces them with the
 |---|---|---|
 | `bad_message` | malformed control frame (incl. invalid hello.policy) | fix client |
 | `proto_version` | client speaks an older/newer protocol than the server | upgrade client |
-| `unauthorized` | unknown/absent API token, or account tier gone | fix token |
+| `unauthorized` | unknown/absent API token, token revoked mid-handshake, or account tier gone | fix token |
 | `subdomain_taken` | requested subdomain is in use | pick another / resume |
-| `subdomain_plan` | plan does not allow (more) static subdomains | upgrade |
-| `subdomain_invalid` | subdomain failed shape/reservation rules | fix name |
-| `limit_reached` | account-level concurrent tunnel limit | close one / upgrade |
-| `too_many_tunnels` | anonymous per-IP tunnel limit | auth or retry later |
+| `subdomain_plan` | plan grants no static subdomain, or the name is not in the account's domain list | upgrade / claim at `/me` |
+| `subdomain_invalid` | subdomain failed shape/reservation rules (`protocol.ValidateSubdomain`: 1-63 chars `[a-z0-9-]`, no edge hyphen, not reserved) | fix name |
+| `limit_reached` | account-level concurrent tunnel limit, or the plan's custom-subdomain quota is used up | close one / upgrade |
+| `too_many_tunnels` | anonymous per-IP tunnel limit, the per-network-prefix burst guard, or no free random name | auth or retry later |
 | `ttl_expired` | tunnel TTL elapsed (normal shutdown) | reconnect |
 | `ping_timeout` | heartbeat deadline missed | reconnect (resume token reclaims subdomain) |
 | `server_shutdown` | server draining/restarting | reconnect |
+
+Delivery: the server writes the `error` text frame and then closes the
+WebSocket with close code **1008** (policy violation) and the error code as the
+close reason (`wsErrorClose`). A client sees the `error` first; treat the
+close frame as the end of the handshake either way.
 
 Programming note: match on `code`, never on message text. Go exposes
 `*etunnel.Error{Code, Message}`; node, deno and ts attach `err.code`; the
@@ -274,7 +292,13 @@ exactly as before). Semantics every implementation must share:
 - No matching route (only possible when no `/` fallback is configured):
   the SDK answers `404` locally instead of dialing anything.
 
+```json
+{"type":"req","streamId":1,"method":"GET","path":"/api/v1/items?page=2"}
 ```
+
+with routes `/api=127.0.0.1:8080,strip` and `/=:3000` dials `127.0.0.1:8080`
+with path `/v1/items?page=2`; `/docs/x` matches `/` and dials `:3000` with
+`/docs/x` unchanged.
 
 ### 3. Heartbeat
 
@@ -296,7 +320,12 @@ Reasons a server ends a tunnel proactively:
 |---|---|
 | `ttl_expired` | plan lifetime elapsed (4h free / 72h starter / 30d pro) |
 | `ping_timeout` | no pong/activity within the liveness window |
-| `server_shutdown` | server draining |
+| `server_shutdown` | server draining (`Close` on every session during shutdown) |
+| `kicked by admin` | Telegram `/kick <subdomain>`, account deletion / entitlement rollback |
+
+Client-initiated `bye` reasons seen from the reference SDKs: `client closed`
+(CLI exit), `app exiting` (embedding app), `read closed`, `write failed`,
+`ping timeout`, `malformed control frame`, `server error: <message>`.
 
 ### 5. WebSocket pass-through (101 upgrade)
 
@@ -322,6 +351,6 @@ upgrade forwarding.)
 | Control message size (text frame) | 64 KiB | Server reads with a 64 KiB bound; an oversize control frame closes the tunnel with close code 1009 and reason "control message too large (limit 64 KiB)". Keep control frames under the bound. |
 | WebSocket read limit | 128 KiB | `SetReadLimit` on both sides; a larger frame fails the connection. |
 | Hello timeout | 15 s | The server closes the connection if the first `hello` has not arrived. |
-| Concurrent streams | 256 per tunnel | When the limit is reached the server refuses the *visitor* side with HTTP 429; the client side is refused with an RST **frame** for that stream id (not a control message), so the peer can distinguish "refused" from "still opening" and must not retry it. |
+| Concurrent streams | 256 per tunnel | Server side (`-max-streams`, default 256): the visitor gets HTTP 429 and no `req` is ever sent. Client side (Go SDK `maxClientStreams`, 256): the client answers the `req` with an RST **frame** for that stream id (not a control message), so the server can distinguish "refused" from "still opening" and must not retry it. A conforming server never exceeds its own limit, so the client-side RST only fires against a buggy or hostile server. |
 | Unknown control `type` | ignore | Both ends ignore unknown control types and unknown error codes (SDK clients always did; the server's read loop lands them in an ignore branch). Malformed *known* types remain fatal. |
-| `welcome.proto` / `hello.proto` | `1` | Both sides reject a strictly newer protocol version. An omitted `proto` field (JSON zero value) is accepted as v1 by lenient peers; the reference server always sends `1`. |
+| `welcome.proto` / `hello.proto` | `1` | The server requires `hello.proto == 1` exactly - any other value, including an omitted field (JSON zero), is `proto_version`. The Go SDK client rejects only a *strictly newer* `welcome.proto` (`ErrUnsupportedProto`) and accepts `0` as v1; the server always sends `1`. |
