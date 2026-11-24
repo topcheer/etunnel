@@ -65,16 +65,21 @@ Commands as actually used by Makefile and CI
   `/login` + `/me` actions), `account.go` (JSON account
   store), `admin.go` (stats/admin API), `telegram.go`, `tls.go` (ondemand /
   dns / static TLS modes), `acme_dns.go` (DNS-01 via lego), `config.go`,
-  `resume.go` (self-signed `resumeToken`: HMAC over `sub|exp`, 30 min TTL,
+  `resume.go` (self-signed `resumeToken`: HMAC-SHA256 over
+  `sub|exp|owner|sessionExpiry|custom`, 30 min TTL, identity-bound per #292,
   used by reconnecting clients).
 - `cmd/etunnel/` — client CLI (`etunnel -server ... 3000`).
 - `cmd/etunneld/` — server daemon entrypoint.
-- `sdks/` — 19 additional single-file, dependency-light language SDKs
-  (Node, TS, Deno, Python, Java, Kotlin, C#, Rust, Swift, Dart, Ruby, PHP,
-  Perl, Lua, Scala, Elixir, C, C++, Clojure). Together with `sdk/` these are
-  "the 20 SDKs". See `sdks/README.md` and `PACKAGING.md`.
-- `scripts/` — release/versioning tooling (`bump-release.py`) and README
-  generators.
+- `sdks/` — 21 SDK directories: 19 language ports (Node, TS, Deno, Python,
+  Java, Kotlin, C#, Rust, Swift, Dart, Ruby, PHP, Perl, Lua, Scala, Elixir, C,
+  C++, Clojure) plus Android (`sdks/android`, AAR on Maven Central) and
+  HarmonyOS (`sdks/harmonyos`, ArkTS, not yet on ohpm); `sdks/testtools/` is a
+  shared test fixture. Together with `sdk/` these are "the 22 SDKs". See
+  `sdks/README.md` and `PACKAGING.md` for which registry actually carries
+  which one (TypeScript, Kotlin, Scala, Perl, C, C++ and HarmonyOS are
+  source-only today).
+- `scripts/` — release/versioning tooling (`bump-release.py`) and the SDK
+  README generator (`gen_sdk_readmes.py`, run via `make docs`).
 - Root `integration_test.go`, `upgrade_passthrough_test.go` — black-box
   end-to-end tests (package `etunnel_test`) spinning up a real server +
   tunnel via `httptest`.
@@ -126,8 +131,9 @@ Commands as actually used by Makefile and CI
   Tests must pass without network access and without DNS/ACME.
 - **Cross-SDK parity contract**: every language SDK, standalone, honors the
   env vars `ETUNNEL_SERVER` / `ETUNNEL_LOCAL` / `ETUNNEL_TOKEN` /
-  `ETUNNEL_SUBDOMAIN` and prints `TUNNEL_URL: <url>` on connect. New client
-  features must be mirrored across all 20 SDKs — a protocol/behavior change
+  `ETUNNEL_SUBDOMAIN` and prints `TUNNEL_URL: <url>` on connect (the Go CLI
+  prints the URL on its own indented line instead). New client
+  features must be mirrored across all 22 SDKs — a protocol/behavior change
   that only lands in `sdk/` is incomplete.
 - **Wire protocol robustness**: the server sniffs the first byte of text
   frames to tolerate SDKs that send binary frames with the text opcode;
@@ -139,5 +145,8 @@ Commands as actually used by Makefile and CI
   Release = bump, commit, `git tag vX.Y.Z`, push tag; CI builds and
   publishes. See `PACKAGING.md` for registry specifics.
 - **Docs**: `README.md` (product), `PROTOCOL.md` (wire spec), `PACKAGING.md`
-  (registries), `sdks/README.md` (per-SDK usage). Keep them in sync with
-  behavior changes; `scripts/gen-readmes.py` regenerates SDK READMEs.
+  (registries), `sdks/README.md` (per-SDK usage), `llms.txt` (agent-facing
+  index). Keep them in sync with behavior changes; the 19 generated SDK
+  READMEs come from `scripts/gen_sdk_readmes.py` (`make docs`) - edit the
+  generator entry, never the generated file (Android and HarmonyOS READMEs
+  are hand-written).

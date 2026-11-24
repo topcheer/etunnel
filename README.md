@@ -27,12 +27,17 @@ no router configuration, no firewall rule, no signup.
   work on the first try.
 - **Anonymous by default** - a random subdomain, 4-hour lifetime, 1 Mbps, no
   account. A paid API key adds custom subdomains, longer lifetimes and 10 Mbps.
-- **20 SDKs, one protocol** - embed the tunnel in your own process (Go, Node,
-  Python, Java, Kotlin, Scala, C#, Rust, Swift, Dart, Ruby, PHP, Perl, Lua,
-  Clojure, Elixir, Deno, TypeScript, C, C++). The Swift SDK ships as a
-  SwiftPM package for **iOS 16+ / macOS 13+** apps (visionOS and Mac
-  Catalyst are not tested); Android (AAR) and
-  HarmonyOS (ArkTS) SDKs are planned ([#260](https://github.com/topcheer/etunnel/issues/260)).
+- **22 SDKs, one protocol** - embed the tunnel in your own process (Go, Node,
+  TypeScript, Deno, Python, Java, Kotlin, Scala, C#, Rust, Swift, Dart, Ruby,
+  PHP, Perl, Lua, Clojure, Elixir, C, C++, plus an Android AAR and a
+  HarmonyOS ArkTS package). The Swift SDK ships as a SwiftPM package for
+  **iOS 16+ / macOS 13+** apps (visionOS and Mac Catalyst are not tested).
+- **Reconnect keeps your URL** - every SDK reconnects with backoff and replays
+  a signed `resumeToken`, so a hostname already shared with other people
+  survives a dropped connection or a server restart.
+- **Edge protection** - an optional per-tunnel `policy` in the handshake adds
+  HTTP Basic auth, a visitor IP allowlist and webhook signature verification
+  (Stripe / GitHub / GitLab) at the server, before a request reaches you.
 - **Self-hostable** - the server is a single Go binary with ACME built in.
 - **WebSocket pass-through** - the Go SDK relays 101 upgrades as a raw byte
   pipe, so realtime apps work through the tunnel too.
@@ -62,7 +67,7 @@ sequenceDiagram
 
     App->>SDK: connect(server, 3000)
     SDK->>Edge: wss /tunnel (subprotocol etunnel-v1) + hello
-    Edge-->>SDK: welcome {url, hostname, plan, ttl}
+    Edge-->>SDK: welcome {url, hostname, plan, expiresAt, resumeToken}
     SDK-->>App: public URL
 
     V->>Edge: GET /webhook (Host: quiet-frog-k3f9qz.t.etun.uk)
@@ -82,14 +87,20 @@ plan TTL expires) the subdomain is released immediately.
 ### CLI - one command, any SDK
 
 ```sh
-npx @easytunnel/et-sdk 3000
+npx @easytunnel/et-sdk 3000            # needs npm @easytunnel/et-sdk >= 1.7.36
 #   TUNNEL_URL: https://quiet-frog-k3f9qz.t.etun.uk
-#   plan: Free, expires in 4h
 ```
 
+npm `@easytunnel/et-sdk` 1.7.35 (and every 1.7.x before it) crashes at load with
+`Cannot find module './route'` (the tarball whitelist missed a file); until the
+fixed release is out, run the same CLI from a checkout:
+`node sdks/node/etunnel.js 3000`.
+
 Every SDK's file is also a runnable CLI: `etunnel 3000` (Go), `python -m etunnel 3000`,
-`dotnet run Etunnel.cs 3000`, `swift run etunnel-cli 3000`, `php etunnel.php 3000`.
-Each package README lists its own.
+`dotnet run Etunnel.cs 3000`, `swift run etunnel-cli 3000`, `php etunnel.php 3000`,
+`deno run --allow-net --allow-env etunnel.ts 3000`. Each package README lists its
+own. They all print `TUNNEL_URL: <url>` - except the Go CLI, which prints the
+URL on its own line (`  https://<sub>.<domain>  ->  http://127.0.0.1:3000`).
 
 Several local services under ONE hostname (SPA prod-bundle shape, no
 CORS, no second tunnel):
@@ -119,13 +130,18 @@ defer tunnel.Close("app exiting")
 log.Printf("public URL: %s", tunnel.URL())
 ```
 
-Node:
+Node (ESM - save as `app.mjs`, or set `"type": "module"`; Node >= 22):
 
 ```js
-const { connect } = require('@easytunnel/et-sdk');
+import { connect } from '@easytunnel/et-sdk';
+
 const tunnel = await connect('wss://t.etun.uk/tunnel', 3000);
 console.log(tunnel.url);
 ```
+
+CommonJS works too - `const { connect } = require('@easytunnel/et-sdk');` - but
+then the `await` has to sit inside an `async` function (Node refuses a file
+that mixes `require` with top-level `await`).
 
 Python:
 
@@ -143,43 +159,70 @@ $tunnel = Etunnel::connect('wss://t.etun.uk/tunnel', 3000);
 echo $tunnel->url;
 ```
 
+Known defect in the published Python package: PyPI `etunnel` 1.7.35 sends a
+browser `Origin` header and is refused (HTTP 403) by servers that enforce the
+SDK-only handshake; a fix is pending.
+
 Every snippet is published on the landing page of the deployment
 (<https://t.etun.uk>), one tab per language, always in sync with the SDKs.
 
-### All 20 SDKs
+### All 22 SDKs
 
 | Language | Install | Embed | Docs |
 |---|---|---|---|
-| Go | `go get github.com/topcheer/etunnel/sdk` | `Connect(ctx, Options{...})` | [sdk/](sdk/README.md) |
+| Go | `go get github.com/topcheer/etunnel/sdk` | `etunnel.Connect(ctx, Options{...})` | [sdk/](sdk/README.md) |
 | Node.js | `npm install @easytunnel/et-sdk` | `connect(server, 3000)` | [sdks/node](sdks/node/README.md) |
-| TypeScript | `npm install @easytunnel/et-sdk` | `connect(server, 3000)` | [sdks/typescript](sdks/typescript/README.md) |
+| TypeScript | single file `etunnel.ts` (`etunnel-ts` is not on npm) | `connect(server, 3000)` | [sdks/typescript](sdks/typescript/README.md) |
 | Deno | `deno add jsr:@ggcode/etunnel` | `connect(server, 3000)` | [sdks/deno](sdks/deno/README.md) |
 | Python | `pip install etunnel` | `connect(server, 3000)` | [sdks/python](sdks/python/README.md) |
-| Java | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000, null)` | [sdks/java](sdks/java/README.md) |
-| Kotlin | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000)` | [sdks/kotlin](sdks/kotlin/README.md) |
-| Scala | `dev.ggcode:etunnel` | `Etunnel.connect(server, 3000)` | [sdks/scala](sdks/scala/README.md) |
-| C# | single file / `etunnel` NuGet | `await Etunnel.Connect(server, "3000")` | [sdks/csharp](sdks/csharp/README.md) |
+| Java | `dev.ggcode:etunnel` (Maven Central) | `Etunnel.connect(server, 3000, null)` | [sdks/java](sdks/java/README.md) |
+| Kotlin | single file `Etunnel.kt` | `Etunnel.connect(server, 3000)` | [sdks/kotlin](sdks/kotlin/README.md) |
+| Scala | single file `Etunnel.scala` | `Etunnel.connect(server, 3000)` | [sdks/scala](sdks/scala/README.md) |
+| C# | `dotnet add package etunnel` | `await Etunnel.Connect(server, "3000")` | [sdks/csharp](sdks/csharp/README.md) |
 | Rust | `cargo install etunnel` | binary - spawn as child | [sdks/rust](sdks/rust/README.md) |
-| Swift | single file (Foundation) | `try await Etunnel(...).connect()` | [sdks/swift](sdks/swift/README.md) |
+| Swift | SwiftPM: `.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")` | `try await Etunnel(...).connect()` | [sdks/swift](sdks/swift/README.md) |
 | Dart | `dart pub add etunnel` | `Etunnel.connect(server, '3000')` | [sdks/dart](sdks/dart/README.md) |
 | Ruby | `gem install etunnel` | `Etunnel.connect(server, 3000)` | [sdks/ruby](sdks/ruby/README.md) |
-| PHP | `composer require ggcode/etunnel` | `Etunnel::connect(...)` | [sdks/php](sdks/php/README.md) |
-| Perl | single file (core modules) | `etunnel_connect(...)` | [sdks/perl](sdks/perl/README.md) |
+| PHP | `composer require ggcode/etunnel` | `Etunnel::connect(server, 3000)` | [sdks/php](sdks/php/README.md) |
+| Perl | single file (core modules; CPAN upload paused) | `etunnel_connect(server, local, {})` | [sdks/perl](sdks/perl/README.md) |
 | Lua | `luarocks install ggcode.etunnel` | script | [sdks/lua](sdks/lua/README.md) |
-| Clojure | `dev.ggcode/etunnel-clj` | `(et/connect! server 3000)` | [sdks/clojure](sdks/clojure/README.md) |
-| Elixir | `{:etunnel, "~> 1.2"}` | `Etunnel.start_link(...)` | [sdks/elixir](sdks/elixir/README.md) |
+| Clojure | `dev.ggcode/etunnel-clj` (Clojars) | `(connect! server 3000)` | [sdks/clojure](sdks/clojure/README.md) |
+| Elixir | `{:etunnel, "~> 1.7.35"}` | `Etunnel.start_link(server: s, local: 3000)` | [sdks/elixir](sdks/elixir/README.md) |
 | C | single file (`make`) | binary - spawn as child | [sdks/c](sdks/c/README.md) |
 | C++ | single file (`cmake`) | binary - spawn as child | [sdks/cpp](sdks/cpp/README.md) |
+| Android | `implementation("dev.ggcode:etunnel-android:1.7.35")` | `Etunnel.connect(server, 3000)` | [sdks/android](sdks/android/README.md) |
+| HarmonyOS | single file `Etunnel.ets` (ohpm not published yet) | `await connect(server, '3000')` | [sdks/harmonyos](sdks/harmonyos/README.md) |
 
-Capability differences (streaming bodies, WebSocket pass-through) are in the
+Registry status per package (what is really published at the current
+`VERSION`, and the known defects) is in [sdks/README.md](sdks/README.md) and
+[PACKAGING.md](PACKAGING.md). Capability differences (streaming bodies,
+WebSocket pass-through) are in the
 [SDK matrix](sdks/README.md#capability-matrix).
+
+## Give this to your AI agent
+
+Paste this into any coding agent (Claude Code, Codex, Cursor, ...) to get a
+working integration without it inventing package names or options. Each
+SDK README also carries a language-specific prompt right after its Install
+section (`## AI agent quick-start`).
+
+```text
+Integrate etunnel into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Step 1 - pick the SDK for this project's language from the "Pick a language" table in sdks/README.md (https://github.com/topcheer/etunnel/blob/main/sdks/README.md), open that SDK's README.md and use its Install and Embed sections verbatim. Do not guess package names or API signatures.
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER or the first connect() argument). Anonymous tier = random subdomain, 4h TTL, 1 Mbps; a custom subdomain or longer TTL needs an API key (the token option / ETUNNEL_TOKEN).
+- Step 2 - install with the exact command from the table row. If the row says "single file" or "copy", copy that file from the repo instead of inventing a package name.
+- Step 3 - use the minimal embed snippet from that SDK's README. Print the public URL as `TUNNEL_URL: <url>`, keep the process alive, and call the SDK's close method on shutdown to release the subdomain.
+- Rules: every SDK except Go is buffer-based (request and response bodies are collected before forwarding: no WebSocket upgrades, no SSE/streaming, no large uploads) - fine for webhooks/APIs/dashboards. Use the Go SDK (github.com/topcheer/etunnel/sdk) when the app needs streaming bodies or WebSocket pass-through.
+- Do not invent other options. Full API/options: the SDK's own README.md. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+```
 
 ## Plans
 
 | | Free (anonymous) | Starter | Pro |
 |---|---|---|---|
 | Registration | none | API key | API key |
-| Subdomain | random `word-word-42` | 1 custom | 5 custom |
+| Subdomain | random `word-word-k3f9qz` | 1 custom | 5 custom |
 | Tunnel lifetime | 4 hours | 72 hours | 30 days |
 | Bandwidth | 1 Mbps | 10 Mbps | 10 Mbps |
 | Concurrent tunnels | 2 per account (5 per IP when anonymous) | 5 | 20 |
@@ -234,6 +277,36 @@ etunneld -domain t.example.com -tls-mode static -tls-cert fullchain.pem -tls-key
 
 `-alias-domain t.old.com` serves a legacy domain alongside `-domain` during a
 migration (static wildcard cert from the ACME directory, not renewed).
+
+### Tunnel policy (edge protection)
+
+An optional `policy` object in the handshake is enforced by the server on
+every visitor request, before a stream is opened to your process. Available
+in every SDK as the `policy` option (Go: `Options.Policy`):
+
+```go
+tunnel, err := etunnel.Connect(ctx, etunnel.Options{
+    Server:    "wss://t.etun.uk/tunnel",
+    LocalAddr: "127.0.0.1:3000",
+    Policy: &etunnel.TunnelPolicy{
+        BasicAuth: "user:pass",                      // 401 + WWW-Authenticate on mismatch
+        AllowIPs:  []string{"203.0.113.0/24"},       // 403 for everyone else
+        Webhooks: []etunnel.WebhookRule{{Provider: "stripe", Secret: "whsec_..."}},
+    },
+})
+```
+
+Webhook rules verify the raw body against the provider signature (Stripe
+`Stripe-Signature` with a 5-minute tolerance, GitHub `X-Hub-Signature-256`,
+GitLab `X-Gitlab-Token`); a mismatch is a 401 and a verified request reaches
+your service with `X-Etunnel-Webhook: verified: <provider>` - any inbound
+`X-Etunnel-*` header is stripped at the edge first. For the IP allowlist the
+visitor IP is the socket address unless the server runs with
+`-trust-forwarded-for` (then `CF-Connecting-IP` -> `X-Real-IP` -> first
+`X-Forwarded-For` hop, which is only safe behind a reverse proxy that
+overwrites those headers). Secrets travel in the WSS hello and stay in server
+memory; a malformed policy fails the handshake with `bad_message`. Full
+rules: [PROTOCOL.md](PROTOCOL.md#1-handshake).
 
 ### Endpoints
 
@@ -389,7 +462,7 @@ server/       etunneld: sessions, registry, proxy, tiers, TLS/ACME, admin API, b
 sdk/          Go SDK - reference client (streaming + WebSocket pass-through)
 cmd/etunneld  server CLI
 cmd/etunnel   client CLI
-sdks/         20 language clients, one README each (see sdks/README.md)
+sdks/         21 SDK directories (19 language ports, Android, HarmonyOS) + testtools/ (see sdks/README.md)
 examples/     runnable examples (see examples/README.md)
 scripts/      release, packaging and doc generation helpers
 ```
@@ -412,7 +485,8 @@ Docs:
 | [PROTOCOL.md](PROTOCOL.md) | frames, control messages, stream lifecycle, limits |
 | [sdks/README.md](sdks/README.md) | install matrix, capability comparison, protocol summary |
 | [examples/README.md](examples/README.md) | runnable examples per language |
-| [PACKAGING.md](PACKAGING.md) | how releases are cut and published to 20 registries |
+| [PACKAGING.md](PACKAGING.md) | how releases are cut and which registry publishes what (12 CI publish jobs) |
+| [llms.txt](llms.txt) | index of this documentation for AI agents |
 | [CREDENTIALS.md](CREDENTIALS.md) | every environment variable and OAuth app |
 
 ## License
