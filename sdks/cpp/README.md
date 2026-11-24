@@ -33,7 +33,8 @@ one of:
   websocketpp 0.8.x).
 
 OpenSSL 3.x is required for the standalone-asio path (asio 1.13 reads
-`ASN1_STRING` fields that OpenSSL 4 made opaque).
+`ASN1_STRING` fields that OpenSSL 4 made opaque); since 1.7.36 CMake picks
+Homebrew's `openssl@3` keg automatically when `OPENSSL_ROOT_DIR` is not set.
 
 ```sh
 # Debian / Ubuntu 22.04 (CI installs the first three; Boost there is 1.74)
@@ -43,15 +44,15 @@ brew install websocketpp openssl@3
 ```
 
 The plain command above is what CI runs on Ubuntu 22.04 (`make pack-cpp`).
-On macOS with Homebrew's Boost 1.92 / asio 1.38 / OpenSSL 4 the configure step
-stops with `standalone asio ... is too new for websocketpp 0.8.x`; point CMake
-at an asio 1.13 tree and the OpenSSL 3 keg instead (verified: websocketpp
-0.8.2, asio 1.13.0, OpenSSL 3.5.9, libcurl 8.7.1):
+On macOS with Homebrew's Boost 1.92 / asio 1.38 the configure step stops with
+`standalone asio ... is 1.38.2, too new for websocketpp 0.8.2 (needs <= 1.13.3)`;
+point CMake at an asio 1.13 tree instead (`ASIO_DIR` is accepted as an alias).
+Verified on the v1.7.36 tag source: websocketpp 0.8.2, asio 1.13.0,
+OpenSSL 3.5.9, libcurl 8.7.1.
 
 ```sh
 curl -sSL https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-13-0.tar.gz | tar xz -C /tmp
-cmake -B build -DASIO_INCLUDE_DIR=/tmp/asio-asio-1-13-0/asio/include \
-      -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) && cmake --build build
+cmake -B build -DASIO_INCLUDE_DIR=/tmp/asio-asio-1-13-0/asio/include && cmake --build build
 ```
 
 ## AI agent quick-start (copy this prompt)
