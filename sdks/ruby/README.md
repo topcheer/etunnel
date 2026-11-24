@@ -34,7 +34,6 @@ sleep
 ```
 - Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call `t.close` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
 - Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
-- Known issue in 1.7.35 (fixed in 1.7.36): `t.resume_token` raised SystemStackError and the gem CLI crashed; 1.7.36 returns an `Etunnel::Tunnel`.
 ````
 
 ## CLI
