@@ -4,7 +4,7 @@
 [![JDK](https://img.shields.io/badge/JDK-11%2B-orange)](https://clojars.org/dev.ggcode/etunnel-clj)
 
 JDK HttpClient/WebSocket + cheshire. Published on Clojars as
-`dev.ggcode/etunnel-clj` (verified: 1.7.35).
+`dev.ggcode/etunnel-clj` (verified: 1.7.36).
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
@@ -14,14 +14,13 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 
 ```clojure
 ;; deps.edn
-{:deps {dev.ggcode/etunnel-clj {:mvn/version "1.7.35"}
-        cheshire/cheshire       {:mvn/version "5.13.0"}}}
+{:deps {dev.ggcode/etunnel-clj {:mvn/version "1.7.36"}}}
 ```
 
-**`cheshire` must be listed explicitly.** The published pom declares no
-dependencies, so a deps.edn with only `etunnel-clj` fails at load time with
-`Could not locate cheshire/core__init.class` (verified against the 1.7.35
-artifact). `1.7.35` is the version this README was verified against.
+`cheshire` comes from the artifact's pom (since 1.7.36), so nothing else is
+needed - verified: a deps.edn with only `etunnel-clj` loads and connects.
+(Versions up to 1.7.35 declared no dependencies and needed
+`cheshire/cheshire {:mvn/version "5.13.0"}` listed explicitly.)
 
 Or copy the single file `etunnel.clj` into your project (namespace `etunnel`)
 and add cheshire yourself.
@@ -33,7 +32,7 @@ Requires JDK 11+.
 ```text
 Integrate etunnel (Clojure SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
 
-- Package: dev.ggcode/etunnel-clj on Clojars (plus cheshire, which the pom does not pull in) · Install: add {:deps {dev.ggcode/etunnel-clj {:mvn/version "1.7.35"} cheshire/cheshire {:mvn/version "5.13.0"}}} to deps.edn (JDK 11+). Standalone CLI from the repo: clojure -M -m etunnel 3000
+- Package: dev.ggcode/etunnel-clj on Clojars (cheshire is pulled in by its pom) · Install: add {:deps {dev.ggcode/etunnel-clj {:mvn/version "1.7.36"}}} to deps.edn (JDK 11+). Standalone CLI from the repo: clojure -M -m etunnel 3000
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (:token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source and run against a live server):
 (require '[etunnel :as et])
@@ -41,7 +40,7 @@ Integrate etunnel (Clojure SDK) into this project to expose the local service on
 (def t (et/connect! "wss://t.etun.uk/tunnel" 3000))
 (println "TUNNEL_URL:" (:url t))
 @(promise) ; keep the tunnel alive; it closes with the JVM
-- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call ((:close! t)) on shutdown to release the subdomain (connect! returns a plain map with :url, :ws, :resume-token and :close!, not an atom). This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards. Keyword arguments: (et/connect! server 3000 :token "..." :subdomain "myapp" :routes [{:prefix "/api" :addr "127.0.0.1:8080" :strip true}]).
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call (et/close! t) on shutdown to release the subdomain (connect! returns a plain map with :url, :ws, :resume-token and :close!, not an atom). This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards. Keyword arguments: (et/connect! server 3000 :token "..." :subdomain "myapp" :routes [{:prefix "/api" :addr "127.0.0.1:8080" :strip true}]).
 - Do not invent other options. Full API/options: https://github.com/topcheer/etunnel/blob/main/sdks/clojure/README.md#api and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
 ```
 
@@ -53,7 +52,7 @@ clojure -M -m etunnel 3000
 
 Run from the `sdks/clojure` directory of a checkout (its `deps.edn` puts `.`
 on the classpath and pulls cheshire). Verified with Clojure CLI 1.12.7 on
-JDK 17.
+JDK 17 (1.7.36 source).
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
 your local service. Ctrl-C closes the tunnel.
@@ -74,13 +73,14 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 (def t (et/connect! "wss://t.etun.uk/tunnel" 3000))
 (println "TUNNEL_URL:" (:url t))
 
-;; later: ((:close! t)) sends `bye` and releases the subdomain
+;; later: (et/close! t) sends `bye` and releases the subdomain
 @(promise) ; keep the tunnel alive
 ```
 
 `connect!` blocks until `welcome`, so `(:url t)` is set when it returns.
-Verified against a live server with `clojure -M -m app` and a deps.edn
-listing `etunnel-clj` + cheshire.
+Verified against the published 1.7.36 artifact with `clojure -M -m app` and a
+deps.edn listing only `etunnel-clj`; `(et/close! t)` closed the session
+(server log: `close ... reason=read closed`).
 
 ## API
 
@@ -89,15 +89,9 @@ listing `etunnel-clj` + cheshire.
 | `(connect! server local & {:keys [token subdomain resume routes]})` | state map `{:url :ws :resume-token :close!}` (blocking until `welcome`; `local` is a port or `"host:port"`, may be `nil` when `:routes` is given) |
 | `(:url t)` | public HTTPS URL from the `welcome` frame |
 | `(:resume-token t)` | server-signed token; pass it back as `:resume` to reclaim the subdomain |
-| `((:close! t))` | sends `bye` + a WebSocket close, releasing the subdomain |
+| `(close! t)` | sends `bye` + a WebSocket close, releasing the subdomain (same as `((:close! t))`; closing twice throws) |
 
 Options: keyword arguments - `(et/connect! server 3000 :subdomain "myapp" :token "et_...")`; `:routes` takes `{:prefix :addr :strip}` rows (see below).
-
-> Known issue in 1.7.35: the SDK prints `DBG stored-ok` to stdout for every
-> proxied request (a leftover debug `println` in the `req` handler). It is
-> harmless but noisy; the header comment of `etunnel.clj` also shows an
-> outdated `(:url @t)` / `(etunnel/close! @t)` form - the map is not an atom
-> and there is no `close!` var, use `((:close! t))`.
 
 ## Environment variables
 

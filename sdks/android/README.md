@@ -1,6 +1,6 @@
 # etunnel for Android
 
-Maven Central: `dev.ggcode:etunnel-android` (AAR, Kotlin + OkHttp3) - verified on Maven Central: 1.7.35 (minSdk 24, pom deps okhttp 4.12.0 + kotlin-stdlib 2.1.0).
+Maven Central: `dev.ggcode:etunnel-android` (AAR, Kotlin + OkHttp3) - verified on Maven Central: 1.7.36 (package `dev.ggcode.etunnel`, minSdk 24, pom deps okhttp 4.12.0 + kotlin-stdlib 2.1.0).
 
 Single-file SDK (`src/main/kotlin/Etunnel.kt`): one outbound OkHttp3
 WebSocket, zero Android-specific dependencies beyond OkHttp. Sibling of the
@@ -19,7 +19,7 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 | Language / runtime | Kotlin (compiled to JVM bytecode, D8-desugared) |
 | Min SDK | 24 (Android 7.0) |
 | Compile SDK | 35 |
-| Artifact | `dev.ggcode:etunnel-android:1.7.35` (AAR; 1.7.35 is the version this README was verified against - see the Maven Central badge) |
+| Artifact | `dev.ggcode:etunnel-android:1.7.36` (AAR; 1.7.36 is the version this README was verified against - see the Maven Central badge) |
 | Transport | OkHttp3 4.12 WebSocket (`etunnel-v1` subprotocol) |
 | Body model | buffered per stream (32 KiB chunks) |
 | WebSocket (101) pass-through | no — use the [Go SDK](../../sdk/README.md) for that |
@@ -30,27 +30,27 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ```kotlin
 // build.gradle.kts of your app module
 dependencies {
-    implementation("dev.ggcode:etunnel-android:1.7.35")
+    implementation("dev.ggcode:etunnel-android:1.7.36")
 }
 ```
 
-Verified: the 1.7.35 AAR exists on Maven Central and its `AndroidManifest.xml`
-(`minSdkVersion="24"`, `INTERNET` permission) and pom dependencies match the
-table above - but see the known issue under *Use* before wiring Kotlin code
-against it.
+Verified: the 1.7.36 AAR on Maven Central contains
+`dev/ggcode/etunnel/Etunnel.class` (public class, `import dev.ggcode.etunnel.Etunnel`
+works from a Kotlin app module), its `AndroidManifest.xml` has
+`minSdkVersion="24"` + the `INTERNET` permission, and the pom pulls OkHttp
+4.12.0 + kotlin-stdlib 2.1.0 - matching the table above.
 
 Or copy the single file `src/main/kotlin/Etunnel.kt` into your project -
-it has no Android framework imports, only Kotlin + OkHttp. **This is the
-recommended path for Kotlin apps until the known issue below is fixed.**
+it has no Android framework imports, only Kotlin + OkHttp.
 
 ## AI agent quick-start (copy this prompt)
 
 ```text
 Integrate etunnel (Android SDK, Kotlin + OkHttp3) into this project to expose the local service on port 8080 at a public HTTPS URL.
 
-- Package: dev.ggcode:etunnel-android on Maven Central (AAR, verified 1.7.35, minSdk 24, pulls OkHttp 4.12.0) · Install: implementation("dev.ggcode:etunnel-android:1.7.35") in the app module's build.gradle.kts. Known issue in 1.7.35: the AAR's Etunnel class is `internal` and in the default package, so a Kotlin app module cannot compile Etunnel.connect(...) - for Kotlin, copy sdks/android/src/main/kotlin/Etunnel.kt into the module and add a `package <yourapp>.etunnel` line at the top (verified); Java callers can use the AAR directly: Etunnel.Companion.connect(server, 8080, null, null, null, null).
+- Package: dev.ggcode:etunnel-android on Maven Central (AAR, verified 1.7.36, package dev.ggcode.etunnel, minSdk 24, pulls OkHttp 4.12.0) · Install: implementation("dev.ggcode:etunnel-android:1.7.36") in the app module's build.gradle.kts. Kotlin: import dev.ggcode.etunnel.Etunnel / Route. Java callers: Etunnel.Companion.connect(server, 8080, null, null, null, null) then getUrl() / close().
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (token = "..." or ETUNNEL_TOKEN).
-- Minimal embed (verified against the SDK source, run on a JVM against a live server; not yet run on a device):
+- Minimal embed (compiled with kotlinc against the published 1.7.36 AAR's classes.jar and run on a JVM against a live server; not yet run on a device):
 val tunnel = Etunnel.connect(
     server = "wss://t.etun.uk/tunnel",  // or your own etunneld
     localPort = 8080,
@@ -69,26 +69,6 @@ inside an app process - there is no standalone binary to spawn. Use the
 [Embed](#embed) section.
 
 ## Embed
-
-> **Known issue in 1.7.35 (SDK bug, verified against the published AAR):**
-> `Etunnel.kt` declares `internal class Etunnel` and has no `package` line, so
-> the AAR's classes sit in the **default package** and are module-private.
-> A Kotlin app module **cannot compile** `Etunnel.connect(...)` - kotlinc
-> reports `cannot access 'class Etunnel': it is internal in file`, and
-> `import dev.ggcode.etunnel.Etunnel` does not resolve. Until the next
-> release fixes this (drop `internal`, add `package dev.ggcode.etunnel`):
->
-> - **Kotlin apps**: copy `src/main/kotlin/Etunnel.kt` into your module and add
->   a `package <yourapp>.etunnel` line at the top (same-module `internal` is
->   visible). Verified: compiles, connects, and routes work.
-> - **Java callers**: the bytecode is public - `Etunnel t =
->   Etunnel.Companion.connect(server, 8080, null, null, null, null);` then
->   `t.getUrl()` / `t.close()`. Verified against a live server from the AAR's
->   `classes.jar` (JVM).
->
-> The snippet below is the intended (post-fix) Kotlin API; with the copy
-> workaround, add `import <yourapp>.etunnel.Etunnel` /
-> `import <yourapp>.etunnel.Route`.
 
 ```kotlin
 // Expose your app's localhost:8080 (e.g. an embedded web server) publicly.
@@ -111,6 +91,19 @@ val routed = Etunnel.connect(
 
 tunnel.close()   // sends `bye` and releases the socket
 ```
+
+Needs `import dev.ggcode.etunnel.Etunnel` and `import dev.ggcode.etunnel.Route`
+(the 1.7.36 AAR ships the classes under `dev.ggcode.etunnel` as `public final
+class Etunnel`; versions up to 1.7.35 declared the class `internal` in the
+default package, which made `Etunnel.connect(...)` uncompilable from Kotlin
+app modules). Java callers use the companion:
+`Etunnel t = Etunnel.Companion.connect(server, 8080, null, null, null, null);`
+then `t.getUrl()` / `t.close()` - verified against a live server from the
+published AAR's `classes.jar` on a JVM.
+
+Verified against the published 1.7.36 AAR: the snippet compiles with
+`kotlinc -cp classes.jar:okhttp-4.12.0.jar:okio-jvm-3.6.0.jar:kotlin-stdlib-2.1.0.jar`
+and both tunnels connected (plain + routed); `close()` released them.
 
 Keep the returned `tunnel.url` around: on reconnect the SDK replays the
 server-signed `resumeToken`, so the same subdomain is reclaimed instead of
@@ -256,12 +249,13 @@ cd sdks/android
 The tests run on the JVM (no emulator): ETUNNEL_* env mapping, JSON control
 messages, route tables and the 9-byte binary frame layout.
 
-Verified on 2026-11-24 with JDK 17 + Android SDK (build-tools 35.0.0,
-compileSdk 35): `./gradlew build` exits 0, builds
-`build/outputs/aar/etunnel-android-{debug,release}.aar` and runs **32** unit
-tests, 0 failures. The SDK source was additionally compiled with kotlinc and
-run as a plain JVM program against a live etunneld (connect + routes served
-traffic). **Not verified:** running on an Android device/emulator (Doze,
+Verified on 2026-11-25 against the v1.7.36 source and the published AAR:
+`./gradlew build` (JDK 17 +
+Android SDK, build-tools 35.0.0, compileSdk 35) exits 0, builds
+`build/outputs/aar/etunnel-android-{debug,release}.aar` and runs **33** unit
+tests, 0 failures; the Maven Central AAR's `classes.jar` compiled the Embed
+snippet with kotlinc and served traffic against a live etunneld on a plain
+JVM. **Not verified:** running on an Android device/emulator (Doze,
 foreground-service and cleartext-guidance sections are from the source and
 Android platform docs, not from a device run).
 

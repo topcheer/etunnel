@@ -4,7 +4,7 @@
 [![.NET](https://img.shields.io/badge/.NET-10%2B-512bd4)](https://www.nuget.org/packages/etunnel)
 
 System.Net.WebSockets + HttpClient, zero NuGet dependencies. Published on
-nuget.org as `etunnel` (verified: 1.7.35).
+nuget.org as `etunnel` (verified: 1.7.36).
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
@@ -18,8 +18,8 @@ NuGet package (.NET 10+; verified with `dotnet` 11.0.100):
 dotnet add package etunnel
 ```
 
-The 1.7.35 package ships `lib/net10.0` **only** - a `net8.0`/`net9.0`
-project fails to restore with `NU1202: Package etunnel 1.7.35 is not
+The 1.7.36 package ships `lib/net10.0` **only** - a `net8.0`/`net9.0`
+project fails to restore with `NU1202: Package etunnel 1.7.36 is not
 compatible with net8.0` (verified). For older targets, vendor the single
 file instead:
 
@@ -35,7 +35,7 @@ SDK-style project (it still needs a .NET runtime with `System.Net.WebSockets`).
 ```text
 Integrate etunnel (C# SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
 
-- Package: etunnel on NuGet (net10.0 only) · Install: dotnet add package etunnel (resolved 1.7.35; for net8.0/net9.0 vendor sdks/csharp/Etunnel.cs instead). Standalone CLI: dotnet run --file Etunnel.cs 3000 (.NET 10 SDK)
+- Package: etunnel on NuGet (net10.0 only) · Install: dotnet add package etunnel (resolved 1.7.36; for net8.0/net9.0 vendor sdks/csharp/Etunnel.cs instead). Standalone CLI: dotnet run --file Etunnel.cs 3000 (.NET 10 SDK)
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (token: "..." or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source and run against a live server):
 var server = Environment.GetEnvironmentVariable("ETUNNEL_SERVER") ?? "wss://t.etun.uk/tunnel";
@@ -85,7 +85,7 @@ await Task.Delay(Timeout.Infinite);   // keep the tunnel open
 ```
 
 Top-level statements in a console project that references the NuGet package
-(verified: `dotnet new console` + `dotnet add package etunnel` → 1.7.35,
+(verified: `dotnet new console` + `dotnet add package etunnel --version 1.7.36` → 1.7.36,
 `dotnet run` printed the URL and the tunnel served the local service). No
 `using Etunnel;` - the class is in the global namespace. The vendored route
 was verified too: `Etunnel.cs` + the snippet above in a `net8.0` console

@@ -17,7 +17,7 @@ Maven (`pom.xml`):
 <dependency>
   <groupId>dev.ggcode</groupId>
   <artifactId>etunnel</artifactId>
-  <version>1.7.35</version>
+  <version>1.7.36</version>
 </dependency>
 ```
 
@@ -25,12 +25,12 @@ Gradle (`build.gradle`):
 
 ```groovy
 dependencies {
-    implementation "dev.ggcode:etunnel:1.7.35"
+    implementation "dev.ggcode:etunnel:1.7.36"
 }
 ```
 
 Both coordinates were resolved from Maven Central and run against a live
-etunneld (Maven 3.10.1 and Gradle 9.9.2, JDK 17). `1.7.35` is the release
+etunneld (Maven 3.10.1 and Gradle 9.9.2, JDK 17). `1.7.36` is the release
 this README was verified against - check the badge above for newer versions.
 
 Single-file alternative: copy `src/main/java/dev/ggcode/Etunnel.java` into any
@@ -43,9 +43,9 @@ Requires JDK 11+ (`java.net.http.WebSocket`); verified on JDK 17.
 ```text
 Integrate etunnel (Java SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
 
-- Package: dev.ggcode:etunnel on Maven Central · Install: Maven <dependency><groupId>dev.ggcode</groupId><artifactId>etunnel</artifactId><version>1.7.35</version></dependency> or Gradle implementation "dev.ggcode:etunnel:1.7.35" (JDK 11+, zero transitive dependencies).
+- Package: dev.ggcode:etunnel on Maven Central · Install: Maven <dependency><groupId>dev.ggcode</groupId><artifactId>etunnel</artifactId><version>1.7.36</version></dependency> or Gradle implementation "dev.ggcode:etunnel:1.7.36" (JDK 11+, zero transitive dependencies).
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (Options.token or ETUNNEL_TOKEN).
-- Minimal embed (verified against the SDK source and run against a live server):
+- Minimal embed (verified against the published 1.7.36 artifact and run against a live server):
 import dev.ggcode.Etunnel;
 
 public class Main {
