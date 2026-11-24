@@ -9,9 +9,9 @@
 #   ETUNNEL_SERVER=wss://t.example.com/tunnel sh sdks/cpp/example/basic.sh
 #
 # CMAKE_ARGS (optional) is appended to the configure step - e.g. on macOS with
-# Homebrew's asio > 1.13 / OpenSSL 4, which websocketpp 0.8.x cannot use:
-#   CMAKE_ARGS="-DASIO_INCLUDE_DIR=/path/to/asio-1.13/asio/include \
-#              -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" sh sdks/cpp/example/basic.sh
+# Homebrew's asio > 1.13, which websocketpp 0.8.x cannot use (the openssl@3 keg
+# is picked automatically since 1.7.36):
+#   CMAKE_ARGS="-DASIO_INCLUDE_DIR=/path/to/asio-1.13/asio/include" sh sdks/cpp/example/basic.sh
 set -e
 cd "$(dirname "$0")/.."
 # shellcheck disable=SC2086  # CMAKE_ARGS is meant to word-split

@@ -68,7 +68,7 @@ Each SDK keeps a minimal example next to its source:
 | Lua | [basic.lua](../sdks/lua/example/basic.lua) | `lua sdks/lua/example/basic.lua` |
 | Clojure | [basic.clj](../sdks/clojure/example/basic.clj) | `clojure -M sdks/clojure/example/basic.clj` |
 | Elixir | [basic.exs](../sdks/elixir/example/basic.exs) | `mix run sdks/elixir/example/basic.exs` |
-| C | [basic.sh](../sdks/c/example/basic.sh) | `sh sdks/c/example/basic.sh` (builds with `make`, needs libwebsockets/libcurl/json-c; build from source - the released 1.7.35 binary is rejected by servers >= v1.7.29, see the [C README](../sdks/c/README.md)) |
+| C | [basic.sh](../sdks/c/example/basic.sh) | `sh sdks/c/example/basic.sh` (builds with `make`, needs libwebsockets/libcurl/json-c; see the [C README](../sdks/c/README.md)) |
 | C++ | [basic.sh](../sdks/cpp/example/basic.sh) | `sh sdks/cpp/example/basic.sh` (CMake build, wss-only; pass `CMAKE_ARGS` on macOS, see the [C++ README](../sdks/cpp/README.md#install)) |
 
 By the cross-SDK contract (AGENTS.md) every SDK example honours

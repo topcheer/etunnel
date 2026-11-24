@@ -204,7 +204,9 @@ Huawei licenses against developer accounts - there is nothing to wire a
   static (see below).
 - DevEco Studio users: open this directory as a HAR module and run
   `hvigorw assembleHar` to build the HAR locally. The file is named after the
-  version in `oh-package.json5` (which lags the repository `VERSION`).
+  version in `oh-package.json5`, which `bump-release.py` stamps from `VERSION`
+  (`etunnel-1.7.36.har` at the time of writing; fixed in 1.7.36 - earlier
+  releases left it at 1.4.0).
 
 ## Verify
 
