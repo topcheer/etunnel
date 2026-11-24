@@ -50,13 +50,15 @@ Integrate etunnel (HarmonyOS ArkTS SDK) into this project to expose the local se
 | WebSocket (101) pass-through | no - use the [Go SDK](../../sdk/README.md) |
 | System API requirements | `@ohos.net.websocket` (API 7+), `@ohos.net.http`; a raw `Sec-WebSocket-Protocol` header is sent as well so older stacks still negotiate `etunnel-v1` |
 
-## DevEco integration
+## Install
 
 **Install from source (the only working route until ohpm publishing lands):**
 
 ```sh
 cp sdks/harmonyos/Etunnel.ets <your-module>/src/main/ets/Etunnel.ets
 ```
+
+## Embed
 
 Then import it by relative path and open a tunnel:
 
@@ -137,7 +139,9 @@ not a promise - keep the handle so you can stop the loop.
 `ETUNNEL_RECONNECT=0`); the snippet above acts on it, `connect()` itself does
 not.
 
-There is no CLI binary and no `login()` loopback OAuth on this platform
+## CLI
+
+None. There is no CLI binary and no `login()` loopback OAuth on this platform
 (no local HTTP server / `open` in an app sandbox) - obtain the API key from
 the portal at `/me` in a browser and pass it as `ETUNNEL_TOKEN` / `opts.token`.
 

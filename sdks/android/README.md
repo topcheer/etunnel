@@ -59,10 +59,16 @@ val tunnel = Etunnel.connect(
 )
 Log.i("etunnel", "TUNNEL_URL: ${tunnel.url}")
 - Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive (run the tunnel from a foreground service; Doze freezes background sockets); call tunnel.close() on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards. localPort must be a real port (1-65535) even when routes is set. Routes: Route("/api", "127.0.0.1:8080", strip = true) via the named `routes` argument.
-- Do not invent other options. Full API/options: https://github.com/topcheer/etunnel/blob/main/sdks/android/README.md#use and #platform-matrix. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+- Do not invent other options. Full API/options: https://github.com/topcheer/etunnel/blob/main/sdks/android/README.md#embed and #platform-matrix. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
 ```
 
-## Use
+## CLI
+
+None. The Android SDK is a library (AAR or the single `Etunnel.kt`) that runs
+inside an app process - there is no standalone binary to spawn. Use the
+[Embed](#embed) section.
+
+## Embed
 
 > **Known issue in 1.7.35 (SDK bug, verified against the published AAR):**
 > `Etunnel.kt` declares `internal class Etunnel` and has no `package` line, so
