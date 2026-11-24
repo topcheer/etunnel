@@ -102,7 +102,9 @@ go run ./cmd/etunnel 3000          # needs ETUNNEL_SERVER or -server
 
 `-server` (or `ETUNNEL_SERVER`) is required; a bare port means `127.0.0.1:<port>`.
 The CLI prints the public URL and keeps the tunnel open until `Ctrl-C`
-(real output; here against a local `-domain localhost` server):
+(real output; here against a local `-domain localhost` server, with
+`ETUNNEL_RECONNECT=0` - the default reconnecting mode prints the URL line
+only):
 
 ```text
   http://flying-beacon-qgwkwp.localhost  ->  http://127.0.0.1:3000
