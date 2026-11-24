@@ -11,10 +11,37 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-cpanm etunnel
+# single file, core modules only (JSON::PP ships with Perl 5.14+, IO::Socket::SSL with 5.20+)
+curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/perl/etunnel.pl
+
+# or from a source checkout (installs bin/etunnel.pl + lib/etunnel.pl):
+git clone https://github.com/topcheer/etunnel && cd etunnel/sdks/perl && perl Makefile.PL && make && sudo make install
 ```
 
-Requires Perl 5.16+.
+Requires Perl 5.20+. **Not on CPAN**: `cpanm etunnel` fails (no such
+distribution - the PAUSE upload is pending); install from source as above.
+`make dist` builds `etunnel-<version>.tar.gz` for the future CPAN release.
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Perl SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: none on CPAN (`cpanm etunnel` fails - PAUSE pending) · Install: `curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/perl/etunnel.pl` (core modules only, Perl >= 5.20)
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```perl
+use strict;
+use warnings;
+$| = 1;
+require './etunnel.pl';
+my $t = etunnel_connect('wss://t.etun.uk/tunnel', '127.0.0.1:3000', {});
+print "TUNNEL_URL: $t->{url}\n";
+sleep 3600;
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call `$t->{close}->()` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+````
 
 ## CLI
 
@@ -35,7 +62,25 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```perl
+use strict;
+use warnings;
+$| = 1;                    # unbuffered stdout: the URL shows up in pipes and logs too
+require './etunnel.pl';    # defines etunnel_connect(); the CLI block is skipped on require
+
+my $t = etunnel_connect('wss://t.etun.uk/tunnel', '127.0.0.1:3000', {});
+print "TUNNEL_URL: $t->{url}\n";
+
+sleep 3600;                # the tunnel closes when the process exits
+# on shutdown: $t->{close}->()   (sends `bye`, frees the subdomain)
+```
+
+`etunnel_connect($server, "host:port", \%opts)` blocks until `welcome` and
+returns a hashref: `url`, `resumeToken` (replay it via `resume =>` to reclaim
+the same subdomain), `close` (coderef, sends `bye`). A bare port is accepted as
+`127.0.0.1:port`; `local` may be `undef` when `routes` is given. A `threads`
+reader thread serves requests from then on - no pump call is needed, the
+process just has to stay alive.
 
 ## Environment variables
 

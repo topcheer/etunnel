@@ -14,13 +14,39 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 composer require ggcode/etunnel
 ```
 
-Requires PHP >= 8.0 with ext-openssl.
+Requires PHP >= 8.0 with ext-openssl. The Packagist package
+`ggcode/etunnel` is the whole repository as a library: its autoloader pulls in
+`sdks/php/etunnel.php` (installed at `vendor/ggcode/etunnel/sdks/php/`).
+Single file, no Composer: `curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/php/etunnel.php`.
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (PHP SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: `ggcode/etunnel` on Packagist · Install: `composer require ggcode/etunnel` (PHP >= 8.0, ext-openssl)
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+Etunnel::connect('wss://t.etun.uk/tunnel', 3000, null, null, function (string $url): void {
+    echo "TUNNEL_URL: {$url}\n";
+});
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` inside the onUrl callback (connect() blocks and never returns while the tunnel is up) and keep the process alive; there is no run() method. This SDK is buffer-based (no WebSocket upgrades, no streaming, sequential requests) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+````
 
 ## CLI
 
 ```
-php etunnel.php 3000
+php etunnel.php 3000                                    # single file
+php vendor/ggcode/etunnel/sdks/php/etunnel.php 3000     # after composer require
 ```
+
+Composer's `vendor/bin/etunnel.php` proxy currently exits silently (the CLI
+guard compares `realpath($argv[0])` with `__FILE__`); call the file directly.
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
 your local service. Ctrl-C closes the tunnel.
@@ -35,7 +61,24 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+// connect() blocks and serves requests itself; the callback fires once on `welcome`.
+Etunnel::connect('wss://t.etun.uk/tunnel', 3000, null, null, function (string $url): void {
+    echo "TUNNEL_URL: {$url}\n";
+});
+```
+
+`Etunnel::connect(string $server, $local, ?string $token = null, ?string $subdomain = null,
+?callable $onUrl = null, ?string $resume = null, ?array $routes = null)` is
+**blocking**: it sends `hello`, waits for `welcome`, calls `$onUrl($url)`, then
+serves requests until the server closes the tunnel - only then does it return
+the `Etunnel` object (`$tunnel->url`, `$tunnel->close()`). There is no `run()`
+method and no thread: requests are served sequentially. `Etunnel::$lastResumeToken`
+holds the server-signed token of the last `welcome`; replay it via `$resume` to
+reclaim the same subdomain.
 
 ## Environment variables
 
@@ -66,10 +109,12 @@ and `/api` to a backend - without CORS or a second tunnel. Routing is
 client-side; the protocol is unchanged (PROTOCOL.md 2).
 
 ```php
-$t = Etunnel::connect("wss://t.example.com/tunnel", null, routes: [
+// pass a placeholder local target: with routes the route table wins, and
+// `null` currently fatals on the first request (TypeError in serve(), 1.7.35)
+Etunnel::connect("wss://t.example.com/tunnel", "127.0.0.1:3000", routes: [
     ["prefix" => "/api", "addr" => "127.0.0.1:8080", "strip" => true],
     ["prefix" => "/",    "addr" => "127.0.0.1:3000"],
-]);
+], onUrl: fn(string $url) => print("TUNNEL_URL: $url\n"));
 ```
 
 Semantics (identical in every SDK, pinned by tests): longest prefix

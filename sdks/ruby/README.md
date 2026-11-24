@@ -16,6 +16,27 @@ gem install etunnel
 
 Requires Ruby >= 2.7 (pulls in faye-websocket).
 
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Ruby SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: `etunnel` on RubyGems (needs Ruby >= 2.7) · Install: `gem install etunnel` (pulls faye-websocket + eventmachine)
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```ruby
+require 'etunnel'
+$stdout.sync = true
+t = Etunnel.connect('wss://t.etun.uk/tunnel', 3000)
+puts "TUNNEL_URL: #{t.url}"
+trap('INT') { t.close; exit }
+sleep
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call `t.close` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+- Known issue in 1.7.35: `t.resume_token` and the `etunnel` CLI crash (SystemStackError); do not rely on them.
+````
+
 ## CLI
 
 ```
@@ -33,13 +54,30 @@ jitter, reset on success) and prints `TUNNEL_URL:` again. The subdomain is
 server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 `ETUNNEL_RECONNECT=0` to restore the old one-shot behaviour.
 
+> **Status 1.7.35:** the gem's `etunnel` executable crashes right after
+> `welcome` (`SystemStackError` in `Etunnel.connect` -> `resume_token`,
+> `lib/etunnel.rb:166`). Use the embed below until a fixed gem is published.
+
 ## Embed
 
 ```ruby
 require 'etunnel'
+
+$stdout.sync = true   # show the URL immediately even when stdout is a pipe or log
 t = Etunnel.connect('wss://t.etun.uk/tunnel', 3000)
-puts t.url
+puts "TUNNEL_URL: #{t.url}"
+
+trap('INT') { t.close; exit }   # sends `bye`, frees the subdomain
+sleep                          # keep the process alive
 ```
+
+`Etunnel.connect(server, local, token: nil, subdomain: nil, resume: nil, routes: nil)`
+blocks until `welcome` and returns a tunnel object: `t.url` (public URL),
+`t.resume_token` (server-signed token; replay it via `resume:` to reclaim the
+same subdomain - raises in 1.7.35, see above), `t.close` (sends `bye`).
+`local` is a port, `"host:port"`, or `nil` when `routes` is given. Each
+request is served on a worker thread; EventMachine runs in a background
+thread if no reactor is running (Rails: call `connect` from an initializer).
 
 ## Environment variables
 
