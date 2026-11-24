@@ -29,6 +29,8 @@ MANIFESTS = {
     "sdks/deno/etunnel.ts":         ("regex",  r"(?m)etunnel-deno/[0-9]+\.[0-9]+\.[0-9]+"),
     "sdks/rust/Cargo.lock":         ("regex",  r'(?m)name = "etunnel"\nversion = "[^"]*"'),
     "sdks/python/pyproject.toml":   ("regex", r'(?m)^version = "[^"]*"'),
+    # #419: hello.client version literal must track the package version.
+    "sdks/python/etunnel.py":       ("regex", r'(?m)^__version__ = "[^"]*"'),
     "sdks/dart/pubspec.yaml":       ("regex", r'(?m)^version: .*$'),
     "sdks/ruby/etunnel.gemspec":    ("regex", r"(?m)s\.version = '[^']*'"),
     "sdks/csharp/Etunnel.csproj":   ("regex", r"<Version>[^<]*</Version>"),

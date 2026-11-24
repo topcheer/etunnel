@@ -71,6 +71,32 @@ module Etunnel
     nil
   end
 
+  # Handle returned by Etunnel.connect (#417-E27): url / resume_token
+  # readers plus close (sends bye, then closes the socket).
+  class Tunnel
+    attr_reader :url, :resume_token
+
+    def initialize(url, resume_token, socket)
+      @url = url
+      @resume_token = resume_token
+      @socket = socket
+    end
+
+    def close
+      begin
+        @socket.send(JSON.generate({ type: 'bye', reason: 'client closed' }))
+      rescue StandardError
+        nil # socket already gone - still close below
+      end
+      begin
+        @socket.close
+      rescue StandardError
+        nil
+      end
+      nil
+    end
+  end
+
   def self.connect(server, local, token: nil, subdomain: nil, resume: nil, routes: nil)
     routes = normalize_routes(routes) if routes
     raise ArgumentError, 'etunnel: routes must not be empty' if routes && routes.empty?
@@ -99,6 +125,7 @@ module Etunnel
     ws.send(JSON.generate(hello))
 
     url = nil
+    resume_token = '' # #417-E27: was only set inside the resumeToken branch - uninitialized otherwise
     loop do
       kind, payload = queue.pop
       raise 'etunnel: connection closed' if kind == :close
@@ -161,14 +188,15 @@ module Etunnel
       end
     end
 
-    tunnel = Object.new
-    tunnel.define_singleton_method(:url) { url }
-    tunnel.define_singleton_method(:resume_token) { resume_token }
-    tunnel.define_singleton_method(:close) do
-      ws.send(JSON.generate({ type: 'bye', reason: 'client closed' }))
-      ws.close
-    end
-    tunnel
+    # #417-E27 (P0, Ruby 4.0): the tunnel used to be an Object.new with three
+    # define_singleton_method blocks closing over locals. On Ruby 4.0 a
+    # block handed to define_singleton_method runs with the receiver as
+    # self and bare locals inside it (url, ws) resolve as method calls on
+    # that receiver - so `url` re-entered the getter we were defining:
+    # `stack level too deep` at the first tunnel.url read, same hazard for
+    # close's `ws`. Replaced with a plain class whose constructor captures
+    # the values: deterministic closure semantics on every Ruby version.
+    Tunnel.new(url, resume_token, ws)
   end
 
   # Themed 502 page shown when the local app is down (same HTML as the other SDKs).
