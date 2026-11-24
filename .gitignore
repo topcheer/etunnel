@@ -93,3 +93,6 @@ sdks/elixir/erl_crash.dump
 # SwiftPM local state
 /sdks/swift/.swiftpm/
 **/.swiftpm/
+
+# bundler vendor (gem build must not need it; gemspec lists lib/ bin/ explicitly)
+sdks/ruby/vendor/
