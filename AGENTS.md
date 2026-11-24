@@ -78,8 +78,9 @@ Commands as actually used by Makefile and CI
   `sdks/README.md` and `PACKAGING.md` for which registry actually carries
   which one (TypeScript, Kotlin, Scala, Perl, C, C++ and HarmonyOS are
   source-only today).
-- `scripts/` — release/versioning tooling (`bump-release.py`) and the SDK
-  README generator (`gen_sdk_readmes.py`, run via `make docs`).
+- `scripts/` — release/versioning tooling (`bump-release.py`). SDK READMEs
+  are hand-written (both README generators are retired; `make verify` gates
+  their section structure).
 - Root `integration_test.go`, `upgrade_passthrough_test.go` — black-box
   end-to-end tests (package `etunnel_test`) spinning up a real server +
   tunnel via `httptest`.
@@ -146,7 +147,8 @@ Commands as actually used by Makefile and CI
   publishes. See `PACKAGING.md` for registry specifics.
 - **Docs**: `README.md` (product), `PROTOCOL.md` (wire spec), `PACKAGING.md`
   (registries), `sdks/README.md` (per-SDK usage), `llms.txt` (agent-facing
-  index). Keep them in sync with behavior changes; the 19 generated SDK
-  READMEs come from `scripts/gen_sdk_readmes.py` (`make docs`) - edit the
-  generator entry, never the generated file (Android and HarmonyOS READMEs
-  are hand-written).
+  index). Keep them in sync with behavior changes; the SDK READMEs are
+  hand-written - never regenerate them from a template (the generators were
+  retired because regeneration dropped sections). `make verify` requires
+  `## Install`, `## CLI`, `## Embed` and `## AI agent quick-start` in every
+  `sdks/*/README.md` and `sdk/README.md`.

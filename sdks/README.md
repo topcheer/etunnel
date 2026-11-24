@@ -200,9 +200,12 @@ Full detail - every frame, header rule and error code - is in
    `req` -> local HTTP request, DATA/FIN/RST frames, `ping`/`pong`, `bye`.
 3. Make the file runnable (`<lang> etunnel.<ext> 3000`) and print
    `TUNNEL_URL: ...`.
-4. Add an entry to this table and to `scripts/gen_sdk_readmes.py`, then
-   run `python3 scripts/gen_sdk_readmes.py` to generate that package's README
-   (the Android and HarmonyOS READMEs are hand-written).
+4. Hand-write the README - the generators are retired, a template would drop
+   sections. Mirror a sibling SDK's section order: `## Install`, `## CLI`,
+   `## Embed`, `## API`, `## Options`, environment variables, reconnect, then
+   `## AI agent quick-start (copy this prompt)` - and add a row to the table
+   above. `make verify` fails when `## Install`, `## CLI`, `## Embed` or
+   `## AI agent quick-start` is missing from any SDK README.
 5. Verify against a real server (or a local `etunneld -tls-mode http`) before
    publishing.
 

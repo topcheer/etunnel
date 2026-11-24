@@ -21,9 +21,9 @@ Status of the 22 SDKs (checked against the registries on 2026-11-24 with
 | 4 | Deno | `@ggcode/etunnel` | JSR | CI `publish-jsr` | published |
 | 5 | Python | `etunnel` | PyPI | CI `publish-pypi` | published |
 | 6 | Java | `dev.ggcode:etunnel` | Maven Central | CI `publish-central` | published |
-| 7 | Kotlin | - | - | - | **not published**: source file `Etunnel.kt`; `build.gradle.kts` is a scratch build (version 1.4.0, no publishing plugin) |
-| 8 | Scala | - | - | - | **not published**: source file `Etunnel.scala`; `build.sbt` still says `com.ggcode` 1.4.0 |
-| 9 | C# | `etunnel` | nuget.org | CI `publish-nuget` | published |
+| 7 | Kotlin | - | - | - | **not published anywhere**: Maven Central carries only the Java artifact (`etunnel_2.13` / `etunnel_3` answer 404); source file `Etunnel.kt`, `build.gradle.kts` is a scratch build (version 1.4.0, no publishing plugin) |
+| 8 | Scala | - | - | - | **not published anywhere**: same Central check as Kotlin; source file `Etunnel.scala`, `build.sbt` still says `com.ggcode` 1.4.0 |
+| 9 | C# | `etunnel` | nuget.org | CI `publish-nuget` | published (package targets `net10.0` only) |
 | 10 | Rust | `etunnel` | crates.io | CI `publish-crates` | published (binary only - the crate has no library target) |
 | 11 | Swift | `etunnel` | SwiftPM (git tag) | git tag only | published (`Package.swift` at the repo root, sources in `sdks/swift`) |
 | 12 | Dart | `etunnel` | pub.dev | CI `publish-dart` | published (1.7.35 ships `etunnel.dart` at the package root, not `lib/` - not importable as a package yet) |
@@ -51,7 +51,7 @@ probes the registry first and only pushes on an explicit "not found" answer
 | `publish-npm` | `@easytunnel/et-sdk` (`cd sdks/node && npm publish --access public`) | OIDC trusted publishing, no token; environment `npm` | npm org `easytunnel` | Packages -> Connect npm package -> trusted publisher `topcheer/etunnel` / `sdk-packages.yml` / env `npm` |
 | `publish-pypi` | `etunnel` (`python -m build` + `pypa/gh-action-pypi-publish`) | OIDC trusted publishing; environment `pypi` | PyPI account | pending publisher: owner `topcheer`, repo `etunnel`, workflow `sdk-packages.yml`, env `pypi` |
 | `publish-rubygems` | `etunnel` gem (`rubygems/release-gem`) | OIDC trusted publishing; environment `rubygems` | RubyGems account (MFA) | trusted publisher on the gem page |
-| `publish-nuget` | `etunnel` (`dotnet pack` + `dotnet nuget push`) | OIDC -> temporary API key; environment `nuget` | nuget.org account | trusted publishing, Active, glob `*` |
+| `publish-nuget` | `etunnel` (`dotnet pack` + `dotnet nuget push`; the package targets `net10.0` only) | OIDC -> temporary API key; environment `nuget` | nuget.org account | trusted publishing, Active, glob `*` |
 | `publish-hex` | `etunnel` (`mix hex.publish`) | Hex workload identity (OIDC); environment `hex` | Hex account | workload identity for `topcheer/etunnel` / env `hex` (the very first release had to be pushed by hand) |
 | `publish-dart` | `etunnel` (`dart pub publish --force`) | pub.dev automated publishing (OIDC); environment `pub` | Google account | automated publishing: `topcheer/etunnel` + `sdk-packages.yml` |
 | `publish-jsr` | `@ggcode/etunnel` (`deno publish --allow-dirty --no-check`) | OIDC (`id-token: write`), scope `@ggcode` linked to GitHub | GitHub login for JSR | scope `ggcode` created on jsr.io |
@@ -80,6 +80,10 @@ gh release create "v$V" --title "v$V" --generate-notes   # optional notes page (
 `<version>` below always means `cat VERSION` (single source of truth).
 
 ### Known gaps in the stamping chain
+
+Both README generators (`scripts/gen_sdk_readmes.py`, `scripts/gen-readmes.py`)
+are retired: SDK READMEs are hand-written and `make verify` checks their
+section structure.
 
 `bump-release.py` stamps the manifests that are published. Not stamped, and
 therefore drifting: `sdks/kotlin/build.gradle.kts` and `sdks/scala/build.sbt`
