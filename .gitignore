@@ -56,12 +56,10 @@ sdks/ruby/Gemfile.lock
 sdks/elixir/deps/
 sdks/elixir/_build/
 sdks/elixir/.mix/
-
-# .NET
-sdks/csharp/bin/
-sdks/csharp/obj/
+# .NET (any depth: SDK + test projects)
+sdks/csharp/**/bin/
+sdks/csharp/**/obj/
 *.nupkg
-
 # Clojure
 sdks/clojure/.cpcache/
 sdks/clojure/.nrepl-port
@@ -88,6 +86,10 @@ sdks/lua/*.rock
 /sdks/scala/.scala-build/
 etunnel-pentest-report.md
 pentest_probe/
-
-# Erlang VM crash artifacts from elixir gate runs
+# Erlang VM crash artifacts (repo root from tool wrappers, sdk dir from mix)
+/erl_crash.dump
 sdks/elixir/erl_crash.dump
+
+# SwiftPM local state
+/sdks/swift/.swiftpm/
+**/.swiftpm/
