@@ -298,7 +298,21 @@ class Etunnel {
         authority = hit.addr;
         path = hit.path;
       }
-      final rq = await http.openUrl(method, Uri.http(authority, path));
+      // #417 E26: `path` is the raw request target (may carry "?query" and
+      // already-percent-encoded bytes). Uri.http(path:) would encode the "?"
+      // (local service saw /x%3Fy=1) and double-encode "%20" (saw /a%2520b).
+      // Parse the whole target instead: existing escapes pass through, only raw
+      // bytes that are invalid in a URI get encoded, and "?"/"="/"&" survive.
+      Uri target;
+      try {
+        target = Uri.parse('http://$authority$path');
+      } on FormatException {
+        final qi = path.indexOf('?');
+        target = qi >= 0
+            ? Uri.http(authority, path.substring(0, qi)).replace(query: path.substring(qi + 1))
+            : Uri.http(authority, path);
+      }
+      final rq = await http.openUrl(method, target);
       (req['headers'] as Map<String, dynamic>? ?? {}).forEach((k, vs) {
         if (HOP.contains(k.toLowerCase())) return;
         for (final v in vs) rq.headers.add(k, v.toString());

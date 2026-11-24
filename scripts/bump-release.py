@@ -113,6 +113,13 @@ def bump(v):
             cur = rocks[0]
             body = cur.read_text()
             body = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}-1"', body, count=1)
+            # #417 E28: the rockspec pins source.tag (git+https source). Rename-only
+            # stamping shipped v1.7.35 with tag = "v1.4.0" -> `luarocks install`
+            # fetched a tree without etunnel.lua at the expected path. Stamp it.
+            stamped = re.sub(r'(?m)^(\s*)tag = "v[^"]*"', rf'\1tag = "v{v}"', body, count=1)
+            if stamped == body and f'tag = "v{v}"' not in body:
+                errors.append(f"lua: {cur.name} has no source.tag to stamp")
+            body = stamped
             # ggcode.etunnel-<ver>-1.rockspec
             new_name = f"ggcode.etunnel-{v}-1.rockspec"
             newp = cur.with_name(new_name)
@@ -161,6 +168,8 @@ def check(expect=None):
             rocks = sorted((ROOT / "sdks/lua").glob("*.rockspec"))
             if len(rocks) != 1 or v not in rocks[0].name:
                 bad.append(f"lua: {([r.name for r in rocks])} want *{v}*")
+            elif not re.search(r'(?m)^\s*tag = "v' + re.escape(v) + r'"', rocks[0].read_text()):
+                bad.append(f"lua: {rocks[0].name} source.tag != v{v} (rock would fetch a stale tree)")
             continue
         p = ROOT / name
         if not p.exists():

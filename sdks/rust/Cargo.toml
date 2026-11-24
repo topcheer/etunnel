@@ -10,6 +10,10 @@ homepage = "https://github.com/topcheer/etunnel"
 keywords = ["tunnel", "reverse-proxy", "webhook", "localhost", "ngrok"]
 categories = ["network-programming", "web-programming"]
 
+[lib]
+name = "etunnel"
+path = "src/lib.rs"
+
 [[bin]]
 name = "etunnel"
 path = "src/main.rs"
