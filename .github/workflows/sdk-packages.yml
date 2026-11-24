@@ -198,6 +198,26 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.0; node 22 ships npm 10.x)
         run: npm install -g npm@latest && npm --version
+      - name: Smoke-test the npm tarball before publishing
+        # The `files` whitelist in sdks/node/package.json missed route.js from
+        # v1.7.0 to v1.7.35: the package installed fine, but
+        # `require('@easytunnel/et-sdk')` threw "Cannot find module './route'"
+        # and `npx @easytunnel/et-sdk` crashed on start. Pack exactly what
+        # `npm publish` would upload, unpack it OUTSIDE the checkout and load
+        # it the way a user does, so a sibling file in sdks/node can never mask
+        # a missing one. `connect` only builds the module (the CLI runs under
+        # require.main), so a plain require must not throw.
+        run: |
+          cd sdks/node
+          T=$(mktemp -d)
+          npm pack --pack-destination "$T" >/dev/null
+          tar -tzf "$T"/*.tgz
+          tar -xzf "$T"/*.tgz -C "$T"
+          (cd / && node -e "
+            const m = require('$T/package');
+            if (typeof m.connect !== 'function') throw new Error('tarball smoke: connect is not exported');
+            console.log('tarball smoke: require OK, exports:', Object.keys(m).sort().join(','));
+          ")
       - name: Publish @easytunnel/et-sdk (provenance via OIDC, idempotent)
         run: |
           cd sdks/node

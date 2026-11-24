@@ -30,6 +30,7 @@
   },
   "files": [
     "etunnel.js",
+    "route.js",
     "README.md",
     "LICENSE"
   ],

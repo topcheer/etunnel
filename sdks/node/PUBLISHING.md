@@ -81,6 +81,12 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 Tag push → CI builds matrix → `publish-npm` publishes with provenance.
 No tokens, no secrets, no manual npm step.
 
+Before publishing, the job smoke-tests the exact tarball `npm publish` would
+upload: `npm pack` → unpack outside the checkout → `require()` it. This
+guards the `files` whitelist in `package.json`: every module `etunnel.js`
+`require()`s must be listed there (1.7.0-1.7.35 shipped without `route.js`,
+so the installed package threw `Cannot find module './route'`).
+
 ## Known issue (2026-11-08): OIDC push to an existing gem returns 403
 
 `configure-rubygems-credentials@v2.1.0` has no `owner` input, and a manual
