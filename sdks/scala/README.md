@@ -61,13 +61,10 @@ jitter, reset on success) and prints `TUNNEL_URL:` again. The subdomain is
 **reclaimed**, not re-randomised: the client replays the server's signed
 `resumeToken` in `hello.resume`, so links already shared keep working (the
 server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
-`ETUNNEL_RECONNECT=0` to restore the old one-shot behaviour.
-
-> Known issue in the one-shot mode (`ETUNNEL_RECONNECT=0`, verified on
-> 1.7.35): the `TUNNEL_URL:` line is printed as
-> `TUNNEL_URL: Tunnel(<url>,<resumeToken>)` instead of the bare URL, because
-> the CLI interpolates the `Tunnel` case class. The default (reconnect) mode
-> prints `TUNNEL_URL: <url>` correctly.
+`ETUNNEL_RECONNECT=0` to restore the old one-shot behaviour (verified on the
+1.7.36 source: `ETUNNEL_RECONNECT=0 scala Etunnel.scala -- 3000` prints
+exactly `TUNNEL_URL: <url>`; 1.7.35 printed `Tunnel(<url>,<resumeToken>)`
+there instead).
 
 ## Embed
 
