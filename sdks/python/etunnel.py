@@ -23,6 +23,11 @@ from typing import Any, Optional
 
 import websocket  # pip install websocket-client
 
+# Package version - kept identical to pyproject.toml by the release stamp
+# chain (scripts/bump-release.py), so hello.client never drifts from the
+# published package version (#419).
+__version__ = "1.7.35"
+
 MAXP = 32768
 
 # #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
@@ -174,7 +179,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
         **({"resume": opts["resume"]} if opts.get("resume") else {}),
         "subdomain": opts.get("subdomain"),
         "token": opts.get("token"),
-        "client": opts.get("client", "etunnel-python/1.0"),
+        "client": opts.get("client", f"etunnel-python/{__version__}"),  # #419: was a stale hardcoded /1.0
     }))
 
     # #243 M4: a handshake timeout/transport error must not leave a zombie
@@ -301,8 +306,16 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
                     elif t == "pong":
                         state["last_pong"] = time.monotonic()  # #243 M3
                     elif t == "bye":
+                        # Server-initiated bye: fire once with the server's
+                        # reason - unless close() already ended the tunnel and
+                        # fired the user callback with the caller's reason.
+                        # #419: the server answers our bye with its own bye
+                        # (reason = its session-close cause, e.g. "read
+                        # closed"), and this branch used to fire on_close a
+                        # SECOND time -> ['read closed', 'my reason'].
+                        already = state["closed"]
                         state["closed"] = True
-                        if opts.get("on_close"):
+                        if opts.get("on_close") and not already:
                             opts["on_close"](msg.get("reason", ""))
                         ws.close()
                         return

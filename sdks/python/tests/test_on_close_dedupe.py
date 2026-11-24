@@ -35,18 +35,32 @@ class FakeConn:
     def __init__(self):
         self._cv = threading.Condition()
         self._msgs = [__import__("json").dumps(WELCOME)]
+        self._echoed = False
         self._closed = False
 
-    def send(self, _data):
+    def send(self, data):
+        # #419: the real server answers our bye with its own bye carrying its
+        # session-close reason - echo that so the test reproduces the
+        # double-fire shape seen against the live harness (['read closed',
+        # 'my reason']). Served before recv() raises, like the real socket.
+        if '"type": "bye"' in data and not self._echoed:
+            self._echoed = True
+            with self._cv:
+                self._msgs.append(__import__("json").dumps({"type": "bye", "reason": "read closed"}))
         return None
 
     def recv(self):
         with self._cv:
             if self._msgs:
-                return self._msgs.pop(0)
+                return self._msgs.pop(0)  # echoed server bye (#419) or welcome
             deadline = time.monotonic() + 5.0
             while not self._closed and time.monotonic() < deadline:
                 self._cv.wait(0.05)
+                # like a real socket, frames buffered before the close are
+                # still delivered before recv() raises (#419: the echoed
+                # server bye must reach the reader, not be swallowed)
+                if self._msgs:
+                    return self._msgs.pop(0)
             raise ConnectionError("read closed")
 
     def settimeout(self, _t):
