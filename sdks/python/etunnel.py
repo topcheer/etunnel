@@ -163,7 +163,12 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
     if local is None:
         local = "127.0.0.1:80"  # unused in routed mode
 
-    ws = websocket.create_connection(server, subprotocols=["etunnel-v1"], timeout=15)
+    # #417-E15 (P0): websocket-client sends an Origin header by default, and
+    # the server rejects browser-origin tunnel upgrades with 403 "browser-
+    # origin tunnels are not supported; use the SDK". suppress_origin=True
+    # omits the header; the SDK identifies itself via hello.client instead.
+    ws = websocket.create_connection(server, subprotocols=["etunnel-v1"], timeout=15,
+                                     suppress_origin=True)
     ws.send(json.dumps({
         "type": "hello", "proto": 1,
         **({"resume": opts["resume"]} if opts.get("resume") else {}),

@@ -133,7 +133,13 @@ defmodule Etunnel do
       url: nil,
       streams: %{},
       owner: self(),
-      url_waiter: nil
+      url_waiter: nil,
+      # #417-E30 (P0): the keepalive bookkeeping keys must exist in the
+      # initial state - every handle_frame does %{state | last_activity: ..}
+      # and the ping loop reads last_pong/last_activity, which raised
+      # KeyError {:last_activity, nil} on the very first frame.
+      last_activity: now_ms(),
+      last_pong: now_ms()
     }
 
     WebSockex.start_link(server, __MODULE__, state,
@@ -363,6 +369,8 @@ defmodule Etunnel do
   end
 
   def handle_info(_msg, state), do: {:ok, state}
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp reply_url(state, value) do
     if from = state.url_waiter, do: GenServer.reply(from, value)
