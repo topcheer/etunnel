@@ -1,8 +1,9 @@
 # etunnel for Java
 
 [![Maven Central](https://img.shields.io/maven-central/v/dev.ggcode/etunnel?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
+[![JDK](https://img.shields.io/badge/JDK-11%2B-orange)](https://central.sonatype.com/artifact/dev.ggcode/etunnel)
 
-Single-file SDK, JDK 11+ built-in HttpClient/WebSocket — zero dependencies. Published to Maven Central.
+Single-file SDK, JDK 11+ built-in HttpClient/WebSocket — zero dependencies. Published to Maven Central as `dev.ggcode:etunnel`.
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
@@ -10,23 +11,60 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 
 ## Install
 
-```
-Maven:
+Maven (`pom.xml`):
+
+```xml
 <dependency>
   <groupId>dev.ggcode</groupId>
   <artifactId>etunnel</artifactId>
-  <version>1.4.0</version>
+  <version>1.7.35</version>
 </dependency>
-
-Gradle: implementation "dev.ggcode:etunnel:1.0.0"
 ```
 
-Requires JDK 11+.
+Gradle (`build.gradle`):
+
+```groovy
+dependencies {
+    implementation "dev.ggcode:etunnel:1.7.35"
+}
+```
+
+Both coordinates were resolved from Maven Central and run against a live
+etunneld (Maven 3.10.1 and Gradle 9.9.2, JDK 17). `1.7.35` is the release
+this README was verified against - check the badge above for newer versions.
+
+Single-file alternative: copy `src/main/java/dev/ggcode/Etunnel.java` into any
+JDK 11+ project (package `dev.ggcode`); it has no dependencies.
+
+Requires JDK 11+ (`java.net.http.WebSocket`); verified on JDK 17.
+
+## AI agent quick-start (copy this prompt)
+
+```text
+Integrate etunnel (Java SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
+
+- Package: dev.ggcode:etunnel on Maven Central · Install: Maven <dependency><groupId>dev.ggcode</groupId><artifactId>etunnel</artifactId><version>1.7.35</version></dependency> or Gradle implementation "dev.ggcode:etunnel:1.7.35" (JDK 11+, zero transitive dependencies).
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (Options.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source and run against a live server):
+import dev.ggcode.Etunnel;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        Etunnel.Tunnel tunnel = Etunnel.connect("wss://t.etun.uk/tunnel", 3000, null);
+        System.out.println("TUNNEL_URL: " + tunnel.url);
+
+        Runtime.getRuntime().addShutdownHook(new Thread(tunnel::close));
+        Thread.currentThread().join();   // keep the tunnel open
+    }
+}
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call tunnel.close() on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards. Etunnel.Options has public fields (token, subdomain, resume, routes; no fluent setters); pass null for an anonymous tunnel.
+- Do not invent other options. Full API/options: https://github.com/topcheer/etunnel/blob/main/sdks/java/README.md#api and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+```
 
 ## CLI
 
-```
-java sdks/java/src/main/java/dev/ggcode/Etunnel.java 3000
+```sh
+java src/main/java/dev/ggcode/Etunnel.java 3000   # from sdks/java, single-file launch, JDK 11+
 ```
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
@@ -42,7 +80,43 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```java
+import dev.ggcode.Etunnel;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        Etunnel.Tunnel tunnel = Etunnel.connect("wss://t.etun.uk/tunnel", 3000, null);
+        System.out.println("TUNNEL_URL: " + tunnel.url);
+
+        Runtime.getRuntime().addShutdownHook(new Thread(tunnel::close));
+        Thread.currentThread().join();   // keep the tunnel open
+    }
+}
+```
+
+`connect` blocks until the server's `welcome`, so `tunnel.url` is set when it
+returns. Same code works for Maven/Gradle projects and for the single-file
+copy.
+
+## API
+
+| Symbol | Returns / effect |
+|---|---|
+| `Etunnel.connect(server, localPort, Options)` | `Tunnel` (blocking until `welcome`; `localPort` may be `0` when `Options.routes` is set) |
+| `Tunnel.url` / `.hostname` / `.subdomain` / `.plan` / `.resumeToken` | public final fields from the `welcome` frame |
+| `Tunnel.close()` | sends `bye` + a WebSocket close, releasing the subdomain |
+| `Etunnel.normalizeRoutes(Route[])` / `Etunnel.routeFor(Route[], pathAndQuery)` | the route-table helpers the tunnel itself uses |
+
+Options: `Etunnel.Options` has **public fields** `token`, `subdomain`,
+`resume`, `routes` (there are no fluent setters) - or pass `null` for an
+anonymous tunnel:
+
+```java
+Etunnel.Options o = new Etunnel.Options();
+o.token = "et_...";
+o.subdomain = "myapp";
+Etunnel.Tunnel t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000, o);
+```
 
 ## Environment variables
 
@@ -86,5 +160,7 @@ wins; matching is on segment boundaries (`/api` never matches `/apiv2`);
 `strip` removes only the path part - the query string is carried over
 byte-for-byte, an exact hit bottoms out at `/`; no matching route (only
 possible without a `/` fallback) answers `404` at the SDK edge.
+Verified against a live server: `/api/items?id=7` reached the local service
+as `/items?id=7`, `/other` took the `/` route unchanged.
 
 > Redirect note: with `strip`, a backend 302 to an absolute path (`/users/next`) lands on the fallback route on the next hop - backends should return relative redirects or keep the prefix (same as nginx `proxy_pass` with trailing slash; see #155).
