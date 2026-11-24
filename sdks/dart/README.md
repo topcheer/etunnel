@@ -14,11 +14,10 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 dart pub add etunnel
 ```
 
-Requires Dart ^3.0, zero dependencies. **Status 1.7.35:** the pub.dev archive
-ships `etunnel.dart` at the package root instead of `lib/`, so
-`import 'package:etunnel/etunnel.dart'` cannot resolve. Until it is
-republished, use the single file:
-`curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/dart/etunnel.dart`
+Requires Dart ^3.0, zero dependencies. Import it as `package:etunnel/etunnel.dart`
+(1.7.36 ships `lib/etunnel.dart`; the 1.7.35 archive had the file at the
+package root and could not be imported). Single file, no pub dependency:
+`curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/dart/lib/etunnel.dart`
 and `import 'etunnel.dart';`.
 
 ## AI agent quick-start (copy this prompt)
@@ -26,12 +25,12 @@ and `import 'etunnel.dart';`.
 ````text
 Integrate etunnel (Dart SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `etunnel` on pub.dev (Dart >= 3; the 1.7.35 archive is unusable: no lib/) · Install: `curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/dart/etunnel.dart` and import it as a relative file
+- Package: `etunnel` on pub.dev (Dart >= 3; use 1.7.36+ - 1.7.35 had no lib/) · Install: `dart pub add etunnel`, then `import 'package:etunnel/etunnel.dart';`
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 ```dart
 import 'dart:io';
-import 'etunnel.dart';
+import 'package:etunnel/etunnel.dart';
 Future<void> main() async {
   final t = await Etunnel.connect('wss://t.etun.uk/tunnel', '3000');
   print('TUNNEL_URL: ${t.url}');
@@ -45,7 +44,8 @@ Future<void> main() async {
 ## CLI
 
 ```
-dart run etunnel.dart 3000
+dart run etunnel 3000        # with the pub package
+dart etunnel.dart 3000       # single file
 ```
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
@@ -63,7 +63,7 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ```dart
 import 'dart:io';
-import 'etunnel.dart';   // the single file, next to this program
+import 'package:etunnel/etunnel.dart';   // or the single file: import 'etunnel.dart';
 
 Future<void> main() async {
   final t = await Etunnel.connect('wss://t.etun.uk/tunnel', '3000');

@@ -13,26 +13,21 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ```
 # mix.exs
 defp deps do
-  [{:etunnel, "~> 1.7.0"}]
+  [{:etunnel, "~> 1.7.36"}]
 end
 ```
 
 Requires Elixir >= 1.12 / OTP 24+. Deps: `websockex` (~> 0.4) and `jason`
 (~> 1.3). The Hex package contains only `lib/` + `mix.exs` (`runner.exs`, the
-CLI, is **not** shipped).
-
-> **Status 1.7.35:** `Etunnel.start_link/1` crashes on every connect with
-> `{:error, %KeyError{key: :last_activity}}` - the GenServer state map in
-> `lib/etunnel.ex` lacks `last_pong`/`last_activity`. The embed below was
-> verified against the source with those two keys added; wait for the next
-> release (1.7.36) or depend on a fixed git revision.
+CLI, is **not** shipped). Require `~> 1.7.36`: 1.7.35 crashed on every
+connect (`KeyError :last_activity`), fixed in 1.7.36.
 
 ## AI agent quick-start (copy this prompt)
 
 ````text
 Integrate etunnel (Elixir SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `etunnel` on hex.pm (Elixir >= 1.12; deps websockex + jason) · Install: `{:etunnel, "~> 1.7.0"}` in mix.exs deps, then `mix deps.get`
+- Package: `etunnel` on hex.pm (Elixir >= 1.12; deps websockex + jason) · Install: `{:etunnel, "~> 1.7.36"}` in mix.exs deps, then `mix deps.get`
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 ```elixir
@@ -42,7 +37,6 @@ Process.sleep(:infinity)
 ```
 - Rules: print the public URL as `TUNNEL_URL: <url>` (Etunnel.url/1 blocks up to 10 s for welcome) and keep the process alive; call `Etunnel.close(pid)` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
 - Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
-- Known issue in 1.7.35: Etunnel.start_link/1 raises KeyError :last_activity; the snippet works once the GenServer state carries last_pong/last_activity (fix expected in 1.7.36).
 ````
 
 ## CLI
