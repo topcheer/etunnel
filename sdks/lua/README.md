@@ -12,24 +12,22 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-# needs the LuaSocket and LuaSec rocks (Lua 5.3+)
-# single file:
+luarocks install ggcode.etunnel     # 1.7.36-1: pulls luasocket + luasec, installs ggcode/etunnel.lua
+# single file (needs the LuaSocket + LuaSec rocks, Lua 5.3+):
 curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/lua/etunnel.lua
-# or build the rock from a source checkout of the repo:
-cd sdks/lua && luarocks make                 # -> <tree>/share/lua/<ver>/ggcode/etunnel.lua
+# from a source checkout - run make from the repo root (the rockspec maps sdks/lua/etunnel.lua):
+luarocks make sdks/lua/ggcode.etunnel-1.7.36-1.rockspec   # -> <tree>/share/lua/<ver>/ggcode/etunnel.lua
 ```
 
-Requires Lua 5.3+ (`string.pack`). **`luarocks install ggcode.etunnel`
-currently fails** (1.7.35-1: `Failed copying etunnel.lua` - the published
-src.rock points at a git tag where the file lives under `sdks/lua/`); use
-the single file or `luarocks make` until the rock is republished.
+Requires Lua 5.3+ (`string.pack`). Fixed in 1.7.36-1: the 1.7.35-1 rock
+failed with `Failed copying etunnel.lua` (its rockspec pointed at an old tag).
 
 ## AI agent quick-start (copy this prompt)
 
 ````text
 Integrate etunnel (Lua SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: `ggcode.etunnel` on LuaRocks (but `luarocks install` is broken in 1.7.35-1) · Install: `curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/lua/etunnel.lua`; needs the LuaSocket + LuaSec rocks (Lua 5.3+)
+- Package: `ggcode.etunnel` on LuaRocks (1.7.36-1) · Install: `luarocks install ggcode.etunnel`; the installed file is <tree>/share/lua/<ver>/ggcode/etunnel.lua - copy it next to your code to embed
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source; append to a copy of etunnel.lua named myapp.lua, run `lua myapp.lua`):
 ```lua

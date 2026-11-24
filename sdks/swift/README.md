@@ -16,30 +16,38 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
+# SwiftPM consumer (Package.swift):
+.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.36")
+# target: .product(name: "etunnel", package: "etunnel")   -> import etunnel
+
 # single file (Foundation only): copy it into your target
 # https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/swift/etunnel.swift
-# or build the bundled executable from a checkout (the SPM manifest lives in sdks/swift):
+# or build the bundled executable from a checkout:
+swift run etunnel-cli 3000              # repo root (the root manifest is the SPM package)
 cd sdks/swift && swift build -c release     # -> .build/release/etunnel-cli
 ```
 
-Requires Swift 5.9+ on macOS 13+ / iOS 16+. **SPM status:**
-`.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")`
-resolves the tag, but the repository-root `Package.swift` declares only an
-executable over `sdks/swift` (no library product, `etunnel-cli/` not excluded)
-and fails to build - so `import etunnel` is not available to SPM consumers yet.
-Vendor the two source files (`etunnel.swift`, `Reconnect.swift`) until the
-root manifest is fixed.
+Requires Swift 5.9+ on macOS 13+ / iOS 16+. The repository-root `Package.swift`
+exposes the `etunnel` library product (fixed in 1.7.36 - the 1.7.35 root
+manifest declared only a broken executable target).
+
+> **If SPM refuses 1.7.36** with `Revision … does not match previously
+> recorded value`: the `v1.7.36` tag was re-pointed once after the first
+> publish, and SwiftPM caches tag -> revision per machine. Vendor the two
+> source files (`etunnel.swift`, `Reconnect.swift`) meanwhile, or depend on
+> the next tag (`from: "1.7.37"`, if one is cut) once it exists.
 
 ## AI agent quick-start (copy this prompt)
 
 ````text
 Integrate etunnel (Swift SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
 
-- Package: none yet (SPM `.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")` resolves but does not build - the root manifest has no library product) · Install: vendor https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/swift/etunnel.swift (and Reconnect.swift) into the target; Swift 5.9+, macOS 13+/iOS 16+
+- Package: `etunnel` SwiftPM package, git tag (`.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.36")`, product `etunnel`) · Install: add the package + product, then `import etunnel`; Swift 5.9+, macOS 13+/iOS 16+
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source):
 ```swift
 import Foundation
+import etunnel
 let tunnel = Etunnel(server: "wss://t.etun.uk/tunnel", local: "3000")!   // nil = malformed server URL
 let url = try await tunnel.connect()
 print("TUNNEL_URL: " + url)
@@ -53,7 +61,7 @@ try await Task.sleep(for: .seconds(3600))
 ## CLI
 
 ```
-cd sdks/swift && swift run etunnel-cli 3000
+swift run etunnel-cli 3000                  # repo root, or from a checkout: cd sdks/swift && swift run etunnel-cli 3000
 # or: swift build -c release && .build/release/etunnel-cli 3000
 ```
 
@@ -74,9 +82,8 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 ## Embed
 
 ```swift
-import Foundation
+import Foundation   // or `import etunnel` when using the SwiftPM package
 
-// vendored files, or `import etunnel` once the SPM library product works.
 // Single connection (caller owns the retry policy):
 let et = Etunnel(server: "wss://t.etun.uk/tunnel", local: "3000")!   // nil = malformed URL
 let publicURL = try await et.connect()          // waits for `welcome`

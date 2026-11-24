@@ -110,7 +110,7 @@ client-side; the protocol is unchanged (PROTOCOL.md 2).
 
 ```php
 // pass a placeholder local target: with routes the route table wins, and
-// `null` currently fatals on the first request (TypeError in serve(), 1.7.35)
+// `null` currently fatals on the first request (TypeError in serve(); still in 1.7.36)
 Etunnel::connect("wss://t.example.com/tunnel", "127.0.0.1:3000", routes: [
     ["prefix" => "/api", "addr" => "127.0.0.1:8080", "strip" => true],
     ["prefix" => "/",    "addr" => "127.0.0.1:3000"],

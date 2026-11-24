@@ -34,7 +34,7 @@ sleep
 ```
 - Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call `t.close` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
 - Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
-- Known issue in 1.7.35: `t.resume_token` and the `etunnel` CLI crash (SystemStackError); do not rely on them.
+- Known issue in 1.7.35 (fixed in 1.7.36): `t.resume_token` raised SystemStackError and the gem CLI crashed; 1.7.36 returns an `Etunnel::Tunnel`.
 ````
 
 ## CLI
@@ -43,8 +43,9 @@ sleep
 etunnel 3000
 ```
 
-Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
-your local service. Ctrl-C closes the tunnel.
+`bin/etunnel` calls `Etunnel.main`, which reads `ETUNNEL_*`, prints
+`TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
+your local service — and exits 0 on Ctrl-C.
 
 **Reconnects automatically.** If the connection drops (including a server
 restart) the CLI re-dials with exponential backoff (500ms → 30s, ±20%
@@ -53,10 +54,6 @@ jitter, reset on success) and prints `TUNNEL_URL:` again. The subdomain is
 `resumeToken` in `hello.resume`, so links already shared keep working (the
 server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 `ETUNNEL_RECONNECT=0` to restore the old one-shot behaviour.
-
-> **Status 1.7.35:** the gem's `etunnel` executable crashes right after
-> `welcome` (`SystemStackError` in `Etunnel.connect` -> `resume_token`,
-> `lib/etunnel.rb:166`). Use the embed below until a fixed gem is published.
 
 ## Embed
 
@@ -72,9 +69,9 @@ sleep                          # keep the process alive
 ```
 
 `Etunnel.connect(server, local, token: nil, subdomain: nil, resume: nil, routes: nil)`
-blocks until `welcome` and returns a tunnel object: `t.url` (public URL),
+blocks until `welcome` and returns an `Etunnel::Tunnel`: `t.url` (public URL),
 `t.resume_token` (server-signed token; replay it via `resume:` to reclaim the
-same subdomain - raises in 1.7.35, see above), `t.close` (sends `bye`).
+same subdomain), `t.close` (sends `bye`).
 `local` is a port, `"host:port"`, or `nil` when `routes` is given. Each
 request is served on a worker thread; EventMachine runs in a background
 thread if no reactor is running (Rails: call `connect` from an initializer).
