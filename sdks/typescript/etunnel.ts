@@ -7,6 +7,7 @@
 // const t = await connect('wss://t.etun.uk/tunnel', 3000);
 
 import zlib from 'node:zlib';
+import { pathToFileURL } from 'node:url';
 
 const MAXP = 32768;
 
@@ -407,7 +408,13 @@ async function supervise(server: string, local: string | number, opts: Options):
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith(process.argv[1]?.split('/').pop() || '')) {
+// Run directly (node etunnel.ts via type stripping, tsx, or compiled JS) - and
+// ONLY then. The previous check, argv[1].endsWith(argv[1].split('/').pop()),
+// was a tautology (x always ends with its own last path segment), so merely
+// importing this file started the CLI supervisor: a second tunnel plus its
+// SIGINT handler on the importing program's process. Comparing the module URL
+// with the entry script is the standard ESM "main" test.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   // run directly (node etunnel.ts with type stripping, or compiled js)
   const server = process.env.ETUNNEL_SERVER || 'wss://t.etun.uk/tunnel';
   const local = process.env.ETUNNEL_LOCAL || process.argv[2] || '3000';
