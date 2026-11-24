@@ -3,10 +3,13 @@
 // seams (ETUNNEL_* env mapping, JSON, routes, 9-byte frames) and the #282
 // review fixes: #1 replay off the WS reader thread, #2 multi-value headers,
 // #3 M2 caps with RST.
+package dev.ggcode.etunnel
+
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.Proxy
+import java.lang.reflect.Modifier
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -582,6 +585,27 @@ class EtunnelSdkTest {
         h1.handleText("""{"type":"welcome","url":"https://x.t.test"}""")
         assertTrue("missing proto defaults to v1 (accepted)", h1.info != null)
         assertTrue(ws.bin.isEmpty())
+    }
+
+    @Test
+    fun publicApiLivesInPublishedPackage() {
+        // docs-audit P0: README imports dev.ggcode.etunnel.Etunnel / Route, but
+        // Etunnel.kt had no package declaration, so every class shipped in the
+        // root package and that import could never resolve in a consumer app.
+        // (Kotlin `internal` is enforced by the compiler, not the JVM - the
+        // consumer-App.kt compile against the AAR in the PR is the authority
+        // for visibility; this pins the package and the entry points.)
+        val pkg = "dev.ggcode.etunnel"
+        assertEquals(pkg, Etunnel::class.java.`package`?.name)
+        assertEquals(pkg, Route::class.java.`package`?.name)
+        assertEquals(pkg, EtunnelConfig::class.java.`package`?.name)
+        // companion functions are instance methods of Etunnel.Companion on the JVM
+        val connect = Etunnel.Companion::class.java.getDeclaredMethod("connect", String::class.java,
+            Int::class.javaPrimitiveType, String::class.java, String::class.java, String::class.java, List::class.java)
+        assertTrue(Modifier.isPublic(connect.modifiers))
+        assertTrue(Modifier.isPublic(Etunnel::class.java.getDeclaredMethod("close").modifiers))
+        val toplevel = Class.forName("$pkg.EtunnelKt")
+        assertTrue(Modifier.isPublic(toplevel.getDeclaredMethod("configFromEnv", Map::class.java).modifiers))
     }
 
 }

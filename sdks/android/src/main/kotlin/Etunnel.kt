@@ -3,10 +3,17 @@
 // are buffered per stream, WebSocket (101) pass-through is not forwarded.
 //
 // Build (AAR + tests):  (cd sdks/android) && ./gradlew build
-// Embed (Gradle):       implementation("dev.ggcode:etunnel-android:1.4.0")
+// Embed (Gradle):       implementation("dev.ggcode:etunnel-android:<version>")
 // Code:
 //   val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
 //   Log.i("etunnel", t.url)
+//
+// Every declaration lives in the package the AAR publishes under (the
+// namespace in build.gradle.kts only names the R class - Kotlin classes
+// without a package declaration land in the root package, so the README's
+// `import dev.ggcode.etunnel.Etunnel` could never resolve).
+package dev.ggcode.etunnel
+
 import java.io.ByteArrayOutputStream
 import java.net.Proxy
 import java.util.concurrent.ConcurrentHashMap
@@ -199,7 +206,10 @@ internal fun ctlFrame(kind: Byte, sid: Int): ByteArray {
     return f
 }
 
-internal class Etunnel(val url: String, val resumeToken: String, private val ws: WebSocket) {
+// Public API surface (README "Use"): connect()/url/resumeToken/close(). The
+// constructor stays internal - clients obtain an instance only through
+// connect(), which has already completed the hello/welcome handshake.
+class Etunnel internal constructor(val url: String, val resumeToken: String, private val ws: WebSocket) {
     companion object {
         const val MAXP = 32768
 

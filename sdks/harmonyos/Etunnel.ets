@@ -5,7 +5,9 @@
 // Buffer-based protocol client (request/response bodies buffered per stream;
 // WebSocket upgrades are not forwarded - use the Go SDK for those).
 //
-// DevEco Studio (ohpm):  ohpm install etunnel
+// DevEco Studio (ohpm, from source - the package is NOT on the ohpm registry
+// yet, see README "Publishing status"):
+//   ohpm install ./path/to/etunnel-harmonyos
 //   import { connect } from 'etunnel';
 //   const t = await connect('wss://t.etun.uk/tunnel', 3000);
 //   console.log('TUNNEL_URL: ' + t.url);
