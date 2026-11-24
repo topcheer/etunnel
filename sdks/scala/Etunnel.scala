@@ -84,6 +84,11 @@ object Etunnel {
   /** A live tunnel: the assigned URL plus the token that reclaims it on reconnect. */
   case class Tunnel(url: String, resumeToken: String)
 
+  /** The one stdout line every SDK prints once a tunnel is up. Bare URL only:
+    * never the Tunnel case class, whose toString would also leak resumeToken
+    * to anything that parses TUNNEL_URL. Used by both CLI paths in Main. */
+  def tunnelUrlLine(t: Tunnel): String = s"TUNNEL_URL: ${t.url}"
+
   val MAXP = 32768
   private val HOP = Set("connection", "transfer-encoding", "keep-alive", "upgrade",
     "proxy-connection", "te", "trailer", "content-length", "host")
@@ -476,8 +481,10 @@ object Main {
     if (sys.env.get("ETUNNEL_RECONNECT").contains("0")) {
       // original single-shot behavior
       try {
-        val url = Etunnel.connect(server, port, token, subdomain)
-        println(s"TUNNEL_URL: $url")
+        val tunnel = Etunnel.connect(server, port, token, subdomain)
+        // connect() returns the Tunnel case class - printing it whole emitted
+        // "TUNNEL_URL: Tunnel(http://..., <resumeToken>)".
+        println(Etunnel.tunnelUrlLine(tunnel))
       } catch {
         case e: Exception =>
           System.err.println(s"etunnel: ${e.getMessage}")
@@ -504,7 +511,7 @@ object Main {
       } else {
         delay = 500L // reset after a successful connect
         if (tunnel.resumeToken.nonEmpty) resume = tunnel.resumeToken
-        println(s"TUNNEL_URL: ${tunnel.url}")
+        println(Etunnel.tunnelUrlLine(tunnel))
 
         val ws = Etunnel.lastWs
         while (!stopped.get() && !closed(ws)) {

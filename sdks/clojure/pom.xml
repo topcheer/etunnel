@@ -22,4 +22,24 @@
     <url>https://github.com/topcheer/etunnel</url>
     <connection>scm:git:https://github.com/topcheer/etunnel.git</connection>
   </scm>
+  <!-- cheshire is published to Clojars only (not Maven Central): tools.deps
+       (deps.edn consumers) searches Clojars by default, a plain Maven build
+       needs it declared here or the transitive dependency below cannot resolve. -->
+  <repositories>
+    <repository>
+      <id>clojars</id>
+      <url>https://repo.clojars.org/</url>
+    </repository>
+  </repositories>
+  <!-- Runtime dependencies, kept in lockstep with deps.edn. Without this
+       block the published POM carries no transitive deps, so a consumer's
+       {:deps {dev.ggcode/etunnel-clj {:mvn/version "..."}}} fails at
+       (require 'etunnel) with ClassNotFoundException cheshire.core. -->
+  <dependencies>
+    <dependency>
+      <groupId>cheshire</groupId>
+      <artifactId>cheshire</artifactId>
+      <version>5.13.0</version>
+    </dependency>
+  </dependencies>
 </project>

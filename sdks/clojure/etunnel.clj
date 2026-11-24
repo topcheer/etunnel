@@ -4,7 +4,7 @@
 ;;
 ;; Run:   clojure -M -m etunnel 3000
 ;; Embed: (def t (etunnel/connect! "wss://t.etun.uk/tunnel" 3000))
-;;        (:url @t)        (etunnel/close! @t)
+;;        (:url t)        (etunnel/close! t)
 (ns etunnel
   (:require [cheshire.core :as json])
   (:import [java.net URI]
@@ -184,11 +184,9 @@ the tunnel stays connected and keeps retrying for you.</div>
                            (send-text! ws (json/generate-string
                                             {:type "bye" :reason "client closed"}))
                            (.join (.sendClose ws WebSocket/NORMAL_CLOSURE "bye")))}))
-    "req" (do
-              (.put ^ConcurrentHashMap (:streams ctx)
-                  (long (:streamId m))
-                  {:req m :body (java.io.ByteArrayOutputStream.)})
-              (println "DBG stored-ok"))
+    "req" (.put ^ConcurrentHashMap (:streams ctx)
+              (long (:streamId m))
+              {:req m :body (java.io.ByteArrayOutputStream.)}),
     "ping" (locking (:out-lock ctx)
              (send-text! ws (json/generate-string {:type "pong" :ts (or (:ts m) 0)})))
     "bye" (when-let [f (:close! @(:state ctx))] (f))
@@ -238,8 +236,9 @@ the tunnel stays connected and keeps retrying for you.</div>
 
 (defn connect!
   "Connects to the etunnel server exposing the local service at local
-  (\"127.0.0.1:3000\" or a port number). Returns a deref-able state map with
-  :url filled once the server assigns the hostname, plus :ws and :close!."
+  (\"127.0.0.1:3000\" or a port number). Blocks until the server's welcome
+  (15s timeout) and returns the state map with :url, :ws, :resume-token and
+  :close! - a plain map, so (:url t) / (close! t), no deref."
   [server local & {:keys [token subdomain resume routes]}]
   (let [routes (when routes (normalize-routes routes))
         _ (when (and routes (empty? routes))
@@ -288,6 +287,15 @@ the tunnel stays connected and keeps retrying for you.</div>
     (while (and (nil? @state) (< (System/currentTimeMillis) deadline))
       (Thread/sleep 50))
     (or @state (throw (RuntimeException. "etunnel: welcome timeout")))))
+
+(defn close!
+  "Closes a tunnel opened by connect!: sends `bye` and releases the socket.
+  The state map is immutable, so closing the same tunnel twice throws (the
+  underlying WebSocket is already closed)."
+  [t]
+  (when-let [f (:close! t)]
+    (f))
+  nil)
 
 (defn- next-delay
   "Exponential backoff step, capped at 30s."

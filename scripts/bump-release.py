@@ -43,6 +43,9 @@ MANIFESTS = {
     "sdks/c":                       ("tag",   None),
     "sdks/cpp":                     ("tag",   None),
     "sdks/android/build.gradle.kts": ("gradle", None),  # see ANDROID_* patterns below
+    # oh-package.json5 is JSON5: a regex stamp leaves the file's formatting
+    # (and any JSON5 syntax) intact instead of json.dumps reformatting it.
+    "sdks/harmonyos/oh-package.json5": ("regex", r'(?m)^\s*"version":\s*"[^"]*"'),
     "sdks/kotlin":                  ("jar",   None),  # ships the java artifact
     "sdks/scala":                   ("jar",   None),
     "sdk (go module)":              ("tag",   None),  # versioned by git tags
