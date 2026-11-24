@@ -14,7 +14,33 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 dart pub add etunnel
 ```
 
-Requires Dart ^3.0.
+Requires Dart ^3.0, zero dependencies. **Status 1.7.35:** the pub.dev archive
+ships `etunnel.dart` at the package root instead of `lib/`, so
+`import 'package:etunnel/etunnel.dart'` cannot resolve. Until it is
+republished, use the single file:
+`curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/dart/etunnel.dart`
+and `import 'etunnel.dart';`.
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Dart SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: `etunnel` on pub.dev (Dart >= 3; the 1.7.35 archive is unusable: no lib/) · Install: `curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/dart/etunnel.dart` and import it as a relative file
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```dart
+import 'dart:io';
+import 'etunnel.dart';
+Future<void> main() async {
+  final t = await Etunnel.connect('wss://t.etun.uk/tunnel', '3000');
+  print('TUNNEL_URL: ${t.url}');
+  ProcessSignal.sigint.watch().listen((_) { t.close(); exit(0); });
+}
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the process alive; call `t.close()` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+````
 
 ## CLI
 
@@ -35,7 +61,22 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```dart
+import 'dart:io';
+import 'etunnel.dart';   // the single file, next to this program
+
+Future<void> main() async {
+  final t = await Etunnel.connect('wss://t.etun.uk/tunnel', '3000');
+  print('TUNNEL_URL: ${t.url}');
+
+  ProcessSignal.sigint.watch().listen((_) { t.close(); exit(0); });
+}
+```
+
+`Etunnel.connect(server, local, {token, subdomain, resume, routes})` returns a
+`Future<Etunnel>`; `local` is `'3000'`, `'host:port'`, or `null` when `routes`
+is given. `t.url` (public URL), `t.resumeToken` (replay via `resume:` to
+reclaim the same subdomain), `t.close([reason])` (sends `bye`, `void`).
 
 ## Environment variables
 

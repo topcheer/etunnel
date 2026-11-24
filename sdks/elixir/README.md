@@ -13,16 +13,42 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ```
 # mix.exs
 defp deps do
-  [{:etunnel, "~> 1.0"}]
+  [{:etunnel, "~> 1.7.0"}]
 end
 ```
 
-Requires Elixir >= 1.12 / OTP 24+.
+Requires Elixir >= 1.12 / OTP 24+. Deps: `websockex` (~> 0.4) and `jason`
+(~> 1.3). The Hex package contains only `lib/` + `mix.exs` (`runner.exs`, the
+CLI, is **not** shipped).
+
+> **Status 1.7.35:** `Etunnel.start_link/1` crashes on every connect with
+> `{:error, %KeyError{key: :last_activity}}` - the GenServer state map in
+> `lib/etunnel.ex` lacks `last_pong`/`last_activity`. The embed below was
+> verified against the source with those two keys added; wait for the next
+> release (1.7.36) or depend on a fixed git revision.
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Elixir SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: `etunnel` on hex.pm (Elixir >= 1.12; deps websockex + jason) · Install: `{:etunnel, "~> 1.7.0"}` in mix.exs deps, then `mix deps.get`
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```elixir
+{:ok, t} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000)
+IO.puts("TUNNEL_URL: " <> Etunnel.url(t))
+Process.sleep(:infinity)
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` (Etunnel.url/1 blocks up to 10 s for welcome) and keep the process alive; call `Etunnel.close(pid)` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+- Known issue in 1.7.35: Etunnel.start_link/1 raises KeyError :last_activity; the snippet works once the GenServer state carries last_pong/last_activity (fix expected in 1.7.36).
+````
 
 ## CLI
 
 ```
-mix run --no-halt runner.exs 3000
+cd sdks/elixir && mix deps.get && mix run --no-halt runner.exs 3000   # source checkout only (runner.exs is not in the Hex package)
 ```
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
@@ -41,13 +67,21 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 ```elixir
 {:ok, t} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000)
 url = Etunnel.url(t)              # waits ≤10s for welcome; {:error, reason} on failure
+IO.puts("TUNNEL_URL: " <> url)
 
 # the server's signed resume token arrives at the start_link caller:
-receive do {:etunnel_resume_token, tok} -> tok end
+tok =
+  receive do
+    {:etunnel_resume_token, tok} -> tok
+  end
 
 Etunnel.close(t)                  # sends bye and tears down the connection
 {:ok, t2} = Etunnel.start_link(server: "wss://t.etun.uk/tunnel", local: 3000, resume: tok)
 ```
+
+Options (`Etunnel.start_link/1`): `server:` (required), `local:` (port or
+`"host:port"`; omit when `routes:` is given), `token:`, `subdomain:`, `resume:`,
+`routes:` (see below), `tls_verify:`.
 
 `Etunnel.url/1` waits up to 10s for the welcome frame and returns the URL, or
 `{:error, reason}` — including the structured `{code, message}` of a server

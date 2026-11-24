@@ -14,7 +14,32 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 cargo install etunnel
 ```
 
-Requires Rust 1.70+.
+Requires Rust 1.70+. Compiles ~65 crates (about 25 s on an M-series Mac).
+There is **no library target**: `cargo add etunnel` + `use etunnel;` does not
+resolve - embed by spawning the binary (below).
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Rust SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: `etunnel` on crates.io (binary crate only, no library API) · Install: `cargo install etunnel` (~25 s build)
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source - spawn the binary and relay its output, inside fn main() -> Result<(), Box<dyn std::error::Error>>):
+```rust
+use std::io::{BufRead, BufReader};
+use std::process::Command;
+let mut child = Command::new("etunnel").arg("3000").env("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
+    .stdout(std::process::Stdio::piped()).spawn()?;
+if let Some(out) = child.stdout.take() {
+    for line in BufReader::new(out).lines() { println!("{}", line?); }
+}
+child.kill().ok();
+Ok(())
+```
+- Rules: the child prints `TUNNEL_URL: <url>` on every (re)connect - relay it and keep the child running; drop it with child.kill() on shutdown (the server frees the subdomain when the socket closes). This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+````
 
 ## CLI
 
@@ -35,7 +60,32 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 
 ## Embed
 
-See the header of the source file for the embed example.
+```rust
+// the crate ships a binary target only, so drive it as a child process
+// (inside `fn main() -> Result<(), Box<dyn std::error::Error>>`):
+use std::io::{BufRead, BufReader};
+use std::process::Command;
+
+let mut child = Command::new("etunnel")
+    .arg("3000")
+    .env("ETUNNEL_SERVER", "wss://t.etun.uk/tunnel")
+    .stdout(std::process::Stdio::piped())
+    .spawn()?;
+
+// the CLI prints `TUNNEL_URL: <url>` on every (re)connect; relay it
+if let Some(out) = child.stdout.take() {
+    for line in BufReader::new(out).lines() {
+        println!("{}", line?);
+    }
+}
+child.kill().ok();   // the socket drops, the server frees the subdomain
+Ok(())
+```
+
+CLI flags (the real API until a `lib` target exists): `etunnel [local-port-or-addr]`,
+`--server URL`, `--token KEY`, `--subdomain NAME`, `--route PREFIX=ADDR[,strip]`
+(repeatable), `--config PATH`. Precedence: flags > `ETUNNEL_*` env >
+`--config` file (`etunnel.conf` in the cwd is picked up automatically) > defaults.
 
 ## Environment variables
 
@@ -65,20 +115,15 @@ One public hostname, several local services - the SPA prod-bundle shape
 (`/` to the built frontend, `/api` to the backend) without CORS or a
 second tunnel. Routing is client-side; the protocol is unchanged.
 
-```rust
-let t = etunnel::connect_routes(
-    "wss://t.example.com/tunnel",
-    vec![
-        etunnel::Route { prefix: "/api".into(), addr: "127.0.0.1:8080".into(), strip: true },
-        etunnel::Route { prefix: "/".into(),    addr: "127.0.0.1:3000".into(), strip: false },
-    ],
-    None, None, None,
-)?;
+```sh
+etunnel --route /api=127.0.0.1:8080,strip --route /=127.0.0.1:3000
+# or in etunnel.conf:  [route] blocks with prefix / addr / strip, run via `etunnel --config etunnel.conf`
 ```
 
-The CLI equivalent is repeatable `--route /api=127.0.0.1:8080,strip`
-flags or `etunnel.conf` `[route]` blocks (`--config`, flags > env >
-config > defaults).
+The equivalent library call (`etunnel::connect_routes`, `etunnel::Route`) exists
+in `src/main.rs` and `src/route.rs`, but the crate publishes no `lib` target, so
+it is not reachable from a dependent crate yet. CLI precedence: flags > env >
+config > defaults.
 
 Semantics (identical in every SDK, pinned by tests): longest prefix wins; matching is on segment boundaries (`/api` never matches `/apiv2`); `strip` removes only the path part - the query string is carried over byte-for-byte, an exact hit bottoms out at `/`; no matching route (only possible without a `/` fallback) answers `404` at the SDK edge.
 

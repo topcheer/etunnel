@@ -16,16 +16,49 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 ## Install
 
 ```
-swift build   # SPM: .package(url:..., from: "1.0.0")
+# single file (Foundation only): copy it into your target
+# https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/swift/etunnel.swift
+# or build the bundled executable from a checkout (the SPM manifest lives in sdks/swift):
+cd sdks/swift && swift build -c release     # -> .build/release/etunnel-cli
 ```
 
-Requires Swift 5.9+ on macOS 13+ / iOS 16+.
+Requires Swift 5.9+ on macOS 13+ / iOS 16+. **SPM status:**
+`.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")`
+resolves the tag, but the repository-root `Package.swift` declares only an
+executable over `sdks/swift` (no library product, `etunnel-cli/` not excluded)
+and fails to build - so `import etunnel` is not available to SPM consumers yet.
+Vendor the two source files (`etunnel.swift`, `Reconnect.swift`) until the
+root manifest is fixed.
+
+## AI agent quick-start (copy this prompt)
+
+````text
+Integrate etunnel (Swift SDK) into this project to expose the local service on port <PORT> at a public HTTPS URL.
+
+- Package: none yet (SPM `.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")` resolves but does not build - the root manifest has no library product) · Install: vendor https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/swift/etunnel.swift (and Reconnect.swift) into the target; Swift 5.9+, macOS 13+/iOS 16+
+- Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (opts.token or ETUNNEL_TOKEN).
+- Minimal embed (verified against the SDK source):
+```swift
+import Foundation
+let tunnel = Etunnel(server: "wss://t.etun.uk/tunnel", local: "3000")!   // nil = malformed server URL
+let url = try await tunnel.connect()
+print("TUNNEL_URL: " + url)
+fflush(stdout)
+try await Task.sleep(for: .seconds(3600))
+```
+- Rules: print the public URL as `TUNNEL_URL: <url>` and keep the task alive (Task.sleep, not Thread.sleep, in async code); call `tunnel.close()` on shutdown to release the subdomain. This SDK is buffer-based (no WebSocket upgrades, no streaming) - fine for webhooks/APIs/dashboards.
+- Do not invent other options. Full API/options: #embed and #multi-target-routing. Wire protocol: https://github.com/topcheer/etunnel/blob/main/PROTOCOL.md
+````
 
 ## CLI
 
 ```
-swift etunnel.swift 3000
+cd sdks/swift && swift run etunnel-cli 3000
+# or: swift build -c release && .build/release/etunnel-cli 3000
 ```
+
+(`etunnel.swift` itself has no top-level code, so `swift etunnel.swift 3000`
+does nothing; the executable product is `etunnel-cli`.)
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
 your local service. Ctrl-C closes the tunnel.
@@ -41,10 +74,28 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 ## Embed
 
 ```swift
-import etunnel
+import Foundation
 
-// Supervised tunnel: dials once (failing fast on bad credentials), then keeps
-// itself alive. Publish the state straight into your UI.
+// vendored files, or `import etunnel` once the SPM library product works.
+// Single connection (caller owns the retry policy):
+let et = Etunnel(server: "wss://t.etun.uk/tunnel", local: "3000")!   // nil = malformed URL
+let publicURL = try await et.connect()          // waits for `welcome`
+print("TUNNEL_URL: " + publicURL)
+fflush(stdout)                                   // stdout is block-buffered when piped
+// keep the task alive, e.g. in a script:
+try await Task.sleep(for: .seconds(3600))
+et.close()                                       // sends `bye`, frees the subdomain
+```
+
+`Etunnel(server:local:routes:)` is a failable init (no I/O);
+`connect(token:subdomain:resume:) async throws -> String` returns the public URL;
+`et.resumeToken` (replay via `resume:`), `et.isClosed`, `close()`.
+
+Supervised tunnel (source-checked; the CLI is built on it) - dials once (failing
+fast on bad credentials), then keeps itself alive. Publish the state straight
+into your UI.
+
+```swift
 guard let tunnel = ReconnectingEtunnel(server: "wss://t.etun.uk/tunnel", local: "3000") else {
     return  // invalid URL / route table
 }
@@ -140,4 +191,7 @@ changed top-level-async execution; if the concatenated script exits
 silently under your toolchain, wrap the example body in a `@main` struct
 with an async `main()` (the library itself builds clean on 6.x:
 `swift build` is the gate). The demo keeps `dispatchMain()` (#149-152
-follow-ups) so the process parks correctly on all versions.
+follow-ups) so the process parks correctly on all versions. Verified on 6.4.2:
+a silent exit under a pipe is usually **stdout buffering**, not the toolchain -
+`print` into a pipe/log is block-buffered, so add `fflush(stdout)` after printing
+the URL (the embed above does).
