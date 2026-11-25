@@ -42,7 +42,8 @@ PHP=""
 OUT=$(mktemp)
 cleanup() { kill $PY $PHP 2>/dev/null || true; wait $PY $PHP 2>/dev/null || true; rm -f "$OUT" "$PY_SRC"; }
 trap cleanup EXIT
-sleep 0.5
+for _ in $(seq 1 20); do curl -s -m 1 http://127.0.0.1:$API_PORT/ | grep -q ET-3001-OK && break; sleep 0.25; done
+curl -s -m 2 http://127.0.0.1:$API_PORT/ | grep -q ET-3001-OK || { echo "FAIL: api backend on :$API_PORT did not start (port in use? set API_PORT=...)"; exit 1; }
 
 ETUNNEL_SERVER=ws://localhost:8080/tunnel ET_PHP_SDK_DIR="$SDK" php -d error_reporting=E_ALL "$HERE/routes_null_embed.php" "$API_PORT" \
     > "$OUT" 2>&1 &
