@@ -26,7 +26,7 @@ import websocket  # pip install websocket-client
 # Package version - kept identical to pyproject.toml by the release stamp
 # chain (scripts/bump-release.py), so hello.client never drifts from the
 # published package version (#419).
-__version__ = "1.7.47"
+__version__ = "1.7.48"
 
 MAXP = 32768
 
