@@ -88,7 +88,7 @@ object MiniJson {
 
 object Etunnel {
   /** SDK version reported in hello.version; stamped by scripts/bump-release.py. */
-  val VERSION = "1.7.45"
+  val VERSION = "1.7.46"
 
   /** The server flagged this client as too old (error code client_outdated).
    * Terminal: retrying cannot help - the CLI must exit non-zero instead of

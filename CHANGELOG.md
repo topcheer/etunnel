@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.46 — 2026-11-26
+
+- release: hourly cadence (no code changes); SDKs report `hello.version` for the server-side client version gate (v1.7.40)
+
+## v1.7.46 — 2026-11-26
+
+- (fill in)
+
 ## v1.7.45 — 2026-11-26
 
 - release: hourly cadence (no code changes); SDKs report `hello.version` for the server-side client version gate (v1.7.40)

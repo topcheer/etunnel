@@ -17,7 +17,7 @@ const MAXP = 32768;
 final class Etunnel
 {
     /** SDK version reported in hello.version (stamped by scripts/bump-release.py). */
-    public const VERSION = '1.7.45';
+    public const VERSION = '1.7.46';
 
     public readonly string $url;
     /** Server-signed token: pass back as $resume to reclaim the subdomain. */
