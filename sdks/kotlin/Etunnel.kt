@@ -99,6 +99,11 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
     companion object {
         const val MAXP = 32768
 
+        /** SDK version reported in hello.version (PROTOCOL.md). Stamped by
+         * scripts/bump-release.py in lockstep with the VERSION file - the only
+         * place the version lives in this source. */
+        const val VERSION = "1.7.39"
+
         // Process-level shared clients (issue #51): connect() used to build two
         // fresh HttpClients per call; error paths leaked them (JDK < 21 selector
         // threads are non-daemon). The local client never goes through a system
@@ -121,6 +126,8 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
             val welcome = CountDownLatch(1)
             @Volatile var info: Map<String, Any?>? = null
             @Volatile var error: String? = null
+            @Volatile var errorCode: String? = null
+            @Volatile var errorMessage: String? = null
             val streams = ConcurrentHashMap<Int, Pair<Map<String, Any?>, ByteArrayOutputStream>>()
             val textBuf = StringBuilder()
             @Volatile lateinit var ws: WebSocket
@@ -167,7 +174,12 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
                             welcome.countDown()
                         }
                     }
-                    "error" -> { error = "${m["code"]}: ${m["message"] ?: ""}"; welcome.countDown() }
+                    "error" -> {
+                        errorCode = m["code"] as? String
+                        errorMessage = m["message"] as? String
+                        error = "${m["code"]}: ${m["message"] ?: ""}"
+                        welcome.countDown()
+                    }
                     "req" -> {
                         val sid = (m["streamId"] as Number).toInt()
                         streams[sid] = m to ByteArrayOutputStream()
@@ -384,7 +396,7 @@ the tunnel stays connected and keeps retrying for you.</div>
                 // resume: server-signed token from a previous welcome; the server then
                 // hands back the same subdomain instead of allocating a new one.
                 resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
-                append(",\"client\":\"etunnel-kotlin/1.4\"}")
+                append(",\"client\":\"etunnel-kotlin/$VERSION\",\"version\":\"$VERSION\"}")
             }
             ws.sendText(hello, true).join()
 
@@ -394,7 +406,12 @@ the tunnel stays connected and keeps retrying for you.</div>
                 try { ws.sendClose(WebSocket.NORMAL_CLOSURE, "welcome timeout") } catch (_: Exception) {}
                 throw RuntimeException("etunnel: no welcome within 15 SECONDS")
             }
-            h.error?.let { throw RuntimeException("etunnel: $it") }
+            h.error?.let {
+                // client_outdated is terminal (the message carries the Upgrade
+                // URL): its own type so the CLI can stop instead of retrying.
+                if (h.errorCode == "client_outdated") throw ClientOutdatedException(h.errorMessage ?: it)
+                throw RuntimeException("etunnel: $it")
+            }
             val info = h.info ?: error("no welcome")
             return Etunnel(info["url"] as String, info["resumeToken"] as? String ?: "", ws)
         }
@@ -408,6 +425,12 @@ the tunnel stays connected and keeps retrying for you.</div>
     }
 }
 
+/** The server rejected this client as below its SDK floor (hello.version ->
+ * error code client_outdated). Terminal: the message is the server's own, Upgrade
+ * URL included; the CLI prints it and exits 1 instead of retrying, library users
+ * may catch it specifically (it is still a RuntimeException). */
+class ClientOutdatedException(message: String) : RuntimeException(message)
+
 fun main(args: Array<String>) {
     val server = System.getenv("ETUNNEL_SERVER") ?: "wss://t.etun.uk/tunnel"
     val port = (args.getOrNull(0) ?: System.getenv("ETUNNEL_LOCAL") ?: "3000").toInt()
@@ -419,6 +442,9 @@ fun main(args: Array<String>) {
         try {
             val t = Etunnel.connect(server, port, token, subdomain)
             println("TUNNEL_URL: ${t.url}")
+        } catch (e: ClientOutdatedException) {
+            System.err.println("etunnel: ${e.message}")
+            kotlin.system.exitProcess(1)
         } catch (e: Exception) {
             System.err.println("etunnel: ${e.message}")
             kotlin.system.exitProcess(1)
@@ -436,6 +462,11 @@ fun main(args: Array<String>) {
         var t: Etunnel? = null
         try {
             t = Etunnel.connect(server, port, token, subdomain, resume.ifEmpty { null })
+        } catch (e: ClientOutdatedException) {
+            // The server's SDK floor moved past this build: print its message
+            // (Upgrade URL) once and stop - a reconnect would only re-fail.
+            System.err.println("etunnel: ${e.message}")
+            kotlin.system.exitProcess(1)
         } catch (e: Exception) {
             System.err.println("etunnel: ${e.message ?: e.toString()}")
         }

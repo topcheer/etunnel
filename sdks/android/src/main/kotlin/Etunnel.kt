@@ -212,6 +212,8 @@ internal fun ctlFrame(kind: Byte, sid: Int): ByteArray {
 class Etunnel internal constructor(val url: String, val resumeToken: String, private val ws: WebSocket) {
     companion object {
         const val MAXP = 32768
+        /** SDK version reported in hello.version; stamped by scripts/bump-release.py. */
+        const val VERSION = "1.7.39"
 
         // #282-3: #243 M2 resource caps (sdk/stream.go parity). A hostile or
         // buggy server must not be able to OOM the client.
@@ -553,6 +555,19 @@ the tunnel stays connected and keeps retrying for you.</div>
             return null
         }
 
+        /** hello frame: client string derived from VERSION plus hello.version so
+         *  the server can flag client_outdated. Extracted for unit testing
+         *  (no device needed). */
+        internal fun buildHello(subdomain: String?, token: String?, resume: String?): String = buildString {
+            append("{\"type\":\"hello\",\"proto\":1")
+            subdomain?.let { append(",\"subdomain\":\"${Json.esc(it)}\"") }
+            token?.let { append(",\"token\":\"${Json.esc(it)}\"") }
+            // resume: server-signed token from a previous welcome; the server then
+            // hands back the same subdomain instead of allocating a new one.
+            resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
+            append(",\"client\":\"etunnel-android/$VERSION\",\"version\":\"$VERSION\"}")
+        }
+
         fun connect(server: String, localPort: Int, token: String? = null, subdomain: String? = null,
                     resume: String? = null, routes: List<Route>? = null): Etunnel {
             validateLocal(localPort.toString())
@@ -565,15 +580,7 @@ the tunnel stays connected and keeps retrying for you.</div>
                     resume: String? = null, routes: List<Route>? = null): Etunnel {
             val norm = routes?.let { normalizeRoutes(it) }
             if (norm != null && norm.isEmpty()) throw IllegalArgumentException("etunnel: routes must not be empty")
-            val hello = buildString {
-                append("{\"type\":\"hello\",\"proto\":1")
-                subdomain?.let { append(",\"subdomain\":\"${Json.esc(it)}\"") }
-                token?.let { append(",\"token\":\"${Json.esc(it)}\"") }
-                // resume: server-signed token from a previous welcome; the server then
-                // hands back the same subdomain instead of allocating a new one.
-                resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
-                append(",\"client\":\"etunnel-android/1.4\"}")
-            }
+            val hello = buildHello(subdomain, token, resume)
             val h = Handler(local, norm, hello)
             // Subprotocol selection: OkHttp has no builder API for it, but it
             // honours a request Sec-WebSocket-Protocol header (and rejects the

@@ -69,7 +69,7 @@ while (!stop.IsCancellationRequested)
     {
         if (stop.IsCancellationRequested) break;
         Console.Error.WriteLine($"etunnel: {e.Message}");
-        if (!reconnect) Environment.Exit(1);
+        if (e is ClientOutdatedException || !reconnect) Environment.Exit(1);
     }
 
     var wait = BackoffMs(attempt);
@@ -90,6 +90,9 @@ static long BackoffMs(int attempt)
 
 public sealed class Etunnel
 {
+    /// <summary>SDK version reported in hello.version; stamped by scripts/bump-release.py.</summary>
+    public const string Version = "1.7.39";
+
     const int MAXP = 32768;
 
     // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
@@ -234,7 +237,7 @@ public sealed class Etunnel
         if (token != null) hello.Append($",\"token\":\"{Escape(token)}\"");
         if (!string.IsNullOrEmpty(resume))
             hello.Append($",\"resume\":\"{resume.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
-        hello.Append(",\"client\":\"etunnel-csharp/1.0\"}");
+        hello.Append($",\"client\":\"etunnel-csharp/{Version}\",\"version\":\"{Version}\"}}");
         await sender.SendText(hello.ToString());
 
         string url;
@@ -264,7 +267,12 @@ public sealed class Etunnel
                     // keep the message field: a bare code in a log is useless (#54 LOW)
                     var code = doc.GetProperty("code").GetString();
                     doc.TryGetProperty("message", out var msg);
-                    throw new Exception($"etunnel: {code}: {msg.GetString() ?? ""}");
+                    var text = $"etunnel: {code}: {msg.GetString() ?? ""}";
+                    // client_outdated is terminal (retrying cannot help): a
+                    // typed exception lets the CLI supervisor exit non-zero
+                    // instead of reconnecting forever.
+                    if (code == "client_outdated") throw new ClientOutdatedException(text);
+                    throw new Exception(text);
                 }
                 throw new Exception("etunnel: unexpected handshake message");
             }
@@ -633,6 +641,10 @@ the tunnel stays connected and keeps retrying for you.</div>
 //   var creds = await EtunnelLogin.LoginAsync("https://t.etun.uk");
 // Binds a random 127.0.0.1 port, waits for the one-time code (10-minute
 // budget), exchanges it. Persist it; pass ApiToken as the token option.
+/// <summary>The server flagged this client as too old (error code client_outdated).
+/// Terminal: the message is the server's own, Upgrade URL included.</summary>
+public sealed class ClientOutdatedException(string message) : Exception(message);
+
 public sealed record LoginCredentials(string ApiToken, IReadOnlyList<string> Subdomains, string Plan);
 
 public static class EtunnelLogin
