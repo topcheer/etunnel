@@ -20,7 +20,14 @@ ifeq ($(V),unknown)
 $(error VERSION file missing or empty - refusing to pack with unknown version)
 endif
 
-.PHONY: all verify pack-all clean-pkgs $(PACK) prereq check-versions
+.PHONY: all verify pack-all clean-pkgs $(PACK) prereq check-versions build
+
+# Production-style build: stamps server.Version so the hello.version gate
+# (client_outdated) is active. A plain `go build` leaves it "dev", which
+# switches the gate off (see server/client_version.go).
+build:
+	go build -trimpath -ldflags "-s -w -X github.com/topcheer/etunnel/server.Version=$(V)" -o etunneld ./cmd/etunneld
+	./etunneld -version
 
 all: pack-all
 

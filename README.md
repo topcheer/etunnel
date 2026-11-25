@@ -346,6 +346,13 @@ localized governing-language note.
   default 6 per minute; /24 for IPv4, /64 for IPv6). Bursts that rotate
   inside one NAT pool are rejected with `too_many_tunnels` and page the
   Telegram admin channel once per prefix per 10 minutes.
+- SDK version gate (`-client-version-lag`, default 5, `-1` disables): a
+  `hello` whose `version` is missing or more than N patches behind the
+  server (same major.minor) is rejected with `client_outdated` and a message
+  naming the download URL (`-client-download-url`). Active only on builds
+  that stamp `server.Version` (`make build`; a plain `go build` is "dev" and
+  leaves the gate off). `/stats` reports `server_version` and
+  `client_version_lag`; `etunneld -version` prints the build version.
 - Optional offline geolocation (`-geoip-db <ip2region v4 xdb>`, `-geoip-db6`
   for IPv6): Telegram tunnel-open and burst alerts gain the visitor's
   country / region / ISP (e.g. `ip 94.192.76.3 (Saudi Arabia · Eastern

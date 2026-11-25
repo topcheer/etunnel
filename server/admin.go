@@ -243,7 +243,10 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		"ledger_mode":         s.ledger.mode(),
 		"ledger_failed_total": s.ledger.failedTotal(),
 		"ledger_reconnects":   s.ledger.reconnectsTotal(),
-		"tunnels":             tunnels,
+		// Build identity + hello.version gate (Config.ClientVersionLag; -1 = off).
+		"server_version":     Version,
+		"client_version_lag": s.cfg.ClientVersionLag,
+		"tunnels":            tunnels,
 	})
 }
 

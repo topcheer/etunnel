@@ -14,10 +14,14 @@
   5. 生产 `SESSION_SECRET` 必须设置且保持稳定（同一把 key 管 OAuth 会话 cookie + `resumeToken` HMAC）：换了或丢了，重启后全员登出、断线重连只能拿到新随机子域；
   6. **发版 tag 推送账号**：打 `vX.Y.Z` tag 的 `git push` 必须用 **topcheer** 账号（推前 `gh auth status` 确认）——JSR 按 triggering actor 鉴权，`ggaidev` 不是 `ggcode` scope 成员，用它推 tag 会让 publish-jsr 报 `actorNotScopeMember`（v1.7.35 实证）。若已误推：**`gh run rerun --failed` 无效**（rerun 保留原 actor=ggaidev），正确做法是切到 topcheer（`gh auth switch -u topcheer`）后删掉并重推**同一个** tag 对象（`git push origin :refs/tags/vX.Y.Z && git push origin refs/tags/vX.Y.Z`）——**能不移动就不移动**：SwiftPM 消费者的 `Package.resolved` 会钉住 tag 的 commit，移动后报 `Revision … does not match previously recorded value`（v1.7.36 实证，需用户删 Package.resolved 重解析）；只有在确认**零发布产物**时才可移动。注意删 tag 会**连带删除 GitHub Release 对象**，重推后用 `gh release create vX.Y.Z --verify-tag --latest --notes-file <CHANGELOG 段>` 重建。
 
+7. **客户端版本门禁的上线顺序**：自 `server/client_version.go` 起，服务端会按 `hello.version` 拒绝落后超过 `-client-version-lag`（默认 5）个 patch 的 SDK（错误码 `client_outdated`）。**启用门禁的服务端必须在带 `version` 上报的 SDK 发布之后再部署**（否则所有旧 SDK 一律被拒）；构建必须经 `make build` / 带 `-X github.com/topcheer/etunnel/server.Version=$(cat VERSION)` 的 ldflags（下方命令已含），启动日志应有 `client version policy: enabled (...)`；需要临时关闭时加 `-client-version-lag -1`（或回滚到无注入的 dev 构建自动关闭）。
+
 ## 1. 构建（本地，可复现）
 
 ```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o etunneld ./cmd/etunneld
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+  -ldflags "-s -w -X github.com/topcheer/etunnel/server.Version=$(cat VERSION)" -o etunneld ./cmd/etunneld
+./etunneld -version    # 期望 etunneld <VERSION>，而非 dev（dev = 版本门禁自动关闭）
 shasum -a 256 etunneld   # 记录完整 sha256，写入下方部署记录表
 ```
 

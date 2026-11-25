@@ -140,6 +140,13 @@ type Config struct {
 	RequireToken bool
 	// MaxTunnelsPerIP limits concurrent anonymous tunnels per source IP. 0 = unlimited.
 	MaxTunnelsPerIP int
+	// ClientVersionLag is the hello.version gate: how many patches behind the
+	// server an SDK may be within the same major.minor. 0 = default (5),
+	// -1 = disabled. Older/version-less SDKs get client_outdated.
+	ClientVersionLag int
+	// ClientDownloadURL is printed in client_outdated errors (default: the
+	// project's GitHub page).
+	ClientDownloadURL string
 	// MaxTunnelsPerIP24PerMin limits NEW anonymous tunnels per network prefix
 	// (/24 IPv4, /64 IPv6) per minute. Catches burst scans that rotate inside
 	// one NAT pool, which the per-IP limit never sees. 0 = unlimited.
@@ -238,6 +245,12 @@ func (c *Config) normalize() error {
 	}
 	if !hostnamePattern.MatchString(host) {
 		return fmt.Errorf("etunnel: Domain %q is not a valid hostname", c.Domain)
+	}
+	if c.ClientVersionLag == 0 {
+		c.ClientVersionLag = defaultClientVersionLag
+	}
+	if c.ClientDownloadURL == "" {
+		c.ClientDownloadURL = defaultClientDownloadURL
 	}
 	if c.WSPath == "" {
 		c.WSPath = "/tunnel"
