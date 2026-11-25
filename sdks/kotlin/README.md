@@ -2,16 +2,38 @@
 
 Single-file SDK (`Etunnel.kt`) on the JDK HttpClient/WebSocket — zero dependencies, no Kotlin library beyond the stdlib.
 
-**Not published as its own artifact.** `Etunnel.kt` is not on Maven Central;
-the Maven Central artifact `dev.ggcode:etunnel` is the [Java SDK](../java/README.md)
-(it contains only `dev.ggcode.Etunnel*` classes). To use the Kotlin SDK, copy
-the single file into your project or compile it with `kotlinc`.
+**Published as `dev.ggcode:etunnel-kotlin` on Maven Central** (package
+`dev.ggcode.etunnel`). Use it as a Gradle/Maven dependency, or copy the single
+file into your project (`Etunnel.kt` declares `package dev.ggcode.etunnel`, so
+import from there). The Maven Central artifact `dev.ggcode:etunnel` is the
+[Java SDK](../java/README.md); `dev.ggcode:etunnel-android` the [Android AAR](../android/README.md).
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
 (default `wss://t.etun.uk/tunnel`).
 
 ## Install
+
+Gradle (Kotlin DSL) — verified with Kotlin 2.1.0 / Gradle against a live server:
+
+```kotlin
+repositories { mavenCentral() }
+dependencies {
+    implementation("dev.ggcode:etunnel-kotlin:1.7.37")   // pulls kotlin-stdlib 2.1.0
+}
+```
+
+Maven:
+
+```xml
+<dependency>
+  <groupId>dev.ggcode</groupId>
+  <artifactId>etunnel-kotlin</artifactId>
+  <version>1.7.37</version>
+</dependency>
+```
+
+Or vendor the single file (no build tool):
 
 ```sh
 curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/kotlin/Etunnel.kt
@@ -31,9 +53,11 @@ Requires JDK 11+ (uses `java.net.http.WebSocket`; no `kotlinx` libraries).
 ```text
 Integrate etunnel (Kotlin SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
 
-- Package: none - the SDK is the single file sdks/kotlin/Etunnel.kt (NOT on Maven Central; dev.ggcode:etunnel is the Java SDK) · Install: curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/kotlin/Etunnel.kt and add it to src/main/kotlin (JDK 11+, Kotlin stdlib only). Standalone CLI: kotlinc Etunnel.kt -include-runtime -d etunnel.jar && java -jar etunnel.jar 3000
+- Package: dev.ggcode:etunnel-kotlin on Maven Central (Kotlin, package dev.ggcode.etunnel; pulls kotlin-stdlib 2.1.0; JDK 11+) · Install Gradle: implementation("dev.ggcode:etunnel-kotlin:1.7.37") · Install Maven: <dependency><groupId>dev.ggcode</groupId><artifactId>etunnel-kotlin</artifactId><version>1.7.37</version></dependency> · Or vendor sdks/kotlin/Etunnel.kt (it declares package dev.ggcode.etunnel). Standalone CLI: kotlinc Etunnel.kt -include-runtime -d etunnel.jar && java -jar etunnel.jar 3000
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (token = ... or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source and run against a live server):
+import dev.ggcode.etunnel.Etunnel
+
 fun main() {
     val tunnel = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
     println("TUNNEL_URL: " + tunnel.url)
@@ -67,6 +91,8 @@ server needs a stable `SESSION_SECRET`; see PROTOCOL.md §1). Set
 ## Embed
 
 ```kotlin
+import dev.ggcode.etunnel.Etunnel
+
 fun main() {
     val tunnel = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
     println("TUNNEL_URL: " + tunnel.url)
@@ -78,7 +104,10 @@ fun main() {
 
 Compiled with `kotlinc Etunnel.kt App.kt -include-runtime -d app.jar` and run
 as `java -cp app.jar AppKt` against a live server; the printed URL served
-the local service.
+the local service. With the Maven Central artifact the same `main` ran as a
+Gradle `implementation("dev.ggcode:etunnel-kotlin:1.7.37")` project (Kotlin 2.1.0)
+and as a Maven `kotlin-maven-plugin` project - both printed the URL and the
+probe through the tunnel returned the local service.
 
 ## API
 
@@ -121,6 +150,9 @@ and `/api` to a backend - without CORS or a second tunnel. Routing is
 client-side; the protocol is unchanged (PROTOCOL.md 2).
 
 ```kotlin
+import dev.ggcode.etunnel.Etunnel
+import dev.ggcode.etunnel.Route
+
 val t = Etunnel.connect("wss://t.example.com/tunnel", 0, routes = listOf(
     Route("/api", "127.0.0.1:8080", strip = true),
     Route("/", "127.0.0.1:3000"),

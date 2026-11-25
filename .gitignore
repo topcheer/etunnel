@@ -35,7 +35,9 @@ __pycache__/
 # Java / JVM
 sdks/java/build/
 sdks/scala/build/
+sdks/scala/target/
 sdks/kotlin/build/
+sdks/kotlin/target/
 sdks/kotlin/.gradle/
 *.class
 

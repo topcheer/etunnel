@@ -9,6 +9,8 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$REPO/sdks/scala"
 
 cat > /tmp/LoginCheckS.scala <<'EOF'
+package dev.ggcode.etunnel
+
 object LoginCheckS {
   def main(args: Array[String]): Unit = {
     val c = Etunnel.login("http://" + sys.env("FX_ADDR"),
@@ -31,7 +33,7 @@ ADDR=$(grep listening "$OUT" | awk '{print $2}')
 SCALA_LIB=$(find /opt/homebrew/Cellar/scala -path '*org/scala-lang/scala-library/*' -name 'scala-library-*.jar' 2>/dev/null | grep -v sources | head -1)
 [ -n "$SCALA_LIB" ] || { echo "FAIL: scala library jar not found"; exit 1; }
 CP="/tmp/lcs:$SCALA_LIB"
-RESULT=$(FX_ADDR=$ADDR timeout 60 java -cp "$CP" LoginCheckS 2>&1) || RESULT="ERR:$RESULT"
+RESULT=$(FX_ADDR=$ADDR timeout 60 java -cp "$CP" dev.ggcode.etunnel.LoginCheckS 2>&1) || RESULT="ERR:$RESULT"
 case "$RESULT" in
   "CRED:tok-123:List(my-sub):pro") echo "PASS: loopback login start->grant->exchange" ;;
   *) echo "FAIL: $RESULT"; exit 1 ;;

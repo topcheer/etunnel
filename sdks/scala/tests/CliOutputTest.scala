@@ -7,8 +7,10 @@
 // Run (from sdks/scala; the scala-cli based `scala` runner drops into a REPL
 // for `-cp X Main`, so use java with the two Scala library jars):
 //   scalac -d /tmp/scala-out Etunnel.scala tests/CliOutputTest.scala
-//   java -cp "/tmp/scala-out:<scala3-library_3.jar>:<scala-library.jar>" CliOutputTest
+//   java -cp "/tmp/scala-out:<scala3-library_3.jar>:<scala-library.jar>" dev.ggcode.etunnel.CliOutputTest
 // (both jars resolve with: coursier fetch -p org.scala-lang:scala3-library_3:3.10.1 org.scala-lang:scala-library:2.13.16)
+package dev.ggcode.etunnel
+
 object CliOutputTest {
   def main(args: Array[String]): Unit = {
     var fails = 0

@@ -37,8 +37,8 @@ source.
 | Deno | `@ggcode/etunnel` (JSR) | `deno add jsr:@ggcode/etunnel` | `connect(server, 3000)` | [deno/](deno/README.md) |
 | Python | `etunnel` (PyPI) | `pip install etunnel` | `connect(server, 3000)` | [python/](python/README.md) |
 | Java | `dev.ggcode:etunnel` (Maven Central) | Maven / Gradle coordinates below | `Etunnel.connect(server, 3000, null)` | [java/](java/README.md) |
-| Kotlin (JVM) | single file `Etunnel.kt` (not on Maven Central) | `kotlinc Etunnel.kt -include-runtime -d etunnel.jar`, or copy the file | `Etunnel.connect(server, 3000)` | [kotlin/](kotlin/README.md) |
-| Scala | single file `Etunnel.scala` (not published) | add `Etunnel.scala` to an sbt project, or `scala Etunnel.scala -- 3000` | `Etunnel.connect(server, 3000)` | [scala/](scala/README.md) |
+| Kotlin (JVM) | `dev.ggcode:etunnel-kotlin` (Maven Central, package `dev.ggcode.etunnel`) | `implementation("dev.ggcode:etunnel-kotlin:1.7.37")`, or `kotlinc Etunnel.kt -include-runtime -d etunnel.jar`, or copy the file | `Etunnel.connect(server, 3000)` | [kotlin/](kotlin/README.md) |
+| Scala | `dev.ggcode:etunnel_2.13` / `dev.ggcode:etunnel_3` (Maven Central, package `dev.ggcode.etunnel`) | `libraryDependencies += "dev.ggcode" %% "etunnel" % "1.7.37"`, or `scala Etunnel.scala -- 3000` | `Etunnel.connect(server, 3000)` | [scala/](scala/README.md) |
 | C# | `etunnel` (NuGet) | `dotnet add package etunnel` | `await Etunnel.Connect(server, "3000")` | [csharp/](csharp/README.md) |
 | Rust | `etunnel` (crates.io) | `cargo install etunnel` | binary - spawn as child (`etunnel 3000`); no library target yet | [rust/](rust/README.md) |
 | Swift | `etunnel` (SwiftPM, **iOS 16+ / macOS 13+**) | `.package(url: "https://github.com/topcheer/etunnel.git", from: "1.7.35")` | `try await Etunnel(server: server, local: "3000")!.connect()` | [swift/](swift/README.md) |
@@ -85,6 +85,12 @@ Java / Kotlin / Android coordinates:
 ```kotlin
 implementation("dev.ggcode:etunnel:1.7.35")              // Java SDK (JVM)
 implementation("dev.ggcode:etunnel-android:1.7.35")      // Android AAR, minSdk 24
+implementation("dev.ggcode:etunnel-kotlin:1.7.37")       // Kotlin SDK (package dev.ggcode.etunnel)
+```
+
+```scala
+// Scala SDK: %% picks etunnel_2.13 / etunnel_3 from scalaVersion
+libraryDependencies += "dev.ggcode" %% "etunnel" % "1.7.37"
 ```
 
 > **Apple platforms**: the Swift SDK is an Apple-platform package (iOS 16+,

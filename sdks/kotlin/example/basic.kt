@@ -1,6 +1,8 @@
 // Minimal etunnel example (Kotlin, JDK 11+).
 //   kotlinc Etunnel.kt example/basic.kt -include-runtime -d example.jar
 //   java -jar example.jar 3000
+package dev.ggcode.etunnel
+
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 
