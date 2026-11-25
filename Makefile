@@ -135,6 +135,11 @@ endif
 pack-dart: prereq
 	cd $(Sdks)/dart && tar czf ../../$(PACK)/etunnel-dart-$(V).tar.gz etunnel.dart lib/etunnel.dart bin/etunnel.dart pubspec.yaml README.md
 
+# HarmonyOS HAR: compiled with tsc from the ArkTS source (no DevEco/hvigor SDK
+# needed - see scripts/pack-harmonyos.sh); published to ohpm by CI publish-ohpm.
+pack-harmonyos: prereq
+	./scripts/pack-harmonyos.sh
+
 pack-ruby: prereq
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent \
 	  && mv etunnel-$(RUBY_V).gem ../../$(PACK)/
@@ -171,7 +176,7 @@ pack-cpp: prereq
 # php/lua/elixir: no local toolchain — CI matrix builds them
 pack-local-only = pack-node pack-typescript pack-deno pack-python pack-java \
   pack-kotlin pack-scala pack-csharp pack-rust pack-swift pack-dart pack-ruby \
-  pack-php pack-perl pack-clojure pack-c pack-cpp
+  pack-php pack-perl pack-clojure pack-c pack-cpp pack-harmonyos
 
 pack-all: $(pack-local-only)
 	@echo ""; echo "=== $(PACK) ==="; ls -lh $(PACK) | awk 'NR>1 {printf "%-42s %s\n", $$9, $$5}'; \

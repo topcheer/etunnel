@@ -419,6 +419,29 @@ jobs:
             *) echo "::error::pub.dev probe returned HTTP ${code} - refusing to blind-publish"; exit 1 ;;
           esac
 
+  publish-ohpm:
+    # ohpm central registry (https://ohpm.openharmony.cn), npm-protocol API.
+    # No ohpm CLI in CI (not on npm; the standalone download is login-gated):
+    # scripts/pack-harmonyos.sh builds the HAR with tsc, scripts/publish-ohpm.sh
+    # does the idempotent probe + PUT with the OHPM_TOKEN secret. Probe rule
+    # (#412): only an explicit 404 counts as "not published"; anything else
+    # fails the job instead of blind-publishing.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: build HAR (tsc, no DevEco)
+        run: make pack-harmonyos
+      - name: publish to ohpm (idempotent)
+        env:
+          OHPM_TOKEN: ${{ secrets.OHPM_TOKEN }}
+        run: scripts/publish-ohpm.sh dist/packages/etunnel-harmonyos-*.har
+
   publish-jsr:
     # JSR (@ggcode/etunnel): scope linked to GitHub on jsr.io; deno publish
     # uses OIDC automatically with id-token:write.
