@@ -5,10 +5,14 @@
 //
 // Modes:
 //
-//	welcome - accept, read hello, send one welcome, keep the socket open
-//	drama   - welcome, then a req+FIN pair whose local target is expected to
-//	          be slow, then close the socket abruptly 300ms later. This is the
-//	          disconnect-while-curl-is-running scenario for the lifecycle test.
+//	welcome    - accept, read hello, send one welcome, keep the socket open
+//	drama      - welcome, then a req+FIN pair whose local target is expected to
+//	             be slow, then close the socket abruptly 300ms later. This is the
+//	             disconnect-while-curl-is-running scenario for the lifecycle test.
+//	hellocheck - verify hello.version == ET_TEST_VERSION (HELLO_VERSION_OK /
+//	             HELLO_BAD), then answer a welcome.
+//	outdated   - answer hello with {"type":"error","code":"client_outdated"}
+//	             (ET_TEST_OUTDATED_MSG overrides the text) and close.
 package main
 
 import (
@@ -19,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -70,7 +75,7 @@ func wsFrame(kind byte, sid uint32, payload []byte) []byte {
 }
 
 func main() {
-	mode := flag.String("mode", "welcome", "welcome|drama")
+	mode := flag.String("mode", "welcome", "welcome|drama|hellocheck|outdated")
 	addr := flag.String("listen", "127.0.0.1:0", "listen address")
 	certFile := flag.String("cert", "", "serve this PEM cert instead of a throwaway self-signed one")
 	keyFile := flag.String("key", "", "PEM key for -cert (required with -cert)")
@@ -90,8 +95,31 @@ func main() {
 			}
 			defer c.Close(websocket.StatusNormalClosure, "done")
 			ctx := context.Background()
-			_, _, err = c.Read(ctx) // hello
+			_, hello, err := c.Read(ctx) // hello
 			if err != nil {
+				return
+			}
+			var h struct {
+				Type    string `json:"type"`
+				Version string `json:"version"`
+			}
+			_ = json.Unmarshal(hello, &h)
+			if *mode == "hellocheck" {
+				if wantV := os.Getenv("ET_TEST_VERSION"); wantV != "" && h.Version != wantV {
+					fmt.Printf("HELLO_BAD: version %q != %q\n", h.Version, wantV)
+					return
+				}
+				fmt.Printf("HELLO_VERSION_OK %s\n", h.Version)
+				fmt.Printf("HELLO_RAW %s\n", string(hello)) // exactly what the client sent
+			}
+			if *mode == "outdated" {
+				msg := os.Getenv("ET_TEST_OUTDATED_MSG")
+				if msg == "" {
+					msg = "etunnel client 0.0.1 is too old; this server runs 9.9.9 and requires SDK >= 1.0.0. Upgrade: https://github.com/topcheer/etunnel"
+				}
+				b, _ := json.Marshal(map[string]string{"type": "error", "code": "client_outdated", "message": msg})
+				fmt.Printf("OUTDATED_SENT hello.version=%s\n", h.Version)
+				_ = c.Write(ctx, websocket.MessageText, b)
 				return
 			}
 			welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`

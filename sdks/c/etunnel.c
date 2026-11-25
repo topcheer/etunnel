@@ -70,6 +70,13 @@ static char g_resume[512]; /* server-signed token: reclaim the subdomain on reco
 static int g_local_port = 3000;
 static volatile sig_atomic_t g_stop = 0;
 
+/* SDK version reported in hello.version. Stamped from VERSION by
+ * scripts/bump-release.py (MANIFESTS entry below); -DETUNNEL_VERSION=..
+ * overrides it for out-of-tree builds. */
+#ifndef ETUNNEL_VERSION
+#define ETUNNEL_VERSION "1.7.39"
+#endif
+
 /* ---- multi-target local routing (PROTOCOL.md §2) ------------------------- */
 /* ETUNNEL_ROUTES="PREFIX=ADDR[,strip];..." (same shape as the Go CLI -route
  * flag, e.g. "/api=127.0.0.1:8080,strip;/=3000"). Longest prefix wins;
@@ -470,10 +477,12 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
         char *res_e = g_resume[0] ? json_escape_dup(g_resume) : NULL;
         char hello[2048];
         snprintf(hello, sizeof(hello),
-            "{\"type\":\"hello\",\"proto\":1%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/1.6.11\"}",
+            "{\"type\":\"hello\",\"proto\":1,\"version\":\"%s\"%s%s%s%s%s%s%s%s,\"client\":\"etunnel-c/%s\"}",
+            ETUNNEL_VERSION,
             sub_e ? ",\"subdomain\":\"" : "", sub_e ? sub_e : "", sub_e ? "\"" : "",
             tok_e ? ",\"token\":\"" : "", tok_e ? tok_e : "", tok_e ? "\"" : "",
-            res_e ? ",\"resume\":\"" : "", res_e ? res_e : "");
+            res_e ? ",\"resume\":\"" : "", res_e ? res_e : "",
+            ETUNNEL_VERSION);
         free(tok_e); free(sub_e); free(res_e);
         send_text(hello);
         break;
@@ -574,6 +583,21 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                         (long long) (json_object_get_int64(json_object_object_get(m, "ts"))));
                     send_text(pong);
                 } else if (type && !strcmp(type, "bye")) {
+                    g_stop = 1;
+                } else if (type && !strcmp(type, "error")) {
+                    /* Server error frame (protocol section 3). client_outdated and
+                     * proto_version cannot be fixed by retrying: print the server's
+                     * message verbatim and exit non-zero (the upgrade URL is in the
+                     * message). Any other code is reported and the connection ends
+                     * as before. */
+                    const char *code = json_object_get_string(json_object_object_get(m, "code"));
+                    const char *msg = json_object_get_string(json_object_object_get(m, "message"));
+                    if (code && (!strcmp(code, "client_outdated") || !strcmp(code, "proto_version"))) {
+                        fprintf(stderr, "etunnel: %s\n", msg ? msg : code);
+                        exit(2);
+                    }
+                    fprintf(stderr, "etunnel: server error: %s%s%s\n",
+                        code ? code : "", (code && msg) ? ": " : "", msg ? msg : "");
                     g_stop = 1;
                 }
                 json_object_put(m);

@@ -23,7 +23,9 @@ clean:
 
 # Regression tests (#48): each is self-contained (fixtures + ASan builds).
 # Requires Go for the test fixture server (testtools/wssserver).
+# proto_gate.sh is the handshake gate (hello.version, proto_version,
+# client_outdated); test_*.sh are the scenario regressions.
 test:
-	@for t in tests/test_*.sh; do echo "== $$t =="; sh $$t || exit 1; done
+	@for t in tests/proto_gate.sh tests/test_*.sh; do echo "== $$t =="; sh $$t || exit 1; done
 
 .PHONY: all install uninstall clean test

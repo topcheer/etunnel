@@ -19,7 +19,9 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 > **Verification status of this page:** there is no DevEco Studio / hvigor /
 > ohpm toolchain on the machine that audited this document. The HAR build
 > (`make pack-harmonyos`) is exercised - it type-checks the SDK strictly with
-> `tsc` and emits the HAR - and CI has a `publish-ohpm` job, but nothing here
+> `tsc` and emits the HAR - and CI has a `publish-ohpm` job; the wire
+> behaviour (`hello.version`, `client_outdated`) is exercised by
+> `tests/run.sh` under Node, which needs no DevEco toolchain. Nothing here
 > was executed on a device or emulator - see [Verify](#verify).
 
 ## AI agent quick-start (copy this prompt)
@@ -174,7 +176,21 @@ export function connect(server: string, local: string, opts: Options = {}): Prom
 export function startSupervise(server: string, local: string, opts: Options = {}): SupervisorHandle
 export interface SupervisorHandle { stop(): void; done: Promise<void> }
 export function configFromEnv(env: Record<string, string>): EtunnelConfig
+export const VERSION = '1.7.39'                         // stamped from VERSION by scripts/bump-release.py
+export class ServerError extends Error { code: string } // an `error` frame from the server
 ```
+
+- `hello` reports the SDK version: `version` is `VERSION` and `client` defaults
+  to `etunnel-harmonyos/<VERSION>` (unless `opts.client` is set). Captured on
+  the wire: `{"type":"hello","proto":1,"version":"1.7.39","client":"etunnel-harmonyos/1.7.39"}`.
+- When the server answers the handshake with an `error` frame, `connect()`
+  rejects with a `ServerError`: `code` is the machine-readable code and
+  `message` is the server's text verbatim. For `client_outdated` that text
+  names the required SDK floor and the upgrade URL
+  (`https://github.com/topcheer/etunnel`); `startSupervise()` treats
+  `client_outdated` and `proto_version` as permanent - it prints the message
+  and stops instead of re-dialing. An `error` frame after the handshake closes
+  the tunnel and reports `server error: <code>: <message>` through `onClose`.
 
 - `connect()` resolves only after the server's `welcome` and throws on a
   handshake error or when no welcome arrives within 15 s
@@ -249,10 +265,19 @@ scripts/publish-ohpm.sh dist/packages/etunnel-harmonyos-*.har --dry-run
 
 # full DevEco build (requires DevEco Studio / command-line tools + license)
 hvigorw assembleHar
+
+# wire tests under Node (no DevEco): compiles Etunnel.ets against types/ohos-stub.d.ts,
+# runs it on Node's WebSocket through the stubs in tests/stubs and checks against
+# the Go fixture server that hello carries version and that client_outdated
+# rejects with ServerError / stops the supervisor. Needs node >= 22, tsc, go.
+sh sdks/harmonyos/tests/run.sh
+#   PASS: hello.version == 1.7.39 (fixture: HELLO_VERSION_OK 1.7.39)
+#   PASS: client_outdated -> ServerError(code=client_outdated), message verbatim, supervisor stopped
 ```
 
-The two commands above were run locally (`tsc` 5.5.4: 0 errors; dry-run: HTTP 400
-authorization-is-invalid, exit 0). `hvigorw assembleHar` was not run. ArkTS
+`tests/run.sh` was run locally (tsc 6.0.2, Node 26: both cases PASS) - the
+first executable check of this SDK's wire behaviour that needs no DevEco toolchain.
+`make pack-harmonyos` and the dry-run were run locally by the packaging change (`tsc` 5.5.4: 0 errors; dry-run: HTTP 400 authorization-is-invalid, exit 0). `hvigorw assembleHar` was not run. ArkTS
 restrictions honoured in the source: no `any`/`unknown`, no optional-call
 syntax, no object spread, explicit interfaces for all wire messages,
 `Uint8Array`/`DataView` framing instead of `Buffer`.

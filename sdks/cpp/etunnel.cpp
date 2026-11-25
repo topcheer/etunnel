@@ -35,6 +35,13 @@ using JsonHeaders = std::map<std::string, std::vector<std::string>>;
 
 static const size_t MAXP = 32768;
 
+// SDK version reported in hello.version. Stamped from VERSION by
+// scripts/bump-release.py (MANIFESTS entry below); -DETUNNEL_VERSION=..
+// overrides it for out-of-tree builds.
+#ifndef ETUNNEL_VERSION
+#define ETUNNEL_VERSION "1.7.39"
+#endif
+
 // ---- CLI supervisor -----------------------------------------------------------
 
 // Set by SIGINT/SIGTERM only: the tunnel loop must not reconnect after it.
@@ -57,6 +64,38 @@ static std::string json_escape(const std::string &s) {
     return out;
 }
 
+// Four hex digits at `at` -> code point (JSON \uXXXX escape).
+static bool json_hex4(const std::string &j, size_t at, unsigned &cp) {
+    if (at + 4 > j.size()) return false;
+    cp = 0;
+    for (size_t k = 0; k < 4; k++) {
+        char c = j[at + k];
+        cp <<= 4;
+        if (c >= '0' && c <= '9') cp |= (unsigned) (c - '0');
+        else if (c >= 'a' && c <= 'f') cp |= (unsigned) (c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') cp |= (unsigned) (c - 'A' + 10);
+        else return false;
+    }
+    return true;
+}
+
+static void utf8_append(std::string &out, unsigned cp) {
+    if (cp < 0x80) out += (char) cp;
+    else if (cp < 0x800) {
+        out += (char) (0xC0 | (cp >> 6));
+        out += (char) (0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char) (0xE0 | (cp >> 12));
+        out += (char) (0x80 | ((cp >> 6) & 0x3F));
+        out += (char) (0x80 | (cp & 0x3F));
+    } else {
+        out += (char) (0xF0 | (cp >> 18));
+        out += (char) (0x80 | ((cp >> 12) & 0x3F));
+        out += (char) (0x80 | ((cp >> 6) & 0x3F));
+        out += (char) (0x80 | (cp & 0x3F));
+    }
+}
+
 static std::string json_str_field(const std::string &j, const std::string &key) {
     auto pat = "\"" + key + "\":";
     auto i = j.find(pat);
@@ -71,13 +110,36 @@ static std::string json_str_field(const std::string &j, const std::string &key) 
     i++;
     std::string out;
     while (i < j.size() && j[i] != '"') {
-        if (j[i] == '\\' && i + 1 < j.size()) {
-            char n = j[i + 1];
-            if (n == 'n') out += '\n';
-            else if (n == 't') out += '\t';
-            else out += n;
-            i += 2;
-        } else out += j[i++];
+        if (j[i] != '\\' || i + 1 >= j.size()) { out += j[i++]; continue; }
+        char n = j[i + 1];
+        i += 2;
+        switch (n) {
+            case 'n': out += '\n'; break;
+            case 't': out += '\t'; break;
+            case 'r': out += '\r'; break;
+            case 'b': out += '\b'; break;
+            case 'f': out += '\f'; break;
+            case 'u': {
+                // Go's encoder writes &, <, >, ', " as \uXXXX - an error
+                // message such as "requires SDK >= 1.0.0" reaches the client
+                // as "\u003e=" and must be printed verbatim. Surrogate pairs
+                // (\uD83D\uDE00) become one UTF-8 sequence.
+                unsigned cp = 0;
+                if (json_hex4(j, i, cp)) {
+                    if (cp >= 0xD800 && cp <= 0xDBFF && j.compare(i + 4, 2, "\\u") == 0) {
+                        unsigned lo = 0;
+                        if (json_hex4(j, i + 6, lo) && lo >= 0xDC00 && lo <= 0xDFFF) {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                            i += 6;
+                        }
+                    }
+                    utf8_append(out, cp);
+                    i += 4;
+                } else out += n;
+                break;
+            }
+            default: out += n;
+        }
     }
     return out;
 }
@@ -473,6 +535,17 @@ int main(int argc, char **argv) {
                 } else if (t.find("\"type\":\"req\"") != std::string::npos) {
                     uint32_t sid = (uint32_t) json_num_field(t, "streamId");
                     streams[sid] = {json_str_field(t, "method"), json_str_field(t, "path"), ""};
+                } else if (t.find("\"type\":\"error\"") != std::string::npos) {
+                    // Server error frame (protocol section 3). client_outdated and
+                    // proto_version cannot be fixed by retrying: print the server's
+                    // message verbatim (it carries the upgrade URL) and exit non-zero.
+                    const std::string code = json_str_field(t, "code");
+                    const std::string message = json_str_field(t, "message");
+                    if (code == "client_outdated" || code == "proto_version") {
+                        std::cerr << "etunnel: " << message << std::endl;
+                        std::exit(2);
+                    }
+                    std::cerr << "etunnel: server error: " << code << ": " << message << std::endl;
                 } else if (t.find("\"type\":\"ping\"") != std::string::npos) {
                     long ts = json_num_field(t, "ts");
                     websocketpp::lib::error_code ec;
@@ -521,11 +594,11 @@ int main(int argc, char **argv) {
             websocketpp::lib::error_code ec;
             std::string token = getenv("ETUNNEL_TOKEN") ? getenv("ETUNNEL_TOKEN") : "";
             std::string sub = getenv("ETUNNEL_SUBDOMAIN") ? getenv("ETUNNEL_SUBDOMAIN") : "";
-            std::string hello = "{\"type\":\"hello\",\"proto\":1";
+            std::string hello = "{\"type\":\"hello\",\"proto\":1,\"version\":\"" ETUNNEL_VERSION "\"";
             if (!sub.empty()) hello += ",\"subdomain\":\"" + json_escape(sub) + "\"";
             if (!token.empty()) hello += ",\"token\":\"" + json_escape(token) + "\"";
             if (!g_resume.empty()) hello += ",\"resume\":\"" + json_escape(g_resume) + "\"";
-            hello += ",\"client\":\"etunnel-cpp/1.6.11\"}";
+            hello += ",\"client\":\"etunnel-cpp/" ETUNNEL_VERSION "\"}";
             client->send(hdl, hello, websocketpp::frame::opcode::text, ec);
         });
         // the supervisor's only view of the connection lifecycle
