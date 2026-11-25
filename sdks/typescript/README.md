@@ -194,14 +194,15 @@ Semantics (identical in every SDK, pinned by tests): longest prefix wins; matchi
 - **`etunnel-ts` is not on npm.** `https://registry.npmjs.org/etunnel-ts` answers
   404 (checked 2026-11-24). `sdks/typescript/package.json` keeps the name, but
   nothing is published under it — do not `npm install etunnel-ts`.
-- **`tsc --strict` rejects `etunnel.ts` 1.7.36 itself** (TypeScript 5.9,
+- **Fixed in 1.7.37.** `tsc --strict` rejected `etunnel.ts` <= 1.7.36 itself (TypeScript 5.9,
   `@types/node` 22, `module`/`moduleResolution` `NodeNext`): six errors -
   `frame()` is declared with a `Buffer` payload but is called with a
   `Uint8Array` / without a payload (lines 284, 285, 301, 325), a
   `Buffer<ArrayBufferLike>` body mismatch (line 319) and, when the file would
   compile to CommonJS, the `import.meta` main guard (line 417). Runtime under
   Node's type stripping is unaffected; the npm-package path with the declaration
-  file below type-checks clean. Not fixed yet.
+  file below type-checked clean). 1.7.37 type-checks clean on every path and
+  `make verify` runs the strict check.
 - **Fixed in 1.7.36.** Importing the vendored `etunnel.ts` (<= 1.7.35) also
   started the CLI supervisor - a second tunnel plus SIGINT/SIGTERM handlers on
   the importing process; and `@easytunnel/et-sdk` 1.7.0-1.7.35 were published

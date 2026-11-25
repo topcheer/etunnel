@@ -45,8 +45,9 @@ php etunnel.php 3000                                    # single file
 php vendor/ggcode/etunnel/sdks/php/etunnel.php 3000     # after composer require
 ```
 
-Composer's `vendor/bin/etunnel.php` proxy currently exits silently (the CLI
-guard compares `realpath($argv[0])` with `__FILE__`); call the file directly.
+After `composer require`, `php vendor/bin/etunnel.php 3000` works too
+(Composer's bin proxy is recognised since 1.7.37; in <= 1.7.36 it exited
+silently - call the file under `vendor/ggcode/etunnel/sdks/php/` instead).
 
 Prints `TUNNEL_URL: https://<subdomain>.t.etun.uk` — that URL now routes to
 your local service. Ctrl-C closes the tunnel.
@@ -109,9 +110,9 @@ and `/api` to a backend - without CORS or a second tunnel. Routing is
 client-side; the protocol is unchanged (PROTOCOL.md 2).
 
 ```php
-// pass a placeholder local target: with routes the route table wins, and
-// `null` currently fatals on the first request (TypeError in serve(); still in 1.7.36)
-Etunnel::connect("wss://t.example.com/tunnel", "127.0.0.1:3000", routes: [
+// local is optional when routes are given (null since 1.7.37; a placeholder
+// port string also works - the route table always wins)
+Etunnel::connect("wss://t.example.com/tunnel", null, routes: [
     ["prefix" => "/api", "addr" => "127.0.0.1:8080", "strip" => true],
     ["prefix" => "/",    "addr" => "127.0.0.1:3000"],
 ], onUrl: fn(string $url) => print("TUNNEL_URL: $url\n"));
