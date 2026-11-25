@@ -36,13 +36,13 @@ Status of the 22 SDKs (checked against the registries on 2026-11-24 with
 | 19 | C | - | GitHub Releases | none automated | source only: the release page of v1.7.35 has no assets; build from the tag (`make etunnel`) |
 | 20 | C++ | - | GitHub Releases | none automated | source only, same as C (`cmake -B build`) |
 | 21 | Android | `dev.ggcode:etunnel-android` | Maven Central | CI `publish-android` | published (AAR) |
-| 22 | HarmonyOS | `etunnel` | ohpm | - | **not published** (pending Huawei developer account + review); copy `Etunnel.ets` from source |
+| 22 | HarmonyOS | `etunnel` | ohpm | CI `publish-ohpm` (HAR compiled by `make pack-harmonyos`, pushed over the registry's npm-protocol API) | **pending first publish**: pipeline merged; the package is not on ohpm until the maintainer runs `scripts/publish-ohpm.sh` with `OHPM_TOKEN`. Until then copy `Etunnel.ets` from source |
 
 ## CI: what runs on a tag
 
 `.github/workflows/sdk-packages.yml` runs on every `v*` tag: one `build`
 job (`go test`, `make pack-all`, `make verify`-style syntax gates, version
-gate) followed by **12 publish jobs**. All of them are idempotent: each one
+gate) followed by **13 publish jobs**. All of them are idempotent: each one
 probes the registry first and only pushes on an explicit "not found" answer
 (#411); any other probe failure fails the job instead of blind-publishing.
 
@@ -60,6 +60,7 @@ probes the registry first and only pushes on an explicit "not found" answer
 | `publish-luarocks` | `ggcode.etunnel` (`luarocks upload <rockspec>`) | API key `LUAROCKS_API_KEY` | luarocks.org account (GitHub login) | nothing special |
 | `publish-clojars` | `dev.ggcode:etunnel-clj` (`jar cf` of `etunnel.clj` + `mvn deploy:deploy-file`) | `CLOJARS_USERNAME` / `CLOJARS_TOKEN` | Clojars account | group `dev.ggcode` (Clojars groups are unverified by design) |
 | `publish-android` | `dev.ggcode:etunnel-android` AAR (vanniktech maven publish) | OIDC trusted publishing, environment `maven`, **plus** the same GPG secrets as `publish-central`; falls back to the Portal user/token | Central Portal account + GPG key | trusted publisher for namespace `dev.ggcode` / env `maven` |
+| `publish-ohpm` | `etunnel` HAR (`make pack-harmonyos` = tsc-compiled ArkTS, hvigor layout; `scripts/publish-ohpm.sh`) | publish token secret `OHPM_TOKEN` (`Authorization: Bearer`); no OIDC | ohpm.openharmony.cn account (Huawei developer) | nothing special once the name `etunnel` is free (it is: `GET /ohpm/etunnel` = 404) |
 
 Three SDKs publish with no CI job because the registry mirrors the git tag:
 the Go module proxy (`go.mod` at the repo root), SwiftPM (`Package.swift` at

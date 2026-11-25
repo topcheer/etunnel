@@ -1,9 +1,10 @@
 # etunnel for HarmonyOS
 
 ArkTS SDK (`Etunnel.ets`, `@ohos.net.websocket`). **Not on ohpm yet** - the
-`etunnel` package is unpublished (registry publishing is pending, see
-[Publishing status](#publishing-status-ohpm)); copy the source file into your
-module instead.
+`etunnel` package is unpublished; the publishing pipeline is in place
+(`make pack-harmonyos` builds the HAR, CI `publish-ohpm` pushes it) and the
+first release is pending, see [Publishing status](#publishing-status-ohpm).
+Until then copy the source file into your module instead.
 
 Single-file SDK (`Etunnel.ets`): one outbound WebSocket, zero third-party
 dependencies. Port of the [TypeScript SDK](../typescript/README.md) to the
@@ -16,10 +17,10 @@ Zero registration: every SDK client speaks the same tiny wire protocol
 (default `wss://t.etun.uk/tunnel`).
 
 > **Verification status of this page:** there is no DevEco Studio / hvigor /
-> ohpm toolchain on the machine that audited this document, and the repository
-> has no HarmonyOS CI job. Every API below was checked statically against
-> `Etunnel.ets` (signatures, defaults, log lines); nothing here was executed on
-> a device or emulator - see [Verify](#verify).
+> ohpm toolchain on the machine that audited this document. The HAR build
+> (`make pack-harmonyos`) is exercised - it type-checks the SDK strictly with
+> `tsc` and emits the HAR - and CI has a `publish-ohpm` job, but nothing here
+> was executed on a device or emulator - see [Verify](#verify).
 
 ## AI agent quick-start (copy this prompt)
 
@@ -44,7 +45,7 @@ Integrate etunnel (HarmonyOS ArkTS SDK) into this project to expose the local se
 | Language / runtime | ArkTS (HarmonyOS stage model) |
 | Transport | `@ohos.net.websocket` (subprotocol `etunnel-v1`) |
 | Local replay | `@ohos.net.http` (no `fetch` in ArkTS) |
-| Package | HAR via `oh-package.json5` + hvigor config in this directory (not published to ohpm) |
+| Package | HAR built by `make pack-harmonyos` (tsc-compiled from `Etunnel.ets`, same layout as a hvigor HAR); pushed to ohpm by CI `publish-ohpm` - not on ohpm until the first release |
 | Dependencies | none (System API only) |
 | Body model | buffered per stream (32 KiB chunks) |
 | WebSocket (101) pass-through | no - use the [Go SDK](../../sdk/README.md) |
@@ -52,11 +53,25 @@ Integrate etunnel (HarmonyOS ArkTS SDK) into this project to expose the local se
 
 ## Install
 
-**Install from source (the only working route until ohpm publishing lands):**
+**Until the first ohpm release lands, install from source:**
 
 ```sh
 cp sdks/harmonyos/Etunnel.ets <your-module>/src/main/ets/Etunnel.ets
 ```
+
+**Once published** (the package name is `etunnel`, see below):
+
+```sh
+ohpm install etunnel
+```
+
+```ts
+import { connect } from 'etunnel';   // HAR entry: index.js re-exports Etunnel.js
+```
+
+The HAR can also be installed from a local file without the registry:
+`ohpm install ./etunnel-harmonyos-<version>.har` (`make pack-harmonyos` writes
+it to `dist/packages/`).
 
 ## Embed
 
@@ -174,62 +189,73 @@ export function configFromEnv(env: Record<string, string>): EtunnelConfig
 
 ## Publishing status (ohpm)
 
-**Not published.** `etunnel` does not exist on ohpm (checked 2026-11-24); an
-`ohpm install etunnel` fails today. Publishing needs an open-source Huawei
-developer account and package review. Until it lands, install from source as
-shown above.
+**Not published yet - pipeline ready.** `etunnel` does not exist on ohpm
+(`GET https://ohpm.openharmony.cn/ohpm/etunnel` answers 404, re-checked
+2026-11-25); `ohpm install etunnel` fails until the first release.
 
-If you prefer a local HAR over copying the file, open this directory as a HAR
-module in DevEco Studio and reference it from your app; the import is then
-`import { connect } from 'etunnel';` (the name in `oh-package.json5`):
+How a release reaches ohpm:
 
-```sh
-# UNVERIFIED (no ohpm on the auditing machine): local-directory install
-ohpm install ./path/to/etunnel-harmonyos
-# or reference the directory in oh-package.json5 dependencies
-```
+1. `make pack-harmonyos` -> `dist/packages/etunnel-harmonyos-<version>.har`
+   (`scripts/pack-harmonyos.sh`: compiles `Etunnel.ets` with `tsc` into the
+   layout hvigor emits for an ArkTS-only HAR - `package/oh-package.json5`
+   with `main: index.js` / `types: index.d.ts`, `index.js`, `index.d.ts`,
+   `src/main/ets/Etunnel.{js,d.ts}`, `src/main/module.json`). The version is
+   read from `oh-package.json5`, which `bump-release.py` stamps from `VERSION`.
+2. `scripts/publish-ohpm.sh <har>` pushes it over the registry's npm-protocol
+   API (`PUT https://ohpm.openharmony.cn/ohpm/etunnel` with the tgz as a base64
+   `_attachments` entry, `Authorization: Bearer $OHPM_TOKEN`). The probe is
+   idempotent (#412): only an explicit 404 counts as "not published". CI job
+   `publish-ohpm` runs both steps on every `v*` tag with the `OHPM_TOKEN`
+   secret.
 
-This is a documented follow-up, not a blocker for the SDK itself.
+The first publish is a maintainer step (`OHPM_TOKEN=... scripts/publish-ohpm.sh
+dist/packages/etunnel-harmonyos-<version>.har`, or the tag's CI run once the
+secret is configured). After it lands, install with `ohpm install etunnel` and
+`import { connect } from 'etunnel'`. Until then, install from source as shown
+above.
 
-## CI toolchain limitation
+## CI packaging (no DevEco Studio)
 
-GitHub Actions has **no official DevEco Studio / hvigor toolchain image**, and
-the HarmonyOS command-line build (hvigor + SDK download) requires accepting
-Huawei licenses against developer accounts - there is nothing to wire a
-`publish-harmonyos` CI job to today. As a result:
+`hvigorw assembleHar` needs a hvigor *project* shell plus the OHOS SDK
+(ets-loader), which only ships with DevEco Studio / the login-gated
+"Command Line Tools" download - so CI cannot run it. Instead:
 
-- CI builds **do not** package the HAR (no `pack-harmonyos` in the workflow;
-  do not add one until an official/licensed toolchain image exists).
-- There is no automated check for this SDK in the repository; verification is
-  static (see below).
-- DevEco Studio users: open this directory as a HAR module and run
-  `hvigorw assembleHar` to build the HAR locally. The file is named after the
-  version in `oh-package.json5`, which `bump-release.py` stamps from `VERSION`
-  (`etunnel-1.7.36.har` at the time of writing; fixed in 1.7.36 - earlier
-  releases left it at 1.4.0).
+- `scripts/pack-harmonyos.sh` compiles the SDK with `tsc` (`--strict`, the
+  same ArkTS subset the file is written in; the two `@ohos.*` imports resolve
+  against `types/ohos-stub.d.ts` at build time only) and lays the result out
+  like a published HAR. `make pack-all` includes it.
+- `scripts/publish-ohpm.sh` publishes without the ohpm CLI (the CLI is on
+  neither npmjs nor the Huawei npm mirror); CI job `publish-ohpm` runs it on
+  tags.
+- **UNVERIFIED on DevEco/device:** the tsc-compiled HAR has never been loaded
+  by DevEco Studio or run on a device/emulator. The emitted module is plain ESM
+  that keeps the native `import { webSocket } from '@ohos.net.websocket'` /
+  `'@ohos.net.http'`, which is what the OHOS runtime resolves - but the first
+  `ohpm install etunnel` + build in DevEco is the real acceptance test.
 
 ## Verify
 
 ```sh
-# static, no DevEco needed: strict type check of the SDK's own code.
-# tsc rejects the .ets extension and knows nothing about @ohos.*, so copy the
-# file and hand it two untyped module stubs:
-cp sdks/harmonyos/Etunnel.ets /tmp/Etunnel.ts
-printf "declare module '@ohos.net.websocket' { export const webSocket: any; }\ndeclare module '@ohos.net.http' { export const http: any; }\n" > /tmp/ohos-stubs.d.ts
-tsc --strict --noEmit --target ES2020 --lib ES2020,DOM /tmp/ohos-stubs.d.ts /tmp/Etunnel.ts
-# -> only TS2503 "Cannot find namespace 'webSocket'/'http'" (3 hits), i.e. the
-#    platform types the stubs do not model; no errors in the SDK's own logic.
+# HAR build (no DevEco): strict tsc compile of Etunnel.ets against the build-time
+# @ohos.* stub in types/, then the hvigor HAR layout. Also run by CI publish-ohpm.
+make pack-harmonyos
+# -> dist/packages/etunnel-harmonyos-<version>.har
+
+# registry dry-run: probe (404 = not published) + PUT with an invalid token.
+# Passes when the registry rejects it at the auth layer (HTTP 400
+# "The authorization is invalid!"); the publish body itself is only validated
+# by the first real publish.
+scripts/publish-ohpm.sh dist/packages/etunnel-harmonyos-*.har --dry-run
 
 # full DevEco build (requires DevEco Studio / command-line tools + license)
 hvigorw assembleHar
 ```
 
-The `tsc` line above was run (TypeScript 6.0.2) with the result shown;
-compiling the two snippets on this page the same way gives 0 non-platform
-errors. `hvigorw assembleHar` was not run. ArkTS restrictions honoured in the source: no
-`any`/`unknown`, no optional-call syntax, no object spread, explicit
-interfaces for all wire messages, `Uint8Array`/`DataView` framing instead of
-`Buffer`.
+The two commands above were run locally (`tsc` 5.5.4: 0 errors; dry-run: HTTP 400
+authorization-is-invalid, exit 0). `hvigorw assembleHar` was not run. ArkTS
+restrictions honoured in the source: no `any`/`unknown`, no optional-call
+syntax, no object spread, explicit interfaces for all wire messages,
+`Uint8Array`/`DataView` framing instead of `Buffer`.
 
 ## Limits
 
