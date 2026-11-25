@@ -213,7 +213,7 @@ class Etunnel internal constructor(val url: String, val resumeToken: String, pri
     companion object {
         const val MAXP = 32768
         /** SDK version reported in hello.version; stamped by scripts/bump-release.py. */
-        const val VERSION = "1.7.44"
+        const val VERSION = "1.7.45"
 
         // #282-3: #243 M2 resource caps (sdk/stream.go parity). A hostile or
         // buggy server must not be able to OOM the client.

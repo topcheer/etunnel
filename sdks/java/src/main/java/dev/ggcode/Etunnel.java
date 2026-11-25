@@ -29,7 +29,7 @@ public class Etunnel {
     /** SDK version reported in hello.version (PROTOCOL.md). Stamped by
      * scripts/bump-release.py in lockstep with the VERSION file - the only
      * place the version lives in this source. */
-    public static final String VERSION = "1.7.44";
+    public static final String VERSION = "1.7.45";
 
     // Process-level shared clients (issue #51: connect() used to build two
     // fresh HttpClients per call and leaked them on error paths - on JDK < 21

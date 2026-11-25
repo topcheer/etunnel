@@ -168,7 +168,7 @@ the tunnel stays connected and keeps retrying for you.</div>
           routes)))
 
 ;; SDK version reported in hello.version; stamped by scripts/bump-release.py.
-(def version "1.7.44")
+(def version "1.7.45")
 
 (defn- handle-text
   [ws ctx m]
