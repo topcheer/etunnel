@@ -2,17 +2,35 @@
 
 Single-file SDK (`Etunnel.scala`) on the JDK HttpClient/WebSocket — zero dependencies beyond the Scala standard library.
 
-**Not published as its own artifact.** There is no `dev.ggcode:etunnel_2.13`
-or `dev.ggcode:etunnel_3` on Maven Central (the Maven Central artifact
-`dev.ggcode:etunnel` is the [Java SDK](../java/README.md)). To use the Scala
-SDK, copy the single file into your project or run it with the `scala`
-runner.
+**Published on Maven Central, cross-built:** `dev.ggcode:etunnel_2.13` and
+`dev.ggcode:etunnel_3` (package `dev.ggcode.etunnel`; with sbt just write
+`"dev.ggcode" %% "etunnel"`). Or copy the single file into your project - it
+declares `package dev.ggcode.etunnel`, so import from there. The Maven Central
+artifact `dev.ggcode:etunnel` without a suffix is the [Java SDK](../java/README.md).
 
 Zero registration: every SDK client speaks the same tiny wire protocol
 ([PROTOCOL.md](../../PROTOCOL.md)) against any etunnel server
 (default `wss://t.etun.uk/tunnel`).
 
 ## Install
+
+sbt (`%%` picks `etunnel_2.13` or `etunnel_3` from your `scalaVersion`):
+
+```scala
+libraryDependencies += "dev.ggcode" %% "etunnel" % "1.7.37"
+```
+
+Maven (Scala 3 shown; for 2.13 use `etunnel_2.13`):
+
+```xml
+<dependency>
+  <groupId>dev.ggcode</groupId>
+  <artifactId>etunnel_3</artifactId>
+  <version>1.7.37</version>
+</dependency>
+```
+
+Or run the single file without a build tool:
 
 ```sh
 curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/scala/Etunnel.scala
@@ -27,9 +45,11 @@ JDK 17). Requires JDK 11+ (`java.net.http.WebSocket`).
 ```text
 Integrate etunnel (Scala SDK) into this project to expose the local service on port 3000 at a public HTTPS URL.
 
-- Package: none - the SDK is the single file sdks/scala/Etunnel.scala (NOT on Maven Central; dev.ggcode:etunnel is the Java SDK) · Install: curl -O https://raw.githubusercontent.com/topcheer/etunnel/main/sdks/scala/Etunnel.scala and add it to src/main/scala (JDK 11+, Scala stdlib only). Standalone CLI: scala Etunnel.scala -- 3000 (Scala 3 runner; the `--` separates program arguments)
+- Package: dev.ggcode:etunnel_2.13 / dev.ggcode:etunnel_3 on Maven Central (Scala 2.13 and 3 cross-build, package dev.ggcode.etunnel; JDK 11+) · Install sbt: libraryDependencies += "dev.ggcode" %% "etunnel" % "1.7.37" · Install Maven: <dependency><groupId>dev.ggcode</groupId><artifactId>etunnel_3</artifactId><version>1.7.37</version></dependency> (etunnel_2.13 for Scala 2.13) · Or vendor sdks/scala/Etunnel.scala (it declares package dev.ggcode.etunnel). Standalone CLI: scala Etunnel.scala -- 3000 (Scala 3 runner; the `--` separates program arguments)
 - Server: wss://t.etun.uk/tunnel (override with ETUNNEL_SERVER). Anonymous tier = random subdomain, 4h TTL; custom subdomain / longer TTL need a paid token (token = "..." or ETUNNEL_TOKEN).
 - Minimal embed (verified against the SDK source and run against a live server):
+import dev.ggcode.etunnel.Etunnel
+
 object Main {
   def main(args: Array[String]): Unit = {
     val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
@@ -69,6 +89,8 @@ there instead).
 ## Embed
 
 ```scala
+import dev.ggcode.etunnel.Etunnel
+
 object Main {
   def main(args: Array[String]): Unit = {
     val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
@@ -81,7 +103,11 @@ object Main {
 Run against a live server as `scala -M Main Etunnel.scala Main.scala`
 (the runner compiles both files; `-M` picks the main object). `scalac
 Etunnel.scala Main.scala -d out` also compiles cleanly if you prefer a build
-tool.
+tool. With the Maven Central artifacts the same `Main` ran from sbt
+(`libraryDependencies += "dev.ggcode" %% "etunnel" % "1.7.37"`, scalaVersion
+3.3.9 -> `etunnel_3` and 2.13.18 -> `etunnel_2.13`) and from a Maven
+`scala-maven-plugin` project - each printed the URL and the probe through the
+tunnel returned the local service.
 
 ## API
 
@@ -124,6 +150,8 @@ and `/api` to a backend - without CORS or a second tunnel. Routing is
 client-side; the protocol is unchanged (PROTOCOL.md 2).
 
 ```scala
+import dev.ggcode.etunnel.Etunnel
+
 val t = Etunnel.connect("wss://t.example.com/tunnel", 0, routes = Seq(
   Etunnel.Route("/api", "127.0.0.1:8080", strip = true),
   Etunnel.Route("/", "127.0.0.1:3000")))

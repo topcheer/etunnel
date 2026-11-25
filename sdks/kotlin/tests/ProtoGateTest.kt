@@ -1,6 +1,8 @@
 // #338: proto gate tests - welcome.proto > 1 rejected loudly; missing proto
 // counts as v1 (PROTOCOL.md section 3 both-sides contract).
 // Run: kotlinc Etunnel.kt tests/ProtoGateTest.kt -include-runtime -d pg.jar && java -jar pg.jar
+package dev.ggcode.etunnel
+
 import java.net.http.HttpClient
 
 fun main() {

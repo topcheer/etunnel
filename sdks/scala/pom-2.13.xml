@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- dev.ggcode:etunnel_2.13 - the Scala SDK (sdks/scala/Etunnel.scala) for Scala
+       2.13 on Maven Central. Cross-built by scalac (scripts/build-central-kotlin-scala.sh)
+       into target/central/ - not by Maven: build-helper attaches the prebuilt
+       jar/sources/javadoc, the `central` profile signs them and publishes through
+       the Central Portal like sdks/java/pom.xml. Compiled with 2.13.14 (the CI
+       build job's Scala 2.13); the pom depends on the same scala-library.
+       CI: sdk-packages.yml publish-central-kotlin-scala. -->
+  <groupId>dev.ggcode</groupId>
+  <artifactId>etunnel_2.13</artifactId>
+  <version>1.7.37</version>
+  <!-- packaging pom: the pom itself is the main artifact; the prebuilt jar is
+       attached (type jar, no classifier) by build-helper below - build-helper
+       refuses a classifier-less attachment under packaging jar ("same ID as
+       the main artifact"). deploy uploads pom + jar + sources + javadoc. -->
+  <packaging>pom</packaging>
+
+  <name>etunnel_2.13</name>
+  <description>etunnel Scala SDK (Scala 2.13): expose a local JVM service on the public internet over one outbound WebSocket (JDK HttpClient, Scala standard library only)</description>
+  <url>https://github.com/topcheer/etunnel</url>
+
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer><name>etunnel authors</name></developer>
+  </developers>
+
+  <scm>
+    <url>https://github.com/topcheer/etunnel</url>
+    <connection>scm:git:https://github.com/topcheer/etunnel.git</connection>
+  </scm>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.scala-lang</groupId>
+      <artifactId>scala-library</artifactId>
+      <version>2.13.14</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <id>attach-prebuilt-jar</id>
+            <phase>generate-resources</phase>
+            <goals><goal>attach-artifact</goal></goals>
+            <configuration>
+              <artifacts>
+                <artifact>
+                  <file>${project.basedir}/target/central/${project.artifactId}-${project.version}.jar</file>
+                  <type>jar</type>
+                </artifact>
+              </artifacts>
+            </configuration>
+          </execution>
+          <execution>
+            <id>attach-prebuilt-sources</id>
+            <phase>generate-resources</phase>
+            <goals><goal>attach-artifact</goal></goals>
+            <configuration>
+              <artifacts>
+                <artifact>
+                  <file>${project.basedir}/target/central/${project.artifactId}-${project.version}-sources.jar</file>
+                  <type>jar</type>
+                  <classifier>sources</classifier>
+                </artifact>
+              </artifacts>
+            </configuration>
+          </execution>
+          <execution>
+            <id>attach-prebuilt-javadoc</id>
+            <phase>generate-resources</phase>
+            <goals><goal>attach-artifact</goal></goals>
+            <configuration>
+              <artifacts>
+                <artifact>
+                  <file>${project.basedir}/target/central/${project.artifactId}-${project.version}-javadoc.jar</file>
+                  <type>jar</type>
+                  <classifier>javadoc</classifier>
+                </artifact>
+              </artifacts>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>central</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+                <configuration>
+                  <passphrase>${env.GPG_PASSPHRASE}</passphrase>
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg><arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.12.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>true</autoPublish>
+              <waitUntil>published</waitUntil>
+              <waitMaxTime>300</waitMaxTime>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

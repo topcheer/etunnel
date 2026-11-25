@@ -21,8 +21,8 @@ Status of the 22 SDKs (checked against the registries on 2026-11-24 with
 | 4 | Deno | `@ggcode/etunnel` | JSR | CI `publish-jsr` | published |
 | 5 | Python | `etunnel` | PyPI | CI `publish-pypi` | published |
 | 6 | Java | `dev.ggcode:etunnel` | Maven Central | CI `publish-central` | published |
-| 7 | Kotlin | - | - | - | **not published anywhere**: Maven Central carries only the Java artifact (`etunnel_2.13` / `etunnel_3` answer 404); source file `Etunnel.kt`, `build.gradle.kts` is a scratch build (version 1.4.0, no publishing plugin) |
-| 8 | Scala | - | - | - | **not published anywhere**: same Central check as Kotlin; source file `Etunnel.scala`, `build.sbt` still says `com.ggcode` 1.4.0 |
+| 7 | Kotlin | `dev.ggcode:etunnel-kotlin` | Maven Central | CI `publish-central-kotlin-scala` (3-way matrix) | first release pending (tag): jar without the runtime + sources + javadoc + pom, all GPG-signed; compiled by `scripts/build-central-kotlin-scala.sh` (kotlinc, stdlib 2.1.0, `-language-version 2.1`); source declares `package dev.ggcode.etunnel` |
+| 8 | Scala | `dev.ggcode:etunnel_2.13`, `dev.ggcode:etunnel_3` | Maven Central | CI `publish-central-kotlin-scala` | first release pending (tag): cross-built by the same script with scalac 2.13.14 (the build job's Scala 2.13) and 3.3.9 LTS (TASTy readable by every 3.3+); source declares `package dev.ggcode.etunnel` |
 | 9 | C# | `etunnel` | nuget.org | CI `publish-nuget` | published (package targets `net10.0` only) |
 | 10 | Rust | `etunnel` | crates.io | CI `publish-crates` | published (binary only - the crate has no library target) |
 | 11 | Swift | `etunnel` | SwiftPM (git tag) | git tag only | published (`Package.swift` at the repo root, sources in `sdks/swift`) |
@@ -56,6 +56,7 @@ probes the registry first and only pushes on an explicit "not found" answer
 | `publish-dart` | `etunnel` (`dart pub publish --force`) | pub.dev automated publishing (OIDC); environment `pub` | Google account | automated publishing: `topcheer/etunnel` + `sdk-packages.yml` |
 | `publish-jsr` | `@ggcode/etunnel` (`deno publish --allow-dirty --no-check`) | OIDC (`id-token: write`), scope `@ggcode` linked to GitHub | GitHub login for JSR | scope `ggcode` created on jsr.io |
 | `publish-central` | `dev.ggcode:etunnel` (`mvn -B -Pcentral -f sdks/java/pom.xml deploy`) | Portal user/token secrets `MAVEN_USERNAME` / `MAVEN_PASSWORD` + GPG (`GPG_PRIVATE_KEY`, `GPG_PASSPHRASE`) | Central Portal account + GPG key | verified namespace `dev.ggcode`; sources + javadoc jars are mandatory |
+| `publish-central-kotlin-scala` | `dev.ggcode:etunnel-kotlin`, `dev.ggcode:etunnel_2.13`, `dev.ggcode:etunnel_3` (one matrix leg each: `sh scripts/build-central-kotlin-scala.sh <kotlin\|scala-2.13\|scala-3>` then `mvn -B -Pcentral -f <pom> deploy`) | the same Portal + GPG secrets as `publish-central` | Central Portal account + GPG key | jars are built outside Maven (kotlinc / scalac 2.13.14 + 3.3.9 via SDKMAN) and attached by build-helper; the javadoc jar is a hand-written javadoc-layout summary (Kotlin/Scala have no javadoc tool); idempotent per coordinate via the `repo1` pom probe (#412) |
 | `publish-crates` | `etunnel` (`cargo publish --allow-dirty`) | long-lived token `CARGO_REGISTRY_TOKEN` (crates.io has no OIDC) | crates.io account (GitHub login) | nothing special |
 | `publish-luarocks` | `ggcode.etunnel` (`luarocks upload <rockspec>`) | API key `LUAROCKS_API_KEY` | luarocks.org account (GitHub login) | nothing special |
 | `publish-clojars` | `dev.ggcode:etunnel-clj` (`jar cf` of `etunnel.clj` + `mvn deploy:deploy-file`) | `CLOJARS_USERNAME` / `CLOJARS_TOKEN` | Clojars account | group `dev.ggcode` (Clojars groups are unverified by design) |

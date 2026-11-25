@@ -1,4 +1,6 @@
 // Route table tests (same semantics table as sdks/node/route.js).
+package dev.ggcode.etunnel
+
 object RouteTest {
   var fails = 0
 

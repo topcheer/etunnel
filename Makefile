@@ -61,6 +61,21 @@ endif
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent >/dev/null && rm -f etunnel-*.gem && echo "ruby: gem ok"
 	cd $(Sdks)/perl && perl -c etunnel.pl > /dev/null && echo "perl: ok"
 	cd $(Sdks)/php && php -l etunnel.php > /dev/null && echo "php: ok"
+	# Kotlin/Scala SDKs are published to Maven Central (dev.ggcode:etunnel-kotlin,
+	# etunnel_2.13, etunnel_3): compile gates where the toolchains exist, so the
+	# published jars can never drift from a source that does not compile.
+	@if command -v kotlinc >/dev/null 2>&1; then \
+		cd $(Sdks)/kotlin && kotlinc Etunnel.kt tests/RouteTest.kt -include-runtime -d /tmp/et-verify-kotlin.jar 2>/dev/null \
+		  && java -cp /tmp/et-verify-kotlin.jar dev.ggcode.etunnel.RouteTestKt | tail -1 | grep -q PASS && echo "kotlin: ok"; \
+	else echo "kotlin: skipped (no kotlinc)"; fi
+	@if command -v scalac >/dev/null 2>&1; then \
+		rm -rf /tmp/et-verify-scala && mkdir -p /tmp/et-verify-scala && cd $(Sdks)/scala \
+		  && scalac -d /tmp/et-verify-scala Etunnel.scala tests/RouteTest.scala tests/CliOutputTest.scala 2>/dev/null; \
+		SCALA_HOME_DIR=$$(dirname $$(dirname $$(readlink -f $$(command -v scalac)))); \
+		LIB=$$(find "$$SCALA_HOME_DIR" -name 'scala3-library*.jar' -o -name 'scala-library*.jar' 2>/dev/null | tr '\n' ':'); \
+		java -cp "/tmp/et-verify-scala:$$LIB" dev.ggcode.etunnel.RouteTest | tail -1 | grep -q PASS \
+		  && java -cp "/tmp/et-verify-scala:$$LIB" dev.ggcode.etunnel.CliOutputTest | tail -1 | grep -q PASS && echo "scala: ok"; \
+	else echo "scala: skipped (no scalac)"; fi
 	# #427: strict type-check of the vendored TypeScript SDK (NodeNext, no emit).
 	# Offline on purpose: uses sdks/typescript/node_modules when present (devDependencies
 	# and package-lock are pinned - `npm ci` in sdks/typescript) and skips with a
@@ -103,12 +118,25 @@ pack-kotlin: prereq
 	cd $(Sdks)/kotlin && mkdir -p build && kotlinc Etunnel.kt -include-runtime -d ../../$(PACK)/etunnel-kotlin-$(V).jar \
 	  && echo "kotlin: compiled $(V)" \
 	  && tar czf ../../$(PACK)/etunnel-kotlin-src-$(V).tar.gz Etunnel.kt build.gradle.kts README.md
+	# Maven Central set (dev.ggcode:etunnel-kotlin): jar without the runtime +
+	# sources + javadoc + pom; signing/upload happens in CI (publish-central-kotlin-scala).
+	mkdir -p $(PACK)/maven && sh scripts/build-central-kotlin-scala.sh kotlin > /dev/null \
+	  && cp $(Sdks)/kotlin/target/central/etunnel-kotlin-$(V)*.jar $(Sdks)/kotlin/pom.xml $(PACK)/maven/ \
+	  && mv $(PACK)/maven/pom.xml $(PACK)/maven/etunnel-kotlin-$(V).pom && echo "kotlin: central set $(V)"
 
 pack-scala: prereq
 	cd $(Sdks)/scala && mkdir -p build && scalac -d build Etunnel.scala \
 	  && jar cfe ../../$(PACK)/etunnel-scala-$(V).jar Etunnel -C build . \
 	  && echo "scala: compiled $(V)" \
 	  && tar czf ../../$(PACK)/etunnel-scala-src-$(V).tar.gz Etunnel.scala build.sbt README.md
+	# Maven Central set (dev.ggcode:etunnel_2.13 + etunnel_3): cross-built jars +
+	# sources + javadoc + poms. scalac 2.13 and 3 are looked up the same way the
+	# script does (SCALAC_2_13 / SCALAC_3 override; CI installs them via SDKMAN).
+	mkdir -p $(PACK)/maven && sh scripts/build-central-kotlin-scala.sh scala-2.13 > /dev/null \
+	  && sh scripts/build-central-kotlin-scala.sh scala-3 > /dev/null \
+	  && cp $(Sdks)/scala/target/central/etunnel_2.13-$(V)*.jar $(Sdks)/scala/target/central/etunnel_3-$(V)*.jar $(PACK)/maven/ \
+	  && cp $(Sdks)/scala/pom-2.13.xml $(PACK)/maven/etunnel_2.13-$(V).pom \
+	  && cp $(Sdks)/scala/pom-3.xml $(PACK)/maven/etunnel_3-$(V).pom && echo "scala: central set $(V)"
 
 pack-csharp: prereq
 	cd $(Sdks)/csharp && dotnet pack -c Release -o ../../$(PACK) /clp:ErrorsOnly

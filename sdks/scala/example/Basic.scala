@@ -1,5 +1,7 @@
 // Minimal etunnel example (Scala 2.13/3, JDK 11+).
-//   scalac -d out Etunnel.scala example/Basic.scala && scala -cp out Basic 3000
+//   scalac -d out Etunnel.scala example/Basic.scala && scala -cp out dev.ggcode.etunnel.Basic 3000
+package dev.ggcode.etunnel
+
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 

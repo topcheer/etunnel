@@ -4,6 +4,12 @@
 // Run:   scala Etunnel.scala 3000
 // Embed: val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
 //        println(t.url)
+//
+// Published as dev.ggcode:etunnel_2.13 / dev.ggcode:etunnel_3 (Maven Central)
+// under this package: objects in the empty package cannot be referenced from
+// a consumer's own package (Scala 2.13 and 3 alike).
+package dev.ggcode.etunnel
+
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse, WebSocket}

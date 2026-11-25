@@ -2,8 +2,11 @@ plugins {
     kotlin("jvm") version "2.2.0"
 }
 
-group = "com.ggcode"
-version = "1.4.0"
+// The published artifact is dev.ggcode:etunnel-kotlin (sdks/kotlin/pom.xml, Maven
+// Central); this scratch build stays for local `gradle build` checks.
+group = "dev.ggcode"
+// read from the repo's VERSION file so it cannot drift from a release
+version = file("../../VERSION").readText().trim()
 
 kotlin {
     jvmToolchain(17)
@@ -24,7 +27,7 @@ sourceSets {
 repositories { mavenCentral() }
 
 tasks.jar {
-    manifest { attributes("Main-Class" to "EtunnelKt") }
+    manifest { attributes("Main-Class" to "dev.ggcode.etunnel.EtunnelKt") }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
 }

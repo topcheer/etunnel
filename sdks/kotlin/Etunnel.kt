@@ -4,6 +4,11 @@
 // Run:   kotlinc Etunnel.kt -include-runtime -d etunnel.jar && java -jar etunnel.jar 3000
 // Embed: val t = Etunnel.connect("wss://t.etun.uk/tunnel", 3000)
 //        println(t.url)
+//
+// Published as dev.ggcode:etunnel-kotlin (Maven Central) under this package -
+// classes in the default package cannot be imported from a consumer module.
+package dev.ggcode.etunnel
+
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.net.http.HttpClient
