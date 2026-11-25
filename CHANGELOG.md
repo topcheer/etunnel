@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.7.39 — 2026-11-25
+
+- **ci**: `publish-central-kotlin-scala` fixed - SDKMAN's second `scala` install prompted for a default in CI and aborted the job (v1.7.38 shipped the Kotlin/Scala coordinates nowhere); `make pack-kotlin/pack-scala` skip the Maven Central set when the cross compilers are absent instead of failing the release pack. No SDK code changes - this release exists so `dev.ggcode:etunnel-kotlin`, `etunnel_2.13` and `etunnel_3` reach Maven Central (PR #436, #437)
+
 ## v1.7.38 — 2026-11-25
 
 - **feat (sdks)**: Kotlin and Scala SDKs are now published to Maven Central - `dev.ggcode:etunnel-kotlin` (Kotlin 2.1, JVM 11), `dev.ggcode:etunnel_2.13` (Scala 2.13.14) and `dev.ggcode:etunnel_3` (Scala 3.3.9 LTS); both sources moved into `package dev.ggcode.etunnel` so packaged consumers can import them; CI job `publish-central-kotlin-scala` (GPG-signed jar + sources + javadoc). Verified through Gradle / Maven / sbt / scalac consumers against a live etunneld (PR #435)
