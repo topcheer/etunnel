@@ -85,6 +85,30 @@ func handle(c *websocket.Conn, mode string) {
 	if err != nil {
 		return
 	}
+	// hello.version tests (feat: report hello.version): record the raw hello
+	// JSON so a test can assert the SDK sent "version":"<V>".
+	if p := os.Getenv("ETUNNEL_FIXTURE_LOG_HELLO"); p != "" {
+		if f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			fmt.Fprintf(f, "%s\n", hello)
+			f.Close()
+		}
+	}
+	if code := os.Getenv("ETUNNEL_FIXTURE_ERROR"); code != "" {
+		// The error frame etunneld sends to a client below its SDK floor. The
+		// message is the contract the SDK must surface verbatim (Upgrade URL).
+		var h struct {
+			Version string `json:"version"`
+		}
+		_ = json.Unmarshal(hello, &h)
+		msg := os.Getenv("ETUNNEL_FIXTURE_ERROR_MESSAGE")
+		if msg == "" {
+			msg = fmt.Sprintf("etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 9.0.0. Upgrade: https://github.com/topcheer/etunnel", h.Version)
+		}
+		b, _ := json.Marshal(map[string]string{"type": "error", "code": code, "message": msg})
+		_ = c.Write(ctx, websocket.MessageText, b)
+		_ = c.Close(websocket.StatusNormalClosure, code)
+		return
+	}
 	if mode == "hellocheck" {
 		var h struct {
 			Type  string `json:"type"`

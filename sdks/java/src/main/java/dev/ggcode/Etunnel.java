@@ -26,6 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class Etunnel {
     static final int MAXP = 32768;
 
+    /** SDK version reported in hello.version (PROTOCOL.md). Stamped by
+     * scripts/bump-release.py in lockstep with the VERSION file - the only
+     * place the version lives in this source. */
+    public static final String VERSION = "1.7.39";
+
     // Process-level shared clients (issue #51: connect() used to build two
     // fresh HttpClients per call and leaked them on error paths - on JDK < 21
     // their selector threads are non-daemon and pin the process). The local
@@ -143,6 +148,10 @@ public class Etunnel {
             hello.append(",\"resume\":\"").append(jsonEsc(opts.resume)).append("\"");
         }
         hello.append(",\"client\":\"etunnel-java/1.4\"}");
+        // hello.version: lets the server answer client_outdated with an Upgrade
+        // URL instead of a cryptic rejection (PROTOCOL.md).
+        hello.append(",\"version\":\"").append(jsonEsc(VERSION)).append("\"");
+        hello.append('}');
         ws.sendText(hello.toString(), true).join();
 
         Map<String, Object> info = h.welcome.await(15, TimeUnit.SECONDS, ws);
@@ -172,13 +181,29 @@ public class Etunnel {
         return b.toString();
     }
 
+    /** The server rejected this client as below its SDK floor (hello.version ->
+     * error code client_outdated). Terminal: the message is the server's own,
+     * Upgrade URL included; the CLI prints it and exits 1 instead of retrying,
+     * library users may catch it specifically (it is still a RuntimeException). */
+    public static final class ClientOutdatedException extends RuntimeException {
+        public ClientOutdatedException(String message) { super(message); }
+    }
+
     static class WelcomeLatch {
         volatile Map<String, Object> value;
         volatile String error;
+        volatile String code;
+        volatile String message;
         final CountDownLatch latch = new CountDownLatch(1);
         Map<String, Object> await() throws Exception {
             latch.await();
-            if (error != null) throw new RuntimeException("etunnel: " + error);
+            if (error != null) {
+                // client_outdated is terminal: retrying cannot help, so it gets
+                // its own type (still a RuntimeException) carrying the server's
+                // message verbatim - it includes the Upgrade URL.
+                if ("client_outdated".equals(code)) throw new ClientOutdatedException(String.valueOf(message));
+                throw new RuntimeException("etunnel: " + error);
+            }
             return value;
         }
         /** Timed wait (issue #51: a bare await() could hang connect()
@@ -256,7 +281,9 @@ public class Etunnel {
                 welcome.latch.countDown();
                 }
             } else if ("error".equals(type)) {
-                welcome.error = str(m.get("code")) + ": " + str(m.get("message"));
+                welcome.code = str(m.get("code"));
+                welcome.message = str(m.get("message"));
+                welcome.error = welcome.code + ": " + welcome.message;
                 welcome.latch.countDown();
             } else if ("req".equals(type)) {
                 StreamBuf st = new StreamBuf();
@@ -533,6 +560,12 @@ public class Etunnel {
             o.resume = resume.isEmpty() ? null : resume;
             try {
                 t = connect(server, port, o);
+            } catch (ClientOutdatedException e) {
+                // The server's SDK floor moved past this build: say so once with
+                // the server's message (Upgrade URL) and stop - a reconnect
+                // would only hit the same error.
+                System.err.println("etunnel: " + e.getMessage());
+                System.exit(1);
             } catch (Exception e) {
                 System.err.println("etunnel: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
             }
