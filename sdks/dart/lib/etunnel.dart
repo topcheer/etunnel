@@ -12,7 +12,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 /// SDK version reported in hello.version (stamped by scripts/bump-release.py).
-const String version = '1.7.41';
+const String version = '1.7.42';
 
 const int MAXP = 32768;
 
