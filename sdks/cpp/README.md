@@ -107,6 +107,27 @@ echo "$TUNNEL_URL"      # https://<subdomain>.t.etun.uk
 # ... when done: kill %1 - the tunnel closes with the process
 ```
 
+## Handshake
+
+The `hello` frame carries the SDK version: both `"version"` and the `client`
+string come from `ETUNNEL_VERSION` in `etunnel.cpp`, which
+`scripts/bump-release.py` stamps from `VERSION` (`-DETUNNEL_VERSION=...`
+overrides it at build time). Shape when no token/subdomain is set:
+
+```json
+{"type":"hello","proto":1,"version":"1.7.39","client":"etunnel-cpp/1.7.39"}
+```
+
+Servers that predate the field ignore it. A server whose SDK floor is newer
+answers an `error` frame with code `client_outdated`; the CLI then prints the
+server's message verbatim on stderr - it names the required version and the
+upgrade URL (`https://github.com/topcheer/etunnel`) - and exits with status 2
+without retrying. `proto_version` is handled the same way. Any other `error`
+code is printed as `etunnel: server error: <code>: <message>` and the
+connection ends (the reconnect loop then applies, as before).
+`tests/test_client_version.sh` pins the version field and the
+`client_outdated` exit.
+
 ## Environment variables
 
 | Variable | Meaning | Default |

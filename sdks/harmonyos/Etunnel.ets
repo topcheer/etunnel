@@ -30,6 +30,10 @@ const MAX_WS_MSG = 128 * 1024;
 const PING_INTERVAL = 30 * 1000;
 const PING_DEADLINE = 150 * 1000;
 
+/** SDK version reported in `hello.version`. Stamped from the repository
+ * VERSION by scripts/bump-release.py (MANIFESTS entry below). */
+export const VERSION = '1.7.39';
+
 export interface Route {
   prefix: string;
   addr: string;
@@ -89,6 +93,7 @@ interface ReqMsg {
 interface HelloMsg {
   type: string;
   proto: number;
+  version?: string;
   subdomain?: string;
   token?: string;
   resume?: string;
@@ -364,7 +369,12 @@ export async function connect(server: string, local: string, opts: Options = {})
   }
 
   function buildHello(): string {
-    const hello: HelloMsg = { type: 'hello', proto: 1, client: opts.client ? opts.client : 'etunnel-harmonyos/1.4' };
+    const hello: HelloMsg = {
+      type: 'hello',
+      proto: 1,
+      version: VERSION,
+      client: opts.client ? opts.client : 'etunnel-harmonyos/' + VERSION
+    };
     if (opts.subdomain) hello.subdomain = opts.subdomain;
     if (opts.token) hello.token = opts.token;
     if (opts.resume && opts.resume.length > 0) hello.resume = opts.resume;
@@ -406,10 +416,15 @@ export async function connect(server: string, local: string, opts: Options = {})
           clearTimeout(handshakeTimer);
           if (welcomeResolve) welcomeResolve(m as Object as WelcomeMsg);
         } else if (type === 'error') {
+          // Server error frame (protocol section 3). The server's message is
+          // kept verbatim (client_outdated carries the upgrade URL); the code
+          // is on ServerError.code so callers and the supervisor can act on it.
           const code = m['code'] as string;
           const message = m['message'] as string;
           clearTimeout(handshakeTimer);
-          if (welcomeReject) welcomeReject(new Error('etunnel: server rejected: ' + code + ': ' + (message ? message : '')));
+          const se = new ServerError(code, message ? message : 'etunnel: server rejected: ' + code);
+          if (welcomeReject) welcomeReject(se);
+          return;
         }
         return;
       }
@@ -436,6 +451,9 @@ export async function connect(server: string, local: string, opts: Options = {})
         try {
           ws.close(1000, 'bye');
         } catch (e) { /* gone */ }
+      } else if (type === 'error') {
+        // Mid-session server error: end the tunnel with the server's text.
+        closeTunnel('server error: ' + (m['code'] as string) + ': ' + (m['message'] as string));
       }
       return;
     }
@@ -663,6 +681,18 @@ export interface SupervisorHandle {
   done: Promise<void>;
 }
 
+/** A `error` frame from the server (protocol section 3). `message` is the
+ * server's text verbatim - for `client_outdated` it names the required SDK
+ * floor and the upgrade URL; `code` is the machine-readable error code. */
+export class ServerError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 // #283-3: a permanently invalid server URL must not retry forever.
 const MAX_CONFIG_RETRIES = 3;
 
@@ -706,6 +736,12 @@ async function runSupervise(server: string, local: string, opts: Options,
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('etunnel: ' + msg);
+      if (e instanceof ServerError && (e.code === 'client_outdated' || e.code === 'proto_version')) {
+        // Permanent: this build is too old for the server - retrying cannot fix
+        // it. The server's message (with the upgrade URL) was printed above.
+        console.error('etunnel: supervisor stopped: ' + e.code + ' - upgrade the SDK');
+        return;
+      }
       if (isConfigError(msg)) {
         configFailures++;
         if (configFailures >= MAX_CONFIG_RETRIES) {

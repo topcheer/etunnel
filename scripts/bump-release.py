@@ -34,6 +34,12 @@ MANIFESTS = {
     "sdks/dart/pubspec.yaml":       ("regex", r'(?m)^version: .*$'),
     "sdks/ruby/etunnel.gemspec":    ("regex", r"(?m)s\.version = '[^']*'"),
     "sdks/csharp/Etunnel.csproj":   ("regex", r"<Version>[^<]*</Version>"),
+    # hello.version: the native SDKs report the source constant below (there is
+    # no package manifest for C/C++; the HarmonyOS source constant sits next to
+    # its oh-package.json5). Keep both in the stamp chain or the hello drifts.
+    "sdks/c/etunnel.c":            ("regex", r'(?m)^#define ETUNNEL_VERSION "[^"]*"'),
+    "sdks/cpp/etunnel.cpp":        ("regex", r'(?m)^#define ETUNNEL_VERSION "[^"]*"'),
+    "sdks/harmonyos/Etunnel.ets":  ("regex", r"(?m)^export const VERSION = '[^']*'"),
     "sdks/java/pom.xml":            ("nth",   ("<version>", 0)),
     "sdks/clojure/pom.xml":         ("nth",   ("<version>", 0)),
     "sdks/elixir/mix.exs":          ("regex", r'version: "[^"]*"'),

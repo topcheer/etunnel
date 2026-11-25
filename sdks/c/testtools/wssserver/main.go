@@ -11,7 +11,13 @@
 //	sink       - welcome, req+FIN, then read the client's res+DATA+FIN frames
 //	             and report how many bytes arrived (long-header regression).
 //	hellocheck - parse hello strictly; verify ET_TEST_TOKEN arrives intact
-//	             and the frame is valid JSON (escaping regression).
+//	             and the frame is valid JSON (escaping regression). With
+//	             ET_TEST_VERSION set, hello.version must equal it (printed
+//	             as HELLO_VERSION_OK / HELLO_BAD); a welcome follows so a
+//	             real client completes its handshake.
+//	outdated    - read hello, answer {"type":"error","code":"client_outdated",
+//	             "message":...} (ET_TEST_OUTDATED_MSG overrides the text)
+//	             and close - the server-side SDK floor scenario.
 //
 // Flags: -listen (default 127.0.0.1:0), -plain (no TLS; the C client tests
 // use ws:// so no certificate dance is needed - LWS verifies by default).
@@ -86,12 +92,15 @@ func handle(c *websocket.Conn, mode string) {
 	if err != nil {
 		return
 	}
+	var h struct {
+		Type    string `json:"type"`
+		Token   string `json:"token"`
+		Sub     string `json:"subdomain"`
+		Version string `json:"version"`
+	}
+	_ = json.Unmarshal(hello, &h)
+	welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`
 	if mode == "hellocheck" {
-		var h struct {
-			Type  string `json:"type"`
-			Token string `json:"token"`
-			Sub   string `json:"subdomain"`
-		}
 		if err := json.Unmarshal(hello, &h); err != nil {
 			fmt.Printf("HELLO_BAD: not valid JSON: %v\n", err)
 			return
@@ -102,9 +111,29 @@ func handle(c *websocket.Conn, mode string) {
 			return
 		}
 		fmt.Printf("HELLO_OK %s\n", h.Token)
+		fmt.Printf("HELLO_RAW %s\n", string(hello)) // exactly what the client sent
+		// hello.version: the native SDKs report their own version; when the
+		// test pins one, the hello must carry exactly that value.
+		if wantV := os.Getenv("ET_TEST_VERSION"); wantV != "" {
+			if h.Version != wantV {
+				fmt.Printf("HELLO_BAD: version %q != %q\n", h.Version, wantV)
+				return
+			}
+			fmt.Printf("HELLO_VERSION_OK %s\n", h.Version)
+		}
+		_ = c.Write(ctx, websocket.MessageText, []byte(welcome))
 		return
 	}
-	welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`
+	if mode == "outdated" {
+		msg := os.Getenv("ET_TEST_OUTDATED_MSG")
+		if msg == "" {
+			msg = "etunnel client 0.0.1 is too old; this server runs 9.9.9 and requires SDK >= 1.0.0. Upgrade: https://github.com/topcheer/etunnel"
+		}
+		b, _ := json.Marshal(map[string]string{"type": "error", "code": "client_outdated", "message": msg})
+		fmt.Printf("OUTDATED_SENT hello.version=%s\n", h.Version)
+		_ = c.Write(ctx, websocket.MessageText, b)
+		return // the deferred close ends the socket
+	}
 	// #338 batch 2: env-injectable welcome.proto for the SDK proto-gate tests
 	// (missing/unset = no proto field = v1 tolerance path).
 	if p := os.Getenv("ETUNNEL_FIXTURE_PROTO"); p != "" {
@@ -150,7 +179,7 @@ func handle(c *websocket.Conn, mode string) {
 }
 
 func main() {
-	mode := flag.String("mode", "welcome", "welcome|drama|sink|hellocheck")
+	mode := flag.String("mode", "welcome", "welcome|drama|sink|hellocheck|outdated")
 	addr := flag.String("listen", "127.0.0.1:0", "listen address")
 	plain := flag.Bool("plain", false, "serve plain ws:// (no TLS)")
 	flag.Parse()
