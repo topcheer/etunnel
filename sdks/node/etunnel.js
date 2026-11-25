@@ -12,6 +12,11 @@ const zlib = require('node:zlib');
 
 const MAXP = 32768;
 
+// SDK version reported in hello.version and used for the client string.
+// Kept identical to package.json by the release stamp chain
+// (scripts/bump-release.py stamps this literal directly).
+const VERSION = '1.7.39';
+
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
 // SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
 // the client: refuse streams over the cap with an RST, RST a stream whose
@@ -112,7 +117,7 @@ async function connect(server, local, opts = {}) {
     };
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.7.39', resume: opts.resume || undefined, policy: opts.policy || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || `etunnel-node/${VERSION}`, version: VERSION, resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
     const to = setTimeout(() => {
@@ -286,7 +291,7 @@ async function connect(server, local, opts = {}) {
   };
 }
 
-module.exports = { connect, normalizeRoutes, routeFor };
+module.exports = { connect, normalizeRoutes, routeFor, VERSION };
 
 // CLI supervisor: keep the tunnel up across drops (ETUNNEL_RECONNECT=0 opts out).
 const RETRY_MIN = 500;

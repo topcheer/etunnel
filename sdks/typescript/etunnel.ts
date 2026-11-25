@@ -12,6 +12,11 @@ import { exec } from 'node:child_process';
 
 const MAXP = 32768;
 
+// SDK version reported in hello.version and used for the client string.
+// Kept identical to package.json by the release stamp chain
+// (scripts/bump-release.py stamps this literal directly).
+export const VERSION = '1.7.39';
+
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
 // SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM
 // the client: refuse streams over the cap with an RST, RST a stream whose
@@ -170,7 +175,7 @@ export async function connect(server: string, local: string | number, opts: Opti
     ws.onerror = () => rej(new Error('ws: connect failed'));
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || 'etunnel-ts/1.7.39', resume: opts.resume || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain, token: opts.token, client: opts.client || `etunnel-ts/${VERSION}`, version: VERSION, resume: opts.resume || undefined }));
 
   const info = await new Promise<any>((res, rej) => {
     const to = setTimeout(() => {

@@ -180,6 +180,7 @@ def connect(server: str, local, opts: Optional[dict] = None) -> dict:
         "subdomain": opts.get("subdomain"),
         "token": opts.get("token"),
         "client": opts.get("client", f"etunnel-python/{__version__}"),  # #419: was a stale hardcoded /1.0
+        "version": __version__,  # hello.version: lets the server flag client_outdated
     }))
 
     # #243 M4: a handshake timeout/transport error must not leave a zombie
