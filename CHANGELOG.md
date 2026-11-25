@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.40 — 2026-11-25
+
+- **feat (protocol/server)**: client version gate. SDKs now report their own version in `hello.version`; etunneld (built with `-X github.com/topcheer/etunnel/server.Version`, `make build` / Dockerfile) refuses clients that are more than **5 patch releases behind** (or report no/invalid version) with error code `client_outdated` and a message carrying the upgrade URL (`-client-download-url`, default https://github.com/topcheer/etunnel). `-client-version-lag` (env `ETUNNEL_CLIENT_VERSION_LAG`, default 5, `-1` = off); builds without an injected version ("dev") keep the gate off. **Deploy the gated server only after an SDK release that sends `version` (this one) - older SDKs are refused otherwise** (PR #441)
+- **feat (sdks)**: all 22 SDKs + the Go SDK/CLI send `hello.version` and surface `client_outdated` verbatim (message incl. the URL, non-zero exit). Found and fixed on the way: Java's hello had `version` appended outside the JSON object, Kotlin's WIP hello lacked its closing brace, Clojure had no error-frame branch (server text lost to a 15 s timeout), C/C++/HarmonyOS dropped server `error` frames silently, Lua/Rust surfaced only the code (PR #440, #442, #443, #444)
+- **docs**: PROTOCOL.md hello field + error code + "Client version policy"; RUNBOOK deployment-order note
+
 ## v1.7.39 — 2026-11-25
 
 - **ci**: `publish-central-kotlin-scala` fixed - SDKMAN's second `scala` install prompted for a default in CI and aborted the job (v1.7.38 shipped the Kotlin/Scala coordinates nowhere); `make pack-kotlin/pack-scala` skip the Maven Central set when the cross compilers are absent instead of failing the release pack. No SDK code changes - this release exists so `dev.ggcode:etunnel-kotlin`, `etunnel_2.13` and `etunnel_3` reach Maven Central (PR #436, #437)

@@ -6,7 +6,7 @@
 -- Run: lua etunnel.lua 3000
 -- Env: ETUNNEL_SERVER, ETUNNEL_LOCAL, ETUNNEL_TOKEN, ETUNNEL_SUBDOMAIN
 
-local VERSION = "1.7.39" -- reported in hello.version (stamped by scripts/bump-release.py)
+local VERSION = "1.7.40" -- reported in hello.version (stamped by scripts/bump-release.py)
 local MAXP = 32768
 
 local function frame(kind, sid, payload)
