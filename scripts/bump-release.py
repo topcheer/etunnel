@@ -33,6 +33,12 @@ MANIFESTS = {
     "sdks/python/etunnel.py":       ("regex", r'(?m)^__version__ = "[^"]*"'),
     "sdks/dart/pubspec.yaml":       ("regex", r'(?m)^version: .*$'),
     "sdks/ruby/etunnel.gemspec":    ("regex", r"(?m)s\.version = '[^']*'"),
+    "sdks/ruby/lib/etunnel.rb":     ("regex", r"(?m)^\s*VERSION = '[^']*'"),   # hello.version source (#script batch)
+    "sdks/php/etunnel.php":         ("regex", r"(?m)const VERSION = '[^']*'"),
+    "sdks/perl/etunnel.pl":         ("regex", r"(?m)^our \$VERSION = '[^']*'"),
+    "sdks/lua/etunnel.lua":         ("regex", r'(?m)^local VERSION = "[^"]*"'),
+    "sdks/dart/lib/etunnel.dart":   ("regex", r"(?m)^const String version = '[^']*'"),
+    "sdks/swift/etunnel.swift":     ("regex", r'(?m)^public let etunnelSDKVersion = "[^"]*"'),
     "sdks/csharp/Etunnel.csproj":   ("regex", r"<Version>[^<]*</Version>"),
     "sdks/java/pom.xml":            ("nth",   ("<version>", 0)),
     "sdks/clojure/pom.xml":         ("nth",   ("<version>", 0)),

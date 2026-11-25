@@ -16,6 +16,9 @@ const MAXP = 32768;
 
 final class Etunnel
 {
+    /** SDK version reported in hello.version (stamped by scripts/bump-release.py). */
+    public const VERSION = '1.7.39';
+
     public readonly string $url;
     /** Server-signed token: pass back as $resume to reclaim the subdomain. */
     public static string $lastResumeToken = '';
@@ -123,7 +126,7 @@ final class Etunnel
             throw new RuntimeException('etunnel: websocket rejected');
         }
 
-        $hello = ['type' => 'hello', 'proto' => 1, 'client' => 'etunnel-php/1.4.0'];
+        $hello = ['type' => 'hello', 'proto' => 1, 'client' => 'etunnel-php/' . self::VERSION, 'version' => self::VERSION];
         if ($token) $hello['token'] = $token;
         if ($subdomain) $hello['subdomain'] = $subdomain;
         if ($resume !== null && $resume !== '') $hello['resume'] = $resume;

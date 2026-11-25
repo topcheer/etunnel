@@ -322,7 +322,7 @@ defmodule Etunnel do
   @impl true
   def handle_info(:etunnel_hello, state) do
     hello =
-      %{type: "hello", proto: 1, client: "etunnel-elixir/1.4"}
+      %{type: "hello", proto: 1, client: "etunnel-elixir/" <> Mix.Project.config()[:version], version: Mix.Project.config()[:version]}
       |> maybe_put(:subdomain, state.subdomain)
       |> maybe_put(:token, state.token)
       |> maybe_put(:resume, state.resume)

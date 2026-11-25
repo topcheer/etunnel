@@ -61,6 +61,26 @@ func serve(c net.Conn, first bool) {
 		return
 	}
 
+	// hello.version batch: REQUIRE_VERSION fails loudly when the hello carries
+	// no version; OUTDATED answers client_outdated with an upgrade URL that
+	// echoes the version the client reported.
+	if os.Getenv("ETUNNEL_FIXTURE_REQUIRE_VERSION") != "" && !strings.Contains(string(hello), `"version":"`) {
+		fmt.Printf("HELLO_VERSION_MISSING hello=%q\n", string(hello))
+		os.Stdout.Sync()
+		return
+	}
+	if os.Getenv("ETUNNEL_FIXTURE_OUTDATED") != "" {
+		v := "0.0.0"
+		if i := strings.Index(string(hello), `"version":"`); i >= 0 {
+			rest := string(hello)[i+len(`"version":"`):]
+			if j := strings.Index(rest, `"`); j > 0 {
+				v = rest[:j]
+			}
+		}
+		writeFrame(c, true, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://github.com/topcheer/etunnel"}`, v)))
+		return
+	}
+
 	if first {
 		welcome := fmt.Sprintf(`{"type":"welcome","url":"http://lua-test.t.test","subdomain":"lua-test","hostname":"lua-test.t.test","resumeToken":%q}`, token)
 		// #338 batch 2: env-injectable welcome.proto for the proto-gate test.

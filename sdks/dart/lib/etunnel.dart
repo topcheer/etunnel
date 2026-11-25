@@ -11,6 +11,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+/// SDK version reported in hello.version (stamped by scripts/bump-release.py).
+const String version = '1.7.39';
+
 const int MAXP = 32768;
 
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
@@ -145,11 +148,11 @@ class Etunnel {
     final ws = await WebSocket.connect(server, protocols: ['etunnel-v1']);
     final et = Etunnel._(ws, host, port, norm);
     ws.add(jsonEncode({
-      'type': 'hello', 'proto': 1,
+      'type': 'hello', 'proto': 1, 'version': version,
       if (subdomain != null) 'subdomain': subdomain,
       if (token != null) 'token': token,
       if (resume != null && resume.isNotEmpty) 'resume': resume,
-      'client': 'etunnel-dart/1.0',
+      'client': 'etunnel-dart/$version',
     }));
     // #243 M4: a failed handshake must not leave a zombie socket behind:
     // the listener is already installed, so an unclosed ws keeps serving

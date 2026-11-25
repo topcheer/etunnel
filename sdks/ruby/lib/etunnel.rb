@@ -31,6 +31,9 @@ MAXP = 32_768
 HOP = %w[connection transfer-encoding keep-alive upgrade proxy-connection te trailer content-length host].freeze
 
 module Etunnel
+  # SDK version reported in hello.version (stamped by scripts/bump-release.py).
+  VERSION = '1.7.39'.freeze
+
   def self.frame(kind, sid, payload)
     [kind].pack('C') + [sid].pack('N') + [payload.bytesize].pack('N') + payload
   end
@@ -118,7 +121,7 @@ module Etunnel
       queue << [:close, nil]
     end
 
-    hello = { type: 'hello', proto: 1, client: 'etunnel-ruby/1.0' }
+    hello = { type: 'hello', proto: 1, client: "etunnel-ruby/#{VERSION}", version: VERSION }
     hello[:token] = token if token
     hello[:subdomain] = subdomain if subdomain
     hello[:resume] = resume if resume && !resume.empty?

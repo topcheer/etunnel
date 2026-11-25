@@ -6,6 +6,7 @@
 -- Run: lua etunnel.lua 3000
 -- Env: ETUNNEL_SERVER, ETUNNEL_LOCAL, ETUNNEL_TOKEN, ETUNNEL_SUBDOMAIN
 
+local VERSION = "1.7.39" -- reported in hello.version (stamped by scripts/bump-release.py)
 local MAXP = 32768
 
 local function frame(kind, sid, payload)
@@ -318,11 +319,11 @@ local function connect(server, local_port, token, subdomain, resume, routes)
     if #routes == 0 then error("etunnel: routes must not be empty") end
   end
   local ws = Ws.connect(server)
-  local hello = '{"type":"hello","proto":1'
+  local hello = '{"type":"hello","proto":1,"version":"' .. VERSION .. '"'
   if subdomain then hello = hello .. ',"subdomain":"' .. json_escape(subdomain) .. '"' end
   if token then hello = hello .. ',"token":"' .. json_escape(token) .. '"' end
   if resume and resume ~= "" then hello = hello .. ',"resume":"' .. json_escape(resume) .. '"' end
-  hello = hello .. ',"client":"etunnel-lua/1.4.0"}'
+  hello = hello .. ',"client":"etunnel-lua/' .. VERSION .. '"}'
   ws:send_text(hello)
 
   local url, resume_token
@@ -341,7 +342,7 @@ local function connect(server, local_port, token, subdomain, resume, routes)
         resume_token = json_field_str(payload, "resumeToken")
         break
       elseif payload:find('"type":"error"', 1, true) then
-        error("etunnel: " .. (json_field_str(payload, "code") or "?"))
+        error("etunnel: " .. (json_field_str(payload, "code") or "?") .. ": " .. (json_field_str(payload, "message") or ""))
       end
     end
   end

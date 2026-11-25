@@ -3,6 +3,9 @@
 //
 // Run: swift etunnel.swift 3000
 import Foundation
+
+/// SDK version reported in hello.version (stamped by scripts/bump-release.py).
+public let etunnelSDKVersion = "1.7.39"
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -135,7 +138,7 @@ public final class Etunnel: @unchecked Sendable {
 
     public func connect(token: String? = nil, subdomain: String? = nil, resume: String? = nil) async throws -> String {
         task.resume()
-        var hello: [String: Any] = ["type": "hello", "proto": 1, "client": "etunnel-swift/1.0"]
+        var hello: [String: Any] = ["type": "hello", "proto": 1, "client": "etunnel-swift/\(etunnelSDKVersion)", "version": etunnelSDKVersion]
         if let t = token { hello["token"] = t }
         if let s = subdomain { hello["subdomain"] = s }
         if let r = resume, !r.isEmpty { hello["resume"] = r }

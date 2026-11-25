@@ -10,6 +10,7 @@ use Carp qw(croak);
 use threads;
 use threads::shared;
 use IO::Socket::SSL;
+our $VERSION = '1.7.39'; # reported in hello.version (stamped by scripts/bump-release.py)
 use IO::Select;
 use IO::Socket::INET;
 use Digest::SHA qw(sha1_base64);
@@ -300,7 +301,8 @@ sub etunnel_connect {
         ($opts->{subdomain} ? (subdomain => $opts->{subdomain}) : ()),
         ($opts->{token} ? (token => $opts->{token}) : ()),
         ($opts->{resume} ? (resume => $opts->{resume}) : ()),
-        client => 'etunnel-perl/1.0',
+        client => "etunnel-perl/$VERSION",
+        version => $VERSION,
     }));
     my $info;
     while (1) {
