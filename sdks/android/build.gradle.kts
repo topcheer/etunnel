@@ -14,7 +14,7 @@ plugins {
 // which keeps this line and the coordinates() version below in lockstep.
 // CI's sdk-packages publish-android job greps the coordinates() literal for
 // the version it idempotency-checks against Maven Central.
-version = "1.7.43"
+version = "1.7.44"
 
 android {
     namespace = "dev.ggcode.etunnel"
@@ -52,7 +52,7 @@ dependencies {
 }
 
 mavenPublishing {
-    coordinates("dev.ggcode", "etunnel-android", "1.7.43")
+    coordinates("dev.ggcode", "etunnel-android", "1.7.44")
 
     pom {
         name.set("etunnel-android")
