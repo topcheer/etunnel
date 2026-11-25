@@ -261,6 +261,7 @@ func (t *Tunnel) handshake(opts Options) error {
 		Subdomain: opts.Subdomain,
 		Token:     opts.Token,
 		Client:    opts.Client,
+		Version:   Version,
 		Resume:    opts.resume,
 		Policy:    policyJSON(opts.Policy),
 	})

@@ -48,6 +48,8 @@ MANIFESTS = {
     # oh-package.json5 is JSON5: a regex stamp leaves the file's formatting
     # (and any JSON5 syntax) intact instead of json.dumps reformatting it.
     "sdks/harmonyos/oh-package.json5": ("regex", r'(?m)^\s*"version":\s*"[^"]*"'),
+    # Go SDK semver advertised in hello.version (server client_outdated gate).
+    "sdk/version.go": ("regex", r'(?m)^const Version = "[^"]*"'),
     # Kotlin/Scala on Maven Central (feature: publish-kotlin-scala): the poms are
     # the manifests now (dev.ggcode:etunnel-kotlin / etunnel_2.13 / etunnel_3).
     "sdks/kotlin/pom.xml":         ("nth",   ("<version>", 0)),

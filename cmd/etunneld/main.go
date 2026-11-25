@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/topcheer/etunnel/server"
@@ -44,8 +45,15 @@ func main() {
 		defaultTier  = flag.String("free-tier", "free", "tier for anonymous tunnels")
 		defaultPaid  = flag.String("paid-tier", "starter", "tier for new registrations")
 		ledgerStrict = flag.Bool("ledger-strict", func() bool { v := os.Getenv("ETUNNEL_LEDGER_STRICT"); return v == "true" || v == "1" }(), "fail startup when the PG session ledger (ETUNNEL_PG_DSN) cannot connect/migrate; default degrades to journal-only and retries every 30s (#407) (env ETUNNEL_LEDGER_STRICT)")
+		clientLag    = flag.Int("client-version-lag", envInt("ETUNNEL_CLIENT_VERSION_LAG", 5), "hello.version gate: reject SDKs more than this many patches behind the server within the same major.minor (client_outdated); -1 disables. Inactive on dev builds without -X server.Version (env ETUNNEL_CLIENT_VERSION_LAG)")
+		clientURL    = flag.String("client-download-url", os.Getenv("ETUNNEL_CLIENT_DOWNLOAD_URL"), "download URL printed in client_outdated errors (default https://github.com/topcheer/etunnel) (env ETUNNEL_CLIENT_DOWNLOAD_URL)")
+		showVersion  = flag.Bool("version", false, "print etunneld's version (server.Version) and exit")
 	)
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("etunneld " + server.Version)
+		os.Exit(0)
+	}
 
 	cfg := server.Config{
 		Domain:                  *domain,
@@ -67,6 +75,8 @@ func main() {
 		DefaultTier:             *defaultTier,
 		DefaultPaidTier:         *defaultPaid,
 		LedgerStrict:            *ledgerStrict,
+		ClientVersionLag:        *clientLag,
+		ClientDownloadURL:       *clientURL,
 	}
 
 	if *tiersFile != "" {
@@ -100,4 +110,18 @@ func main() {
 		log.Fatalf("run: %v", err)
 	}
 	fmt.Println("etunneld stopped")
+}
+
+// envInt reads an integer environment variable, falling back to def when it
+// is unset or not a number (a typo must not brick startup).
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

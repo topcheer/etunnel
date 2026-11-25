@@ -7,7 +7,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/etunneld ./cmd/etunneld
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/topcheer/etunnel/server.Version=$(cat VERSION)" -o /out/etunneld ./cmd/etunneld
 
 FROM gcr.io/distroless/base-debian12:nonroot
 COPY --from=build /out/etunneld /etunneld

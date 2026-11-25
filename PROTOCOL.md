@@ -77,11 +77,15 @@ JavaScript cannot open a tunnel; run the Deno/Node SDK server-side.
 Client → server:
 
 ```json
-{"type":"hello","proto":1,"subdomain":"optional","token":"optional",
+{"type":"hello","proto":1,"version":"1.7.40","subdomain":"optional","token":"optional",
  "client":"etunnel-x/1.0","resume":"optional"}
 ```
 
 - `proto` must be `1`
+- `version` is the SDK's own semver (`major.minor.patch`, e.g. `"1.7.40"`).
+  Release servers apply the client version policy below: a missing or
+  unparseable value is rejected with `client_outdated`, so every SDK must
+  send it (the Go SDK sends `sdk.Version`, stamped from `VERSION`).
 - `subdomain` requires an API key, not a paid plan: the free tier allows
   `CustomDomains: 1` (config.go), so a free key can claim one static subdomain.
   Tunnels with no key get a random `word-word-<6-char>` name (base32,
@@ -168,6 +172,7 @@ Error codes (complete registry; every SDK surfaces them with the
 |---|---|---|
 | `bad_message` | malformed control frame (incl. invalid hello.policy) | fix client |
 | `proto_version` | client speaks an older/newer protocol than the server | upgrade client |
+| `client_outdated` | `hello.version` missing/unparseable, or older than the server's floor (see "Client version policy") | upgrade client (message names the download URL) |
 | `unauthorized` | unknown/absent API token, token revoked mid-handshake, or account tier gone | fix token |
 | `subdomain_taken` | requested subdomain is in use | pick another / resume |
 | `subdomain_plan` | plan grants no static subdomain, or the name is not in the account's domain list | upgrade / claim at `/me` |
@@ -194,6 +199,37 @@ message text), `sdk_timeout` (socket open, no welcome within 15s),
 `sdk_parse` (undecodable welcome frame). Go equivalents are the
 sentinel errors `ErrConnect`, `ErrWelcomeTimeout`, `ErrParseWelcome`
 (`errors.Is`).
+
+### Client version policy (`hello.version`)
+
+A release server knows its own semver (`server.Version`, injected with
+`-ldflags "-X github.com/topcheer/etunnel/server.Version=<VERSION>"`) and
+gates `hello.version` with `-client-version-lag N` (default 5, `-1` disables).
+With S = server and C = client (`major.minor.patch`, a missing patch is 0):
+
+| case | result |
+|---|---|
+| C missing / unparseable | reject |
+| C.major != S.major | reject unless C.major > S.major |
+| same major, C.minor != S.minor | reject unless C.minor > S.minor |
+| same major.minor, S.patch - C.patch > N | reject |
+| anything else (same, newer, within N patches) | allow |
+
+The **floor** is the oldest admitted SDK: same major.minor, patch
+`max(S.patch - N, 0)` (server 1.7.40 with N=5 -> floor 1.7.35). A rejection is
+an `error` frame with code `client_outdated`, close 1008, and one of
+
+```
+etunnel client did not report a valid version; this server runs <sv> and requires SDK >= <floor>. Upgrade: <url>
+etunnel client <cv> is too old; this server runs <sv> and requires SDK >= <floor>. Upgrade: <url>
+```
+
+(`<url>` is `-client-download-url`, default the project's GitHub page.) A
+server built **without** the ldflags injection reports `server.Version =
+"dev"`, which is not a semver: the policy switches itself off (one warning
+line at startup), so dev builds and tests never reject anyone. Deployment
+rule: enable the gate only after an SDK that sends `version` has shipped,
+otherwise every older SDK is refused (see `deploy/RUNBOOK.md`).
 
 ### 2. Request forwarding (server → client)
 

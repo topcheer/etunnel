@@ -293,6 +293,13 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("server speaks proto %d, client sent %d", protocol.ProtoVersion, hello.Proto))
 		return
 	}
+	// hello.version gate (client_version.go): after the wire check, before any
+	// account/token work, so an outdated SDK is turned away cheaply and with a
+	// message that names the floor and the download URL.
+	if err := s.clientVersion.Check(hello.Version); err != nil {
+		s.wsErrorClose(ws, protocol.ErrCodeClientOutdated, err.Error())
+		return
+	}
 
 	// Resolve account + tier. The handshake reads a private snapshot: the live
 	// *Account is mutated by billing/OAuth under the store lock, and this

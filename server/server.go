@@ -53,15 +53,18 @@ type Server struct {
 	auth           oauthConfig
 	// WebAuthn (passkey) support: lazily-created relying party and the
 	// in-flight ceremony sessions shared by its handlers.
-	waOnce   sync.Once
-	waInst   *webauthn.WebAuthn
-	waFlow   *waSessions
-	counter  Counter        // per-IP / per-account tunnel limits (mem or redis)
-	memOnce  sync.Once      // guards mem (#232)
-	mem      Counter        // local fallback while the shared counter is unavailable
-	ledger   *sessionLedger // session audit rows in PG (nil = journal-only, #69)
-	router   Router         // cluster routing (nil = single node)
-	draining atomic.Bool
+	waOnce  sync.Once
+	waInst  *webauthn.WebAuthn
+	waFlow  *waSessions
+	counter Counter        // per-IP / per-account tunnel limits (mem or redis)
+	memOnce sync.Once      // guards mem (#232)
+	mem     Counter        // local fallback while the shared counter is unavailable
+	ledger  *sessionLedger // session audit rows in PG (nil = journal-only, #69)
+	// clientVersion is the hello.version gate (see client_version.go); built
+	// once in New from Config.ClientVersionLag / Config.ClientDownloadURL.
+	clientVersion ClientVersionPolicy
+	router        Router // cluster routing (nil = single node)
+	draining      atomic.Bool
 	// cliUsed rejects replayed CLI authorization codes (auth_cli.go).
 	cliUsed cliUsedCodes
 }
@@ -96,6 +99,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	// #93: persistence failures must reach the operator log, not vanish.
 	accounts.onSaveErr = func(err error) { s.logf("accounts: persist failed: %v", err) }
+	s.clientVersion = newClientVersionPolicy(cfg.ClientVersionLag, cfg.ClientDownloadURL)
 	// Offline geolocation for Telegram pushes. A configured but unusable xdb
 	// fails startup loudly rather than silently dropping the feature.
 	geo, err := newGeoIP(cfg.GeoIPDB, cfg.GeoIPDB6)
@@ -116,6 +120,9 @@ func New(cfg Config) (*Server, error) {
 		}
 		s.logf("geoip: ip2region loaded (%s) - region labels on telegram pushes", which)
 	}
+	// hello.version gate: say at startup whether it is on, what it admits and
+	// where outdated clients are sent (see client_version.go).
+	s.logf("client version policy: %s", s.clientVersion)
 	// #18: a corrupt accounts file was preserved aside at load - say so,
 	// loudly, instead of silently running on an empty store.
 	if accounts.recoveryNote != "" {

@@ -37,6 +37,10 @@ const (
 	ErrCodePingTimeout    = "ping_timeout"
 	ErrCodeServerShutdown = "server_shutdown"
 	ErrCodeTooManyTunnels = "too_many_tunnels"
+	// ErrCodeClientOutdated rejects a hello whose version is missing, unparseable
+	// or older than the server's floor (Config.ClientVersionLag). The message
+	// names the floor and the download URL.
+	ErrCodeClientOutdated = "client_outdated"
 )
 
 // Hello is the first message, client -> server.
@@ -46,6 +50,10 @@ type Hello struct {
 	Subdomain string `json:"subdomain,omitempty"` // requested custom subdomain (plan gated)
 	Token     string `json:"token,omitempty"`     // paid plan API key
 	Client    string `json:"client,omitempty"`    // free-form client identification
+	// Version is the SDK's own semver ("1.7.40"). A release server refuses
+	// hellos without one or more than N patches behind (client_outdated);
+	// see PROTOCOL.md "Client version policy".
+	Version string `json:"version,omitempty"`
 	// Resume is a server-signed token from a previous Welcome. Reconnecting
 	// clients replay it to reclaim the same subdomain; it is self-validating
 	// (HMAC + expiry) so it survives a server restart.
