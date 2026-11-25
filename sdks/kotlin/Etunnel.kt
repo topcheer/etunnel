@@ -396,7 +396,7 @@ the tunnel stays connected and keeps retrying for you.</div>
                 // resume: server-signed token from a previous welcome; the server then
                 // hands back the same subdomain instead of allocating a new one.
                 resume?.takeIf { it.isNotEmpty() }?.let { append(",\"resume\":\"${Json.esc(it)}\"") }
-                append(",\"client\":\"etunnel-kotlin/1.4\",\"version\":\"$VERSION\"")
+                append(",\"client\":\"etunnel-kotlin/$VERSION\",\"version\":\"$VERSION\"}")
             }
             ws.sendText(hello, true).join()
 

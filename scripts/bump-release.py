@@ -33,6 +33,14 @@ MANIFESTS = {
     "sdks/python/pyproject.toml":   ("regex", r'(?m)^version = "[^"]*"'),
     # #419: hello.client version literal must track the package version.
     "sdks/python/etunnel.py":       ("regex", r'(?m)^__version__ = "[^"]*"'),
+    # JVM-group hello.version: the SDK version lives in a VERSION const per
+    # source file (client string derived from it); stamped like python's.
+    "sdks/java/src/main/java/dev/ggcode/Etunnel.java": ("regex", r'(?m)public static final String VERSION = "[^"]*"'),
+    "sdks/kotlin/Etunnel.kt":       ("regex", r'(?m)const val VERSION = "[^"]*"'),
+    "sdks/scala/Etunnel.scala":     ("regex", r'(?m)val VERSION = "[^"]*"'),
+    "sdks/clojure/etunnel.clj":     ("regex", r'(?m)\(def version "[^"]*"\)'),
+    "sdks/csharp/Etunnel.cs":       ("regex", r'(?m)public const string Version = "[^"]*"'),
+    "sdks/android/src/main/kotlin/Etunnel.kt": ("regex", r'(?m)const val VERSION = "[^"]*"'),
     "sdks/dart/pubspec.yaml":       ("regex", r'(?m)^version: .*$'),
     "sdks/ruby/etunnel.gemspec":    ("regex", r"(?m)s\.version = '[^']*'"),
     "sdks/ruby/lib/etunnel.rb":     ("regex", r"(?m)^\s*VERSION = '[^']*'"),   # hello.version source (#script batch)

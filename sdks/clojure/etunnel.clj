@@ -167,6 +167,9 @@ the tunnel stays connected and keeps retrying for you.</div>
                             query)})))
           routes)))
 
+;; SDK version reported in hello.version; stamped by scripts/bump-release.py.
+(def version "1.7.39")
+
 (defn- handle-text
   [ws ctx m]
   (case (:type m)
@@ -184,6 +187,9 @@ the tunnel stays connected and keeps retrying for you.</div>
                            (send-text! ws (json/generate-string
                                             {:type "bye" :reason "client closed"}))
                            (.join (.sendClose ws WebSocket/NORMAL_CLOSURE "bye")))}))
+    "error" (reset! (:state ctx)
+              {:error (str "etunnel: " (or (:code m) "?") ": " (or (:message m) ""))
+               :code (:code m)})
     "req" (.put ^ConcurrentHashMap (:streams ctx)
               (long (:streamId m))
               {:req m :body (java.io.ByteArrayOutputStream.)}),
@@ -279,14 +285,23 @@ the tunnel stays connected and keeps retrying for you.</div>
                (buildAsync (URI/create server) listener)
                join)
         _ (send-text! ws (json/generate-string
-                           (cond-> {:type "hello" :proto 1 :client "etunnel-clojure/1.0"}
+                           (cond-> {:type "hello" :proto 1
+                                    :client (str "etunnel-clojure/" version)
+                                    :version version}
                              subdomain (assoc :subdomain subdomain)
                              token (assoc :token token)
                              (seq resume) (assoc :resume resume))))
         deadline (+ (System/currentTimeMillis) 15000)]
     (while (and (nil? @state) (< (System/currentTimeMillis) deadline))
       (Thread/sleep 50))
-    (or @state (throw (RuntimeException. "etunnel: welcome timeout")))))
+    (let [s @state]
+      (when (nil? s)
+        (throw (RuntimeException. "etunnel: welcome timeout")))
+      (when-let [e (:error s)]
+        ;; server error frame (e.g. client_outdated): surface code + message
+        ;; verbatim instead of letting connect! time out with the text lost.
+        (throw (ex-info e {:code (:code s)})))
+      s)))
 
 (defn close!
   "Closes a tunnel opened by connect!: sends `bye` and releases the socket.
@@ -308,10 +323,17 @@ the tunnel stays connected and keeps retrying for you.</div>
   (long (* delay (+ 0.8 (* (rand) 0.4)))))
 
 (defn- try-connect!
-  "connect! that reports failures on stderr and returns nil instead of throwing."
+  "connect! that reports failures on stderr and returns nil instead of throwing.
+   client_outdated is terminal (retrying cannot help): exits non-zero."
   [server local token subdomain resume]
   (try
     (connect! server local :token token :subdomain subdomain :resume resume)
+    (catch clojure.lang.ExceptionInfo e
+      (binding [*out* *err*]
+        (println "etunnel:" (.getMessage e)))
+      (when (= (:code (ex-data e)) "client_outdated")
+        (System/exit 1))
+      nil)
     (catch Exception e
       (binding [*out* *err*]
         (println "etunnel:" (.getMessage e)))

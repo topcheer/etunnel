@@ -147,10 +147,11 @@ public class Etunnel {
         if (opts.resume != null && !opts.resume.isEmpty()) {
             hello.append(",\"resume\":\"").append(jsonEsc(opts.resume)).append("\"");
         }
-        hello.append(",\"client\":\"etunnel-java/1.4\"}");
-        // hello.version: lets the server answer client_outdated with an Upgrade
-        // URL instead of a cryptic rejection (PROTOCOL.md).
-        hello.append(",\"version\":\"").append(jsonEsc(VERSION)).append("\"");
+        // client string derived from VERSION (was a stale literal /1.4);
+        // hello.version lets the server answer client_outdated with an
+        // Upgrade URL instead of a cryptic rejection (PROTOCOL.md).
+        hello.append(",\"client\":\"etunnel-java/").append(jsonEsc(VERSION))
+             .append("\",\"version\":\"").append(jsonEsc(VERSION)).append("\"");
         hello.append('}');
         ws.sendText(hello.toString(), true).join();
 

@@ -608,4 +608,29 @@ class EtunnelSdkTest {
         assertTrue(Modifier.isPublic(toplevel.getDeclaredMethod("configFromEnv", Map::class.java).modifiers))
     }
 
+
+    // ---- hello.version + client_outdated (jvm hello.version feature) ----
+
+    @Test
+    fun helloCarriesVersionAndDerivedClient() {
+        val hello = Json.read(Etunnel.buildHello(null, null, null))
+        assertEquals("hello", hello["type"])
+        assertEquals(1L, (hello["proto"] as Number).toLong())
+        assertEquals("1.7.39", hello["version"])
+        assertEquals(Etunnel.VERSION, hello["version"])
+        assertEquals("etunnel-android/${Etunnel.VERSION}", hello["client"])
+    }
+
+    @Test
+    fun clientOutdatedSurfacesMessageWithUpgradeUrl() {
+        // server error frame client_outdated: the handler records code + the
+        // verbatim message (Upgrade URL included) -> connect() throws it.
+        val (h, _) = handlerWithWs()
+        val msg = "etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires SDK >= 1.7.0. Upgrade: https://github.com/topcheer/etunnel"
+        h.handleText("""{"type":"error","code":"client_outdated","message":"${msg}"}""")
+        val err = h.error!!
+        assertTrue("code surfaced: $err", err.contains("client_outdated"))
+        assertTrue("message verbatim: $err", err.contains(msg))
+        assertTrue("upgrade URL: $err", err.contains("https://github.com/topcheer/etunnel"))
+    }
 }

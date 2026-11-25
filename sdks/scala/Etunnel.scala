@@ -87,6 +87,14 @@ object MiniJson {
 }
 
 object Etunnel {
+  /** SDK version reported in hello.version; stamped by scripts/bump-release.py. */
+  val VERSION = "1.7.39"
+
+  /** The server flagged this client as too old (error code client_outdated).
+   * Terminal: retrying cannot help - the CLI must exit non-zero instead of
+   * reconnecting. The message is the server's own, Upgrade URL included. */
+  class ClientOutdatedException(message: String) extends RuntimeException(message)
+
   /** A live tunnel: the assigned URL plus the token that reclaims it on reconnect. */
   case class Tunnel(url: String, resumeToken: String)
 
@@ -106,6 +114,7 @@ object Etunnel {
     val welcome = new CountDownLatch(1)
     @volatile var info: Map[String, Any] = _
     @volatile var err: String = _
+    @volatile var errCode: String = _
     val streams = new ConcurrentHashMap[Int, (Map[String, Any], ByteArrayOutputStream)]()
     val textBuf = new StringBuilder
     @volatile var ws: WebSocket = _
@@ -146,7 +155,10 @@ object Etunnel {
       val m = MiniJson.read(msg)
       m.get("type").foreach {
         case "welcome" => info = m; welcome.countDown()
-        case "error"   => err = s"${m("code")}: ${m.getOrElse("message", "")}"; welcome.countDown()
+        case "error"   =>
+          err = s"${m("code")}: ${m.getOrElse("message", "")}"
+          errCode = m.getOrElse("code", "").toString
+          welcome.countDown()
         case "req" =>
           val sid = m("streamId").toString.toLong.toInt
           streams.put(sid, (m, new ByteArrayOutputStream()))
@@ -381,7 +393,7 @@ the tunnel stays connected and keeps retrying for you.</div>
     // hands back the same subdomain instead of allocating a new one.
     if (resume != null && resume.nonEmpty)
       hello.append(",\"resume\":\"").append(MiniJson.esc(resume)).append('"')
-    hello.append(",\"client\":\"etunnel-scala/1.4\"}")
+    hello.append(",\"client\":\"etunnel-scala/").append(VERSION).append("\",\"version\":\"").append(VERSION).append("\"}")
     ws.sendText(hello.toString, true).join()
 
     // Timed wait (issue #51): a bare await() hung forever if the server never
@@ -390,7 +402,11 @@ the tunnel stays connected and keeps retrying for you.</div>
       try ws.sendClose(WebSocket.NORMAL_CLOSURE, "welcome timeout") catch { case _: Exception => }
       throw new RuntimeException("etunnel: no welcome within 15 SECONDS")
     }
-    if (h.err != null) throw new RuntimeException(s"etunnel: ${h.err}")
+    if (h.err != null) {
+      // client_outdated is terminal - the CLI supervisor must not retry it.
+      if (h.errCode == "client_outdated") throw new ClientOutdatedException(s"etunnel: ${h.err}")
+      throw new RuntimeException(s"etunnel: ${h.err}")
+    }
     Tunnel(h.info("url").toString, h.info.get("resumeToken").map(_.toString).getOrElse(""))
   }
 
@@ -508,7 +524,12 @@ object Main {
     while (!stopped.get()) {
       var tunnel: Etunnel.Tunnel = null
       try tunnel = Etunnel.connect(server, port, token, subdomain, if (resume.isEmpty) null else resume)
-      catch { case e: Exception => System.err.println(s"etunnel: ${e.getMessage}") }
+      catch {
+        case e: Etunnel.ClientOutdatedException =>
+          System.err.println(s"etunnel: ${e.getMessage}")
+          sys.exit(1) // terminal: retrying an outdated client cannot succeed
+        case e: Exception => System.err.println(s"etunnel: ${e.getMessage}")
+      }
 
       if (tunnel == null) {
         if (stopped.get()) return
