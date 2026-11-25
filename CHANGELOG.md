@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.38 — 2026-11-25
+
+- **feat (sdks)**: Kotlin and Scala SDKs are now published to Maven Central - `dev.ggcode:etunnel-kotlin` (Kotlin 2.1, JVM 11), `dev.ggcode:etunnel_2.13` (Scala 2.13.14) and `dev.ggcode:etunnel_3` (Scala 3.3.9 LTS); both sources moved into `package dev.ggcode.etunnel` so packaged consumers can import them; CI job `publish-central-kotlin-scala` (GPG-signed jar + sources + javadoc). Verified through Gradle / Maven / sbt / scalac consumers against a live etunneld (PR #435)
+- **feat (harmonyos)**: ohpm publish pipeline - DevEco-free HAR build (`make pack-harmonyos`, tsc) and CI job `publish-ohpm` over the registry's npm-protocol endpoint with the `OHPM_TOKEN` secret (PR #434); first publish pending a valid ohpm publish token
+- **ci**: `make verify` gains kotlinc / scalac compile gates; `make pack-all` stages the Maven Central set under `dist/packages/maven/`
+
 ## v1.7.37 — 2026-11-25
 
 - **fix (php, #430)**: `composer require` then `php vendor/bin/etunnel.php 3000` no longer exits silently (Composer's bin proxy is recognised); multi-target routing accepts `local = null` like every other SDK (`serve()` no longer TypeErrors on the first request). Regression tests: `tests/test_composer_bin.sh`, `tests/test_routes_null.sh` (PR #432, #433)
