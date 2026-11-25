@@ -321,7 +321,11 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             hello.push_str(&format!(",\"resume\":\"{}\"", json_escape(r)));
         }
     }
-    hello.push_str(",\"client\":\"etunnel-rust/1.0\"}");
+    hello.push_str(&format!(
+        ",\"version\":\"{}\",\"client\":\"etunnel-rust/{}\"}}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_VERSION")
+    ));
     ws.lock().unwrap().send(Message::Text(hello.into())).ok();
 
     let mut url = String::new();
@@ -351,7 +355,12 @@ fn connect_local(server: &str, local: Local, token: Option<&str>, subdomain: Opt
             }
             if t.contains("\"type\":\"error\"") {
                 let code = extract_str(t, "code").unwrap_or_default();
-                return Err(format!("etunnel: {}", code));
+                let msg = extract_str(t, "message").unwrap_or_default();
+                return Err(if msg.is_empty() {
+                    format!("etunnel: {}", code)
+                } else {
+                    format!("etunnel: {}: {}", code, msg)
+                });
             }
         }
     }

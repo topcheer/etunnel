@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/coder/websocket"
 )
@@ -51,8 +52,25 @@ func wsFrame(kind byte, sid uint32, payload []byte, declaredLen uint32) []byte {
 
 func handle(c *websocket.Conn, mode string) {
 	ctx := context.Background()
-	_, _, err := c.Read(ctx) // hello
+	_, hello, err := c.Read(ctx) // hello
 	if err != nil {
+		return
+	}
+	// hello.version batch: REQUIRE_VERSION fails loudly on a version-less hello;
+	// OUTDATED answers client_outdated with an upgrade URL (echoing the reported version).
+	if os.Getenv("ETUNNEL_FIXTURE_REQUIRE_VERSION") != "" && !strings.Contains(string(hello), `"version":"`) {
+		fmt.Printf("HELLO_VERSION_MISSING hello=%q\n", string(hello))
+		return
+	}
+	if os.Getenv("ETUNNEL_FIXTURE_OUTDATED") != "" {
+		v := "0.0.0"
+		if i := strings.Index(string(hello), `"version":"`); i >= 0 {
+			rest := string(hello)[i+len(`"version":"`):]
+			if j := strings.Index(rest, `"`); j > 0 {
+				v = rest[:j]
+			}
+		}
+		_ = c.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://github.com/topcheer/etunnel"}`, v)))
 		return
 	}
 	welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`
