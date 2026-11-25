@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.41 — 2026-11-26
+
+- release: hourly cadence (no code changes); SDKs report `hello.version` for the server-side client version gate (v1.7.40)
+
+## v1.7.41 — 2026-11-26
+
+- (fill in)
+
 ## v1.7.40 — 2026-11-25
 
 - **feat (protocol/server)**: client version gate. SDKs now report their own version in `hello.version`; etunneld (built with `-X github.com/topcheer/etunnel/server.Version`, `make build` / Dockerfile) refuses clients that are more than **5 patch releases behind** (or report no/invalid version) with error code `client_outdated` and a message carrying the upgrade URL (`-client-download-url`, default https://github.com/topcheer/etunnel). `-client-version-lag` (env `ETUNNEL_CLIENT_VERSION_LAG`, default 5, `-1` = off); builds without an injected version ("dev") keep the gate off. **Deploy the gated server only after an SDK release that sends `version` (this one) - older SDKs are refused otherwise** (PR #441)

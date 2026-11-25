@@ -102,7 +102,7 @@ class Etunnel private constructor(val url: String, val resumeToken: String, priv
         /** SDK version reported in hello.version (PROTOCOL.md). Stamped by
          * scripts/bump-release.py in lockstep with the VERSION file - the only
          * place the version lives in this source. */
-        const val VERSION = "1.7.40"
+        const val VERSION = "1.7.41"
 
         // Process-level shared clients (issue #51): connect() used to build two
         // fresh HttpClients per call; error paths leaked them (JDK < 21 selector
