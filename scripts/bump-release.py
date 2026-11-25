@@ -24,9 +24,11 @@ MANIFESTS = {
     # #337-4 (LOW): keep the hello client strings and Cargo.lock in the stamp
     # chain - they used to drift (etunnel-ts/1.6.11 vs VERSION 1.7.29,
     # Cargo.lock stuck at 1.7.28).
-    "sdks/node/etunnel.js":         ("regex",  r"(?m)etunnel-node/[0-9]+\.[0-9]+\.[0-9]+"),
-    "sdks/typescript/etunnel.ts":   ("regex",  r"(?m)etunnel-ts/[0-9]+\.[0-9]+\.[0-9]+"),
-    "sdks/deno/etunnel.ts":         ("regex",  r"(?m)etunnel-deno/[0-9]+\.[0-9]+\.[0-9]+"),
+    # hello.version feature: the version now lives in a VERSION const (the
+    # client string is derived from it), so the stamp targets the const.
+    "sdks/node/etunnel.js":         ("regex",  r"(?m)^const VERSION = '[^']*'"),
+    "sdks/typescript/etunnel.ts":   ("regex",  r"(?m)^export const VERSION = '[^']*'"),
+    "sdks/deno/etunnel.ts":         ("regex",  r"(?m)^export const VERSION = '[^']*'"),
     "sdks/rust/Cargo.lock":         ("regex",  r'(?m)name = "etunnel"\nversion = "[^"]*"'),
     "sdks/python/pyproject.toml":   ("regex", r'(?m)^version = "[^"]*"'),
     # #419: hello.client version literal must track the package version.
