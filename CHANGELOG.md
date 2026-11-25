@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.37 — 2026-11-25
+
+- **fix (php, #430)**: `composer require` then `php vendor/bin/etunnel.php 3000` no longer exits silently (Composer's bin proxy is recognised); multi-target routing accepts `local = null` like every other SDK (`serve()` no longer TypeErrors on the first request). Regression tests: `tests/test_composer_bin.sh`, `tests/test_routes_null.sh` (PR #432, #433)
+- **fix (typescript, #427)**: `tsc --strict` (TS 5.9, NodeNext) is clean for `sdks/typescript/etunnel.ts` itself - `frame()` takes `Uint8Array`, the ESM `import.meta` guard is used consistently, the manifest declares `"type": "module"`; `make verify` runs the strict check offline (PR #432)
+- **ci**: `make verify` now also runs `php -l` (PR #432)
+
 ## v1.7.36 — 2026-11-25
 
 - **fix (sdks, P0)**: npm `@easytunnel/et-sdk` 1.7.0-1.7.35 shipped without `route.js` (package `files` whitelist) - `require()` and the CLI crashed on every install; fixed + CI now smoke-tests the packed tarball before publishing (PR #419)

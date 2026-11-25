@@ -112,7 +112,7 @@ async function connect(server, local, opts = {}) {
     };
   });
 
-  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.7.36', resume: opts.resume || undefined, policy: opts.policy || undefined }));
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, subdomain: opts.subdomain || undefined, token: opts.token || undefined, client: opts.client || 'etunnel-node/1.7.37', resume: opts.resume || undefined, policy: opts.policy || undefined }));
 
   const info = await new Promise((res, rej) => {
     const to = setTimeout(() => {
