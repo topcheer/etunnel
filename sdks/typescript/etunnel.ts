@@ -15,7 +15,7 @@ const MAXP = 32768;
 // SDK version reported in hello.version and used for the client string.
 // Kept identical to package.json by the release stamp chain
 // (scripts/bump-release.py stamps this literal directly).
-export const VERSION = '1.7.46';
+export const VERSION = '1.7.47';
 
 // #243 M2: Go-parity resource limits (sdk/stream.go: maxClientStreams=256,
 // SetReadLimit(128KiB)). A hostile or buggy server must not be able to OOM

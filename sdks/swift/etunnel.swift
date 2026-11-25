@@ -5,7 +5,7 @@
 import Foundation
 
 /// SDK version reported in hello.version (stamped by scripts/bump-release.py).
-public let etunnelSDKVersion = "1.7.46"
+public let etunnelSDKVersion = "1.7.47"
 #if canImport(AppKit)
 import AppKit
 #endif

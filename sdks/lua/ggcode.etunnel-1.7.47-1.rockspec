@@ -1,8 +1,8 @@
 package = "ggcode.etunnel"
-version = "1.7.46-1"
+version = "1.7.47-1"
 source = {
   url = "git+https://github.com/topcheer/etunnel",
-  tag = "v1.7.46"
+  tag = "v1.7.47"
 }
 description = {
   summary = "Expose local services to the internet in one line of code: instant public HTTPS URLs with automatic TLS, through NAT and firewalls, no signup.",
