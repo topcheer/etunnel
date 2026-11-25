@@ -1,0 +1,19 @@
+{
+  // Type-check gate for the vendored SDK (#427): `tsc -p sdks/typescript/tsconfig.json`
+  // must be clean under strict + NodeNext. Pin: `make verify` runs it when
+  // sdks/typescript/node_modules exists (npm ci; no network at verify time).
+  // Runtime stays Node's type stripping (main is etunnel.ts) - this file only
+  // checks, it never emits.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["etunnel.ts"]
+}

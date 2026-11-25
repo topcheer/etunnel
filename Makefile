@@ -60,6 +60,14 @@ endif
 	# fails at release time (v1.7.36 pack-ruby). Build the gem, then discard it.
 	cd $(Sdks)/ruby && gem build etunnel.gemspec --silent >/dev/null && rm -f etunnel-*.gem && echo "ruby: gem ok"
 	cd $(Sdks)/perl && perl -c etunnel.pl > /dev/null && echo "perl: ok"
+	cd $(Sdks)/php && php -l etunnel.php > /dev/null && echo "php: ok"
+	# #427: strict type-check of the vendored TypeScript SDK (NodeNext, no emit).
+	# Offline on purpose: uses sdks/typescript/node_modules when present (devDependencies
+	# and package-lock are pinned - `npm ci` in sdks/typescript) and skips with a
+	# hint otherwise, so verify never needs the network.
+	@if [ -x $(Sdks)/typescript/node_modules/.bin/tsc ]; then \
+		cd $(Sdks)/typescript && ./node_modules/.bin/tsc -p tsconfig.json && echo "typescript: strict ok"; \
+	else echo "typescript: skipped (run npm ci in sdks/typescript to enable the strict check)"; fi
 	# README structure gate: SDK READMEs are hand-written (the generators are
 	# retired), so the sections the docs index and coding agents rely on can
 	# silently disappear. Fail with the list of what is missing.

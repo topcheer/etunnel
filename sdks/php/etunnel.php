@@ -78,10 +78,18 @@ final class Etunnel
 
     public static function connect(string $server, $local, ?string $token = null, ?string $subdomain = null, ?callable $onUrl = null, ?string $resume = null, ?array $routes = null): self
     {
-        if (is_numeric($local)) {
+        $routes = $routes !== null ? self::normalizeRoutes($routes) : null;
+        // $local may be null/'' when routes carry every path (the local=null +
+        // routes convention of the other SDKs; #430). Without routes a missing
+        // $local must not silently target 127.0.0.1:80 (#243 L5).
+        if ($local === null || $local === '') {
+            if ($routes === null) {
+                throw new InvalidArgumentException('etunnel: local address is required (pass a port, or routes)');
+            }
+            $local = null;
+        } elseif (is_numeric($local)) {
             $local = '127.0.0.1:' . $local;
         }
-        $routes = $routes !== null ? self::normalizeRoutes($routes) : null;
         if ($routes !== null && $routes === []) {
             throw new InvalidArgumentException('etunnel: routes must not be empty');
         }
@@ -181,7 +189,7 @@ final class Etunnel
         return $t;
     }
 
-    private static function serve($sock, array $req, string $body, int $sid, string $local, ?array $routes = null): void
+    private static function serve($sock, array $req, string $body, int $sid, ?string $local, ?array $routes = null): void
     {
         $method = $req['method'] ?? 'GET';
         $path = $req['path'] ?? '/';
@@ -197,6 +205,14 @@ final class Etunnel
             }
             $target = $hit['addr'];
             $path = $hit['path'];
+        } elseif ($target === null || $target === '') {
+            // Unreachable through connect() (it rejects null without routes);
+            // kept as a clean 502 instead of a TypeError in serve().
+            self::sendText($sock, json_encode(['type' => 'res', 'streamId' => $sid, 'status' => 502,
+                'headers' => ['Content-Type' => ['text/html; charset=utf-8']]]));
+            self::sendBinary($sock, self::frame(0x01, $sid, self::localErrorPage('no local target configured')));
+            self::sendBinary($sock, self::frame(0x02, $sid, ''));
+            return;
         }
         $headers = '';
         foreach (($req['headers'] ?? []) as $k => $vs) {
@@ -388,7 +404,21 @@ HTML;
     }
 }
 
-if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
+// CLI entry. Two legitimate ways to run this file (and only these):
+//   1. directly:  php etunnel.php 3000 / php vendor/ggcode/etunnel/sdks/php/etunnel.php
+//   2. through Composer's bin proxy (vendor/bin/etunnel.php), which `include`s
+//      this file after setting $GLOBALS['_composer_bin_dir'] (Composer's
+//      documented contract for bins). $argv[0] is then the proxy path, not
+//      this file - the old guard only compared realpath($argv[0]) with
+//      __FILE__, so the proxy exited silently with status 0 (#430).
+// Merely being autoloaded (composer autoload.files) into another program must
+// never start the CLI: its $argv[0] is neither this file nor our proxy.
+$argv0 = $argv[0] ?? '';
+$runDirectly = PHP_SAPI === 'cli' && $argv0 !== '' && realpath($argv0) === __FILE__;
+$runViaComposerBin = PHP_SAPI === 'cli' && $argv0 !== ''
+    && isset($GLOBALS['_composer_bin_dir'])
+    && realpath($argv0) === realpath($GLOBALS['_composer_bin_dir'] . DIRECTORY_SEPARATOR . basename(__FILE__));
+if ($runDirectly || $runViaComposerBin) {
     $server = getenv('ETUNNEL_SERVER') ?: 'wss://t.etun.uk/tunnel';
     $local = $argv[1] ?? getenv('ETUNNEL_LOCAL') ?? '3000';
     $reconnect = getenv('ETUNNEL_RECONNECT') !== '0';

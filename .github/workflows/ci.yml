@@ -23,3 +23,21 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test -count=1 ./...
+
+  # #427: the vendored TypeScript SDK must type-check under strict + NodeNext
+  # (it shipped with 6 errors because nothing ran tsc). Parallel to the Go
+  # gate so review latency is unaffected; toolchain pinned via package-lock.
+  verify-typescript-strict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - name: TypeScript strict (NodeNext)
+        working-directory: sdks/typescript
+        run: npm ci --no-audit --no-fund && npx tsc -p tsconfig.json
+      - name: PHP lint
+        run: php -l sdks/php/etunnel.php
