@@ -544,6 +544,9 @@ jobs:
           kotlinc -version
           curl -s https://get.sdkman.io | bash
           source ~/.sdkman/bin/sdkman-init.sh
+          # 'Do you want scala 3.3.9 to be set as default? (Y/n)' has no stdin in CI
+          # and aborts the install with exit 1 (v1.7.38 first Central run).
+          echo "sdkman_auto_answer=true" >> ~/.sdkman/etc/config
           sdk install scala 2.13.14
           sdk install scala 3.3.9
           ~/.sdkman/candidates/scala/2.13.14/bin/scalac -version 2>&1 | head -1
