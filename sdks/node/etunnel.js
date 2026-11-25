@@ -291,7 +291,7 @@ async function connect(server, local, opts = {}) {
   };
 }
 
-module.exports = { connect, normalizeRoutes, routeFor };
+module.exports = { connect, normalizeRoutes, routeFor, VERSION };
 
 // CLI supervisor: keep the tunnel up across drops (ETUNNEL_RECONNECT=0 opts out).
 const RETRY_MIN = 500;
