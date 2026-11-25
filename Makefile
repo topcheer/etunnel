@@ -120,7 +120,10 @@ pack-kotlin: prereq
 	  && tar czf ../../$(PACK)/etunnel-kotlin-src-$(V).tar.gz Etunnel.kt build.gradle.kts README.md
 	# Maven Central set (dev.ggcode:etunnel-kotlin): jar without the runtime +
 	# sources + javadoc + pom; signing/upload happens in CI (publish-central-kotlin-scala).
-	@if command -v kotlinc >/dev/null 2>&1; then \
+	# Opt-in (PACK_CENTRAL=1): the script downloads a Kotlin compiler and can be
+	# rate-limited (429) in the pack job; publish-central-kotlin-scala builds the
+	# set itself, so plain `make pack-all` never needs it.
+	@if [ "$(PACK_CENTRAL)" = "1" ] && command -v kotlinc >/dev/null 2>&1; then \
 	  mkdir -p $(PACK)/maven && sh scripts/build-central-kotlin-scala.sh kotlin > /dev/null \
 	  && cp $(Sdks)/kotlin/target/central/etunnel-kotlin-$(V)*.jar $(Sdks)/kotlin/pom.xml $(PACK)/maven/ \
 	  && mv $(PACK)/maven/pom.xml $(PACK)/maven/etunnel-kotlin-$(V).pom && echo "kotlin: central set $(V)"; \
@@ -135,7 +138,7 @@ pack-scala: prereq
 	# publish job only). The pack job and most dev machines have neither, and
 	# publish-central-kotlin-scala builds its own set - skip with a message
 	# instead of failing the whole release pack (v1.7.38 first run).
-	@if command -v scalac-2.13 >/dev/null 2>&1 || [ -x /opt/homebrew/opt/scala@2.13/bin/scalac ]; then \
+	@if [ "$(PACK_CENTRAL)" = "1" ] && { command -v scalac-2.13 >/dev/null 2>&1 || [ -x /opt/homebrew/opt/scala@2.13/bin/scalac ]; }; then \
 	  mkdir -p $(PACK)/maven && sh scripts/build-central-kotlin-scala.sh scala-2.13 > /dev/null \
 	  && sh scripts/build-central-kotlin-scala.sh scala-3 > /dev/null \
 	  && cp $(Sdks)/scala/target/central/etunnel_2.13-$(V)*.jar $(Sdks)/scala/target/central/etunnel_3-$(V)*.jar $(PACK)/maven/ \
