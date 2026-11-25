@@ -5,4 +5,4 @@ package etunnel
 // Config.ClientVersionLag patches behind). Stamped from VERSION by
 // scripts/bump-release.py - keep it exactly "major.minor.patch", otherwise
 // release servers would reject the SDK with client_outdated.
-const Version = "1.7.42"
+const Version = "1.7.43"

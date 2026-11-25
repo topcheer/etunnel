@@ -10,7 +10,7 @@ use Carp qw(croak);
 use threads;
 use threads::shared;
 use IO::Socket::SSL;
-our $VERSION = '1.7.42'; # reported in hello.version (stamped by scripts/bump-release.py)
+our $VERSION = '1.7.43'; # reported in hello.version (stamped by scripts/bump-release.py)
 use IO::Select;
 use IO::Socket::INET;
 use Digest::SHA qw(sha1_base64);

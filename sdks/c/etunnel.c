@@ -74,7 +74,7 @@ static volatile sig_atomic_t g_stop = 0;
  * scripts/bump-release.py (MANIFESTS entry below); -DETUNNEL_VERSION=..
  * overrides it for out-of-tree builds. */
 #ifndef ETUNNEL_VERSION
-#define ETUNNEL_VERSION "1.7.42"
+#define ETUNNEL_VERSION "1.7.43"
 #endif
 
 /* ---- multi-target local routing (PROTOCOL.md §2) ------------------------- */
