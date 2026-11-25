@@ -8,6 +8,7 @@
 
 import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
+import { exec } from 'node:child_process';
 
 const MAXP = 32768;
 
@@ -56,13 +57,15 @@ interface ReqMsg {
   headers?: Record<string, string[]>;
 }
 
-function frame(kind: number, id: number, payload: Buffer): Buffer {
-  const p = payload || Buffer.alloc(0);
+// payload is a Uint8Array (Buffer extends it): callers pass TextEncoder output
+// (Uint8Array) and Buffer slices alike; the empty FIN/CTL frames omit it.
+function frame(kind: number, id: number, payload: Uint8Array = new Uint8Array(0)): Buffer {
+  const p = payload;
   const b = Buffer.alloc(9 + p.length);
   b.writeUInt8(kind, 0);
   b.writeUInt32BE(id, 1);
   b.writeUInt32BE(p.length, 5);
-  p.copy(b, 9);
+  b.set(p, 9);
   return b;
 }
 
@@ -310,7 +313,8 @@ export async function connect(server: string, local: string | number, opts: Opti
     // and fails). Keep the wire honest (PROTOCOL.md §2 identity-body
     // invariant): restore the declared coding when zlib can, otherwise drop
     // the declaration so headers describe the entity that actually travels.
-    let buf = Buffer.from(await resp.arrayBuffer());
+    // `Buffer` (ArrayBufferLike): zlib output re-assigned below is not Buffer<ArrayBuffer>.
+    let buf: Buffer = Buffer.from(await resp.arrayBuffer());
     const ceKey = Object.keys(rh).find((k) => k.toLowerCase() === 'content-encoding');
     if (ceKey && buf.length > 0) {
       const coding = (rh[ceKey][rh[ceKey].length - 1] || '').split(',')[0].trim().toLowerCase();
@@ -490,7 +494,6 @@ export interface LoginOptions {
 }
 
 function defaultOpenBrowserTS(u: string): void {
-  const { exec } = require('child_process') as { exec: (cmd: string, cb: () => void) => void };
   const cmd = process.platform === 'darwin' ? 'open'
     : process.platform === 'win32' ? 'rundll32 url.dll,FileProtocolHandler'
     : 'xdg-open';

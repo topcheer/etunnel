@@ -42,6 +42,14 @@ ck('addr required', str_contains(msg(fn() => Etunnel::normalizeRoutes([['prefix'
 ck('must start with /', str_contains(msg(fn() => Etunnel::normalizeRoutes([['prefix' => 'api', 'addr' => 'a:1']])), "must start with"), true);
 ck('duplicate', str_contains(msg(fn() => Etunnel::normalizeRoutes([['prefix' => '/api', 'addr' => 'a:1'], ['prefix' => '/api/', 'addr' => 'a:2']])), 'duplicate'), true);
 
+// #430: local = null is allowed when routes carry every path (end-to-end:
+// tests/test_routes_null.sh) and rejected WITHOUT routes before anything is
+// dialed - it must never silently target 127.0.0.1:80 (#243 L5).
+ck('null local without routes rejected before dialing',
+    str_contains(msg(fn() => Etunnel::connect('wss://t.test/tunnel', null)), 'local address is required'), true);
+ck('empty local without routes rejected before dialing',
+    str_contains(msg(fn() => Etunnel::connect('wss://t.test/tunnel', '')), 'local address is required'), true);
+
 if ($fails === 0) { echo "php route tests: PASS\n"; exit(0); }
 echo "php route tests: FAIL ($fails)\n";
 exit(1);

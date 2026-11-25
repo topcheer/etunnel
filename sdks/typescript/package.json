@@ -21,6 +21,11 @@
   "engines": {
     "node": ">=22"
   },
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.9.3"
+  },
   "main": "etunnel.ts",
   "types": "etunnel.ts",
   "files": [
