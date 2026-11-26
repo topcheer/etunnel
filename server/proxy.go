@@ -689,6 +689,8 @@ func landingHTML(cfg Config, lang string) string {
 ` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="` + t("land.meta.desc") + `">
+<link rel="canonical" href="https://` + cfg.Domain + `/">
+` + socialMetaHTML(cfg, t("land.title"), t("land.meta.desc")) + `
 <link rel="icon" href="` + portalFavicon + `">
 <title>` + t("land.title") + `</title>
 <style>
