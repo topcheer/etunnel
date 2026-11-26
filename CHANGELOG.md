@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.49 — 2026-11-26
+
+- **feat (site)**: Open Graph / Twitter card for the landing page - `og:image` is a new 1200x630 preview (`assets/og-image.png`) served at `https://<domain>/assets/og-image.png`, plus `og:title/description/url/type` and `twitter:card=summary_large_image`, canonical link; every landing string now says 22 SDKs (was 20) in all 11 languages (PR #445). **Server deploy must copy `assets/og-image.png` next to the binary's assets dir** (RUNBOOK)
+
+## v1.7.49 — 2026-11-26
+
+- (fill in)
+
 ## v1.7.48 — 2026-11-26
 
 - release: hourly cadence (no code changes); SDKs report `hello.version` for the server-side client version gate (v1.7.40)

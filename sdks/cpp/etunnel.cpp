@@ -39,7 +39,7 @@ static const size_t MAXP = 32768;
 // scripts/bump-release.py (MANIFESTS entry below); -DETUNNEL_VERSION=..
 // overrides it for out-of-tree builds.
 #ifndef ETUNNEL_VERSION
-#define ETUNNEL_VERSION "1.7.48"
+#define ETUNNEL_VERSION "1.7.49"
 #endif
 
 // ---- CLI supervisor -----------------------------------------------------------
