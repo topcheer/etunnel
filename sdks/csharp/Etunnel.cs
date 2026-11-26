@@ -91,7 +91,7 @@ static long BackoffMs(int attempt)
 public sealed class Etunnel
 {
     /// <summary>SDK version reported in hello.version; stamped by scripts/bump-release.py.</summary>
-    public const string Version = "1.7.50";
+    public const string Version = "1.7.51";
 
     const int MAXP = 32768;
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.51 — 2026-11-26
+
+- **fix (server, SDKs)**: the `client_outdated` handshake error now points at `https://etun.uk` (product site) instead of the GitHub repo page - the text is produced by the server and relayed verbatim by every SDK, so already-published old clients get the new URL too; every rejection is logged server-side (client string, announced version, floor); all 22 SDKs' error-page footer links to etun.uk; hello_version tests compare against the registry manifest instead of a frozen `1.7.39` literal (PR #447)
+
+## v1.7.51 — 2026-11-27
+
+- (fill in)
+
 ## v1.7.50 — 2026-11-26
 
 - **feat (site, SEO/GEO)**: base-domain soft-404 fixed - unknown paths answer 404 (noindex) instead of a copy of the landing page; real `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/favicon.ico`; crawlable language landings (`/zh/`, `/ja/`, ...) with hreflang alternates while `/` keeps cookie/Accept-Language negotiation; JSON-LD (SoftwareApplication, Organization, WebSite, FAQPage) and a server-rendered FAQ in all 11 languages; language switcher links to the language URLs (PR #446)

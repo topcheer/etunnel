@@ -1,6 +1,6 @@
 {
   "name": "etunnel",
-  "version": "1.7.50",
+  "version": "1.7.51",
   "description": "etunnel HarmonyOS SDK: expose a local service on the public internet over one outbound WebSocket (ArkTS, @ohos.net.websocket)",
   "main": "Etunnel.ets",
   "keywords": ["etunnel", "tunnel", "websocket", "harmonyos", "ohpm"],
