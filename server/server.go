@@ -135,6 +135,11 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/tiers", s.handleTiers)
 	mux.HandleFunc("/healthz", s.HealthzHandler().ServeHTTP)
 	mux.HandleFunc("/pricing", s.handlePricing)
+	// Crawl surface (SEO/GEO): real files instead of the soft-404 landing.
+	mux.HandleFunc("/robots.txt", s.handleRobots)
+	mux.HandleFunc("/sitemap.xml", s.handleSitemap)
+	mux.HandleFunc("/llms.txt", s.handleLLMs)
+	mux.HandleFunc("/favicon.ico", s.handleFavicon)
 	mux.HandleFunc("/terms", s.handleTerms)
 	mux.HandleFunc("/privacy", s.handlePrivacy)
 	mux.HandleFunc("/login", s.handleLogin)

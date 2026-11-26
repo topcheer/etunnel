@@ -107,6 +107,19 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	sub, isBase, isSub := s.hostLabel(r.Host)
 	if !isSub {
 		if isBase || r.URL.Path == "/" {
+			if l := langFromPath(r.URL.Path); isBase && l != "" && l != "en" {
+				// Crawlable language landing (/zh/, /ja/, ...): explicit
+				// language wins over cookie and Accept-Language.
+				s.landingLangAt(w, l, r.URL.Path)
+				return
+			}
+			if isBase && r.URL.Path != "/" {
+				// Unknown base-domain path: a real 404, not a copy of the
+				// landing page (soft-404 diluted the whole domain and served
+				// HTML at /robots.txt).
+				s.baseNotFound(w, r)
+				return
+			}
 			s.landing(w, r)
 			return
 		}
@@ -669,9 +682,20 @@ service and reload this page - no need to restart anything.</div>
 }
 
 func (s *Server) landing(w http.ResponseWriter, r *http.Request) {
+	s.landingLang(w, pickLang(r))
+}
+
+// landingLang renders the landing in an explicit language; the canonical
+// URL is that language's own landing path (/ for en, /zh/ for zh-CN).
+func (s *Server) landingLang(w http.ResponseWriter, lang string) {
+	s.landingLangAt(w, lang, "/")
+}
+
+func (s *Server) landingLangAt(w http.ResponseWriter, lang, at string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, landingHTML(s.cfg, pickLang(r)))
+	_, _ = io.WriteString(w, landingHTML(s.cfg, lang, at))
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
@@ -680,7 +704,13 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, notFoundHTML(s.cfg, r))
 }
 
-func landingHTML(cfg Config, lang string) string {
+// landingHTML renders the landing; `at` is the request path the page is served
+// at ("/" or a language landing like "/zh/") and becomes the canonical URL, so
+// the language-negotiated root never claims a language path and vice versa.
+func landingHTML(cfg Config, lang string, at string) string {
+	if at == "" {
+		at = "/"
+	}
 	server := "wss://" + cfg.Domain + cfg.WSPath
 	qsTabs, qsPanels := quickstartHTML(server)
 	t := func(key string) string { return T(lang, key) }
@@ -689,8 +719,12 @@ func landingHTML(cfg Config, lang string) string {
 ` + analyticsSnippet + `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="` + t("land.meta.desc") + `">
-<link rel="canonical" href="https://` + cfg.Domain + `/">
-` + socialMetaHTML(cfg, t("land.title"), t("land.meta.desc")) + `
+<link rel="canonical" href="https://` + cfg.Domain + at + `">
+` + hreflangHTML(cfg, lang) + `
+<meta name="theme-color" content="#f8f3e7">
+` + socialMetaHTML(cfg, lang, at, t("land.title"), t("land.meta.desc")) + `
+<script type="application/ld+json">` + jsonLDSoftwareApplication(cfg, lang) + `</script>
+<script type="application/ld+json">` + jsonLDFaq(lang) + `</script>
 <link rel="icon" href="` + portalFavicon + `">
 <title>` + t("land.title") + `</title>
 <style>
@@ -897,6 +931,8 @@ flowchart LR
     <p class="agentfoot">` + t("land.agent.foot") + `</p>
   </div>
 </section>
+
+` + faqHTML(lang) + `
 
 <section id="pricing">
   <h2>` + t("land.price.h") + `</h2>

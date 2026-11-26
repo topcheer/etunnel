@@ -90,11 +90,12 @@ func TestLangDir(t *testing.T) {
 
 func TestLangSwitchHTML(t *testing.T) {
 	h := langSwitchHTML("en")
-	if !strings.Contains(h, `<b>English</b>`) || !strings.Contains(h, `/setlang?l=ja`) || !strings.Contains(h, "日本語") {
+	// Links target the crawlable language landings (SEO), not the cookie endpoint.
+	if !strings.Contains(h, `<b>English</b>`) || !strings.Contains(h, `<a href="/ja/" hreflang="ja">日本語</a>`) || !strings.Contains(h, `<a href="/zh/" hreflang="zh-CN">`) {
 		t.Fatalf("switcher malformed: %s", h)
 	}
 	// current language must not be a link (no self-link)
-	if strings.Count(langSwitchHTML("ja"), `/setlang?l=ja"`) != 0 {
+	if strings.Count(langSwitchHTML("ja"), `href="/ja/"`) != 0 {
 		t.Fatal("current language must be bold text, not a link")
 	}
 }
@@ -121,7 +122,7 @@ func TestLandingRenderedInLanguage(t *testing.T) {
 		if c.cookie == "" {
 			r.Header.Set("Accept-Language", "en")
 		}
-		html := landingHTML(s.cfg, pickLang(r))
+		html := landingHTML(s.cfg, pickLang(r), "/")
 		if !strings.Contains(html, `dir="`+c.dir+`"`) {
 			t.Errorf("%s: html dir attribute missing/wrong", c.name)
 		}
