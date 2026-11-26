@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.50 — 2026-11-26
+
+- **feat (site, SEO/GEO)**: base-domain soft-404 fixed - unknown paths answer 404 (noindex) instead of a copy of the landing page; real `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/favicon.ico`; crawlable language landings (`/zh/`, `/ja/`, ...) with hreflang alternates while `/` keeps cookie/Accept-Language negotiation; JSON-LD (SoftwareApplication, Organization, WebSite, FAQPage) and a server-rendered FAQ in all 11 languages; language switcher links to the language URLs (PR #446)
+
+## v1.7.50 — 2026-11-26
+
+- (fill in)
+
 ## v1.7.49 — 2026-11-26
 
 - **feat (site)**: Open Graph / Twitter card for the landing page - `og:image` is a new 1200x630 preview (`assets/og-image.png`) served at `https://<domain>/assets/og-image.png`, plus `og:title/description/url/type` and `twitter:card=summary_large_image`, canonical link; every landing string now says 22 SDKs (was 20) in all 11 languages (PR #445). **Server deploy must copy `assets/og-image.png` next to the binary's assets dir** (RUNBOOK)

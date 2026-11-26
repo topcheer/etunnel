@@ -32,7 +32,7 @@ const PING_DEADLINE = 150 * 1000;
 
 /** SDK version reported in `hello.version`. Stamped from the repository
  * VERSION by scripts/bump-release.py (MANIFESTS entry below). */
-export const VERSION = '1.7.49';
+export const VERSION = '1.7.50';
 
 export interface Route {
   prefix: string;
