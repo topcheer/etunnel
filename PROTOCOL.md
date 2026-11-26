@@ -224,7 +224,7 @@ etunnel client did not report a valid version; this server runs <sv> and require
 etunnel client <cv> is too old; this server runs <sv> and requires SDK >= <floor>. Upgrade: <url>
 ```
 
-(`<url>` is `-client-download-url`, default the project's GitHub page.) A
+(`<url>` is `-client-download-url`, default `https://etun.uk`.) A
 server built **without** the ldflags injection reports `server.Version =
 "dev"`, which is not a semver: the policy switches itself off (one warning
 line at startup), so dev builds and tests never reject anyone. Deployment

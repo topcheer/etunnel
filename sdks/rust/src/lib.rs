@@ -585,7 +585,7 @@ const ERR_PAGE_B: &str = r##"</div>
 </div>
 <div class="tip"><span class="pulse"></span><b>Fix:</b> start your local service and reload -
 the tunnel stays connected and keeps retrying for you.</div>
-<footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>
+<footer>powered by <a href="https://etun.uk">etunnel</a></footer>
 </main></body></html>"##;
 
 fn escape_html(s: &str) -> String {

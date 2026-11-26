@@ -144,8 +144,8 @@ type Config struct {
 	// server an SDK may be within the same major.minor. 0 = default (5),
 	// -1 = disabled. Older/version-less SDKs get client_outdated.
 	ClientVersionLag int
-	// ClientDownloadURL is printed in client_outdated errors (default: the
-	// project's GitHub page).
+	// ClientDownloadURL is printed in client_outdated errors (default: https://etun.uk,
+	// the product site).
 	ClientDownloadURL string
 	// MaxTunnelsPerIP24PerMin limits NEW anonymous tunnels per network prefix
 	// (/24 IPv4, /64 IPv6) per minute. Catches burst scans that rotate inside

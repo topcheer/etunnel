@@ -1,6 +1,7 @@
 // hello.version + client_outdated: the SDK reports its version in hello and
 // surfaces the server's client_outdated message verbatim (with upgrade URL).
 (globalThis).process.argv[1] = ''; // keep the SDK's CLI auto-run block out of the test
+import { readFileSync } from 'node:fs';
 const { connect, VERSION } = await import('../etunnel.ts');
 
 class FakeWS {
@@ -18,7 +19,7 @@ class FakeWS {
   close() { this.closed = true; }
 }
 
-const OUTDATED = 'etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires SDK >= 1.7.0. Upgrade: https://github.com/topcheer/etunnel';
+const OUTDATED = 'etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires SDK >= 1.7.0. Upgrade: https://etun.uk';
 
 (async () => {
   let fails = 0;
@@ -31,7 +32,8 @@ const OUTDATED = 'etunnel client 1.0.0 is too old; this server runs 9.9.9 and re
   const hello = JSON.parse(FakeWS.last.sent[0]);
   ck('hello.type', hello.type, 'hello');
   ck('hello.version === VERSION', hello.version, VERSION);
-  ck('hello.version literal', hello.version, '1.7.39');
+  // Must equal the registry manifest (the release stamp), not a frozen literal.
+  ck('hello.version === package.json', hello.version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   ck('client derived from VERSION', hello.client, `etunnel-ts/${VERSION}`);
   FakeWS.last.onmessage({ data: JSON.stringify({ type: 'welcome', proto: 1, url: 'https://f', hostname: 'f', subdomain: 'f', plan: '' }) });
   await p1;
@@ -46,7 +48,7 @@ const OUTDATED = 'etunnel client 1.0.0 is too old; this server runs 9.9.9 and re
   } catch (e) {
     ck('code attached', e.code, 'client_outdated');
     ck('message verbatim incl. URL', e.message.includes(OUTDATED), true);
-    ck('upgrade URL present', e.message.includes('https://github.com/topcheer/etunnel'), true);
+    ck('upgrade URL present', e.message.includes('https://etun.uk'), true);
   }
 
   if (fails) { console.log(`ts hello.version tests: FAIL (${fails})`); process.exit(1); }

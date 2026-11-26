@@ -15,7 +15,7 @@ const SDK_VERSION = process.env.SDK_VERSION;
 const FIXTURE_BIN = process.env.FIXTURE_BIN;
 const OUTDATED_MSG =
   'etunnel client 0.0.1 is too old; this server runs 9.9.9 and requires SDK >= 1.0.0. ' +
-  'Upgrade: https://github.com/topcheer/etunnel';
+  'Upgrade: https://etun.uk';
 
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));

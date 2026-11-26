@@ -19,7 +19,7 @@ var Version = "dev"
 // Defaults for Config.ClientVersionLag / Config.ClientDownloadURL.
 const (
 	defaultClientVersionLag  = 5
-	defaultClientDownloadURL = "https://github.com/topcheer/etunnel"
+	defaultClientDownloadURL = "https://etun.uk" // product site; carries the SDK table and install commands
 )
 
 // ClientVersionPolicy is the hello.version gate: an SDK may lag at most

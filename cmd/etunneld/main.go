@@ -46,7 +46,7 @@ func main() {
 		defaultPaid  = flag.String("paid-tier", "starter", "tier for new registrations")
 		ledgerStrict = flag.Bool("ledger-strict", func() bool { v := os.Getenv("ETUNNEL_LEDGER_STRICT"); return v == "true" || v == "1" }(), "fail startup when the PG session ledger (ETUNNEL_PG_DSN) cannot connect/migrate; default degrades to journal-only and retries every 30s (#407) (env ETUNNEL_LEDGER_STRICT)")
 		clientLag    = flag.Int("client-version-lag", envInt("ETUNNEL_CLIENT_VERSION_LAG", 5), "hello.version gate: reject SDKs more than this many patches behind the server within the same major.minor (client_outdated); -1 disables. Inactive on dev builds without -X server.Version (env ETUNNEL_CLIENT_VERSION_LAG)")
-		clientURL    = flag.String("client-download-url", os.Getenv("ETUNNEL_CLIENT_DOWNLOAD_URL"), "download URL printed in client_outdated errors (default https://github.com/topcheer/etunnel) (env ETUNNEL_CLIENT_DOWNLOAD_URL)")
+		clientURL    = flag.String("client-download-url", os.Getenv("ETUNNEL_CLIENT_DOWNLOAD_URL"), "download URL printed in client_outdated errors (default https://etun.uk) (env ETUNNEL_CLIENT_DOWNLOAD_URL)")
 		showVersion  = flag.Bool("version", false, "print etunneld's version (server.Version) and exit")
 	)
 	flag.Parse()

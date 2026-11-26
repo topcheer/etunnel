@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import websocket as _ws  # noqa: E402
 
 OUTDATED = ("etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires "
-            "SDK >= 1.7.0. Upgrade: https://github.com/topcheer/etunnel")
+            "SDK >= 1.7.0. Upgrade: https://etun.uk")
 
 
 class FakeConn:
@@ -63,7 +63,10 @@ def main() -> int:
     etunnel.connect("ws://fake/tunnel", 3000)
     hello = json.loads(fake.sent[0])
     ck("hello.version === __version__", hello.get("version"), etunnel.__version__)
-    ck("hello.version literal", hello.get("version"), "1.7.39")
+    # Must equal the registry manifest (the release stamp), not a frozen literal.
+    import tomllib
+    with open(os.path.join(os.path.dirname(__file__), "..", "pyproject.toml"), "rb") as f:
+        ck("hello.version === pyproject", hello.get("version"), tomllib.load(f)["project"]["version"])
     ck("client derived", hello.get("client"), f"etunnel-python/{etunnel.__version__}")
 
     # 2) client_outdated: message (with URL) reaches the caller as RuntimeError
@@ -75,7 +78,7 @@ def main() -> int:
         print("FAIL: client_outdated was accepted")
     except RuntimeError as e:
         ck("message verbatim incl. URL", OUTDATED in str(e), True)
-        ck("upgrade URL present", "https://github.com/topcheer/etunnel" in str(e), True)
+        ck("upgrade URL present", "https://etun.uk" in str(e), True)
 
     if fails:
         print(f"python hello.version tests: FAIL ({fails})")

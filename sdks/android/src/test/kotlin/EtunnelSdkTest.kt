@@ -626,11 +626,11 @@ class EtunnelSdkTest {
         // server error frame client_outdated: the handler records code + the
         // verbatim message (Upgrade URL included) -> connect() throws it.
         val (h, _) = handlerWithWs()
-        val msg = "etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires SDK >= 1.7.0. Upgrade: https://github.com/topcheer/etunnel"
+        val msg = "etunnel client 1.0.0 is too old; this server runs 9.9.9 and requires SDK >= 1.7.0. Upgrade: https://etun.uk"
         h.handleText("""{"type":"error","code":"client_outdated","message":"${msg}"}""")
         val err = h.error!!
         assertTrue("code surfaced: $err", err.contains("client_outdated"))
         assertTrue("message verbatim: $err", err.contains(msg))
-        assertTrue("upgrade URL: $err", err.contains("https://github.com/topcheer/etunnel"))
+        assertTrue("upgrade URL: $err", err.contains("https://etun.uk"))
     }
 }
