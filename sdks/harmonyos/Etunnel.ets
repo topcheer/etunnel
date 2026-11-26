@@ -318,7 +318,7 @@ function localErrorPage(msg: string): string {
     '<div class="panel"><div class="k">error</div><div class="v err">' + esc + '</div></div>' +
     '<div class="tip"><b>Fix:</b> start your local service and reload - ' +
     'the tunnel stays connected and keeps retrying for you.</div>' +
-    '<footer>powered by <a href="https://github.com/topcheer/etunnel">etunnel</a></footer>' +
+    '<footer>powered by <a href="https://etun.uk">etunnel</a></footer>' +
     '</main></body></html>';
 }
 

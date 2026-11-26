@@ -188,7 +188,7 @@ Integrate etunnel into this project to expose the local service on port <PORT> a
    `Origin` header - browsers are refused).
 2. Client sends `{"type":"hello","proto":1,"token"?,"subdomain"?,"client"?,"version"?,"resume"?,"policy"?}`.
    Every SDK reports its own semver in `version` (e.g. `"1.7.39"`). If the server considers it
-   too old it answers `{"type":"error","code":"client_outdated","message":"... Upgrade: https://github.com/topcheer/etunnel"}`
+   too old it answers `{"type":"error","code":"client_outdated","message":"... Upgrade: https://etun.uk"}`
    instead of a welcome; SDKs surface that message verbatim (CLI: stderr + non-zero exit, library: the connect error / on_close).
 3. Server answers `{"type":"welcome","proto":1,"url":"https://...","hostname":"...","subdomain":"...","plan":"Free","expiresAt":<unix seconds>,"resumeToken":"..."}`.
 4. For each inbound request the server sends `{"type":"req","streamId":N,"method":"GET","path":"/x","headers":{...}}`,

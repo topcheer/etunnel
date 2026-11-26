@@ -77,7 +77,7 @@ func serve(c net.Conn, first bool) {
 				v = rest[:j]
 			}
 		}
-		writeFrame(c, true, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://github.com/topcheer/etunnel"}`, v)))
+		writeFrame(c, true, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://etun.uk"}`, v)))
 		return
 	}
 

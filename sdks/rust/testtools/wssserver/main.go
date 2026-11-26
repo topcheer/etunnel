@@ -70,7 +70,7 @@ func handle(c *websocket.Conn, mode string) {
 				v = rest[:j]
 			}
 		}
-		_ = c.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://github.com/topcheer/etunnel"}`, v)))
+		_ = c.Write(ctx, websocket.MessageText, []byte(fmt.Sprintf(`{"type":"error","code":"client_outdated","message":"etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 1.7.30. Upgrade: https://etun.uk"}`, v)))
 		return
 	}
 	welcome := `{"type":"welcome","url":"http://fake.t.test","hostname":"fake.t.test","subdomain":"fake","resumeToken":"tok"}`

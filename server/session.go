@@ -297,6 +297,11 @@ func (s *Server) handleTunnelWS(w http.ResponseWriter, r *http.Request) {
 	// account/token work, so an outdated SDK is turned away cheaply and with a
 	// message that names the floor and the download URL.
 	if err := s.clientVersion.Check(hello.Version); err != nil {
+		// Observable on purpose: the error frame goes to the client only, so
+		// without this line an operator cannot tell a quiet service from one
+		// that is turning every SDK away (which SDK, which version).
+		s.logf("tunnel: client_outdated from %s: client=%q version=%q (floor %s)",
+			remoteIP(r), hello.Client, hello.Version, s.clientVersion.floorVersion())
 		s.wsErrorClose(ws, protocol.ErrCodeClientOutdated, err.Error())
 		return
 	}

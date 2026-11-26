@@ -115,7 +115,7 @@ func main() {
 			if *mode == "outdated" {
 				msg := os.Getenv("ET_TEST_OUTDATED_MSG")
 				if msg == "" {
-					msg = "etunnel client 0.0.1 is too old; this server runs 9.9.9 and requires SDK >= 1.0.0. Upgrade: https://github.com/topcheer/etunnel"
+					msg = "etunnel client 0.0.1 is too old; this server runs 9.9.9 and requires SDK >= 1.0.0. Upgrade: https://etun.uk"
 				}
 				b, _ := json.Marshal(map[string]string{"type": "error", "code": "client_outdated", "message": msg})
 				fmt.Printf("OUTDATED_SENT hello.version=%s\n", h.Version)

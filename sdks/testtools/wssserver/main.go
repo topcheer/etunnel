@@ -102,7 +102,7 @@ func handle(c *websocket.Conn, mode string) {
 		_ = json.Unmarshal(hello, &h)
 		msg := os.Getenv("ETUNNEL_FIXTURE_ERROR_MESSAGE")
 		if msg == "" {
-			msg = fmt.Sprintf("etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 9.0.0. Upgrade: https://github.com/topcheer/etunnel", h.Version)
+			msg = fmt.Sprintf("etunnel client %s is too old; this server runs 9.9.9 and requires SDK >= 9.0.0. Upgrade: https://etun.uk", h.Version)
 		}
 		b, _ := json.Marshal(map[string]string{"type": "error", "code": code, "message": msg})
 		_ = c.Write(ctx, websocket.MessageText, b)

@@ -95,6 +95,36 @@ func TestHandshakeClientVersionGate(t *testing.T) {
 	}
 }
 
+// Every rejection leaves a journal line naming the client string and the
+// version it announced (or ""), so an operator can see who is being turned
+// away; an admitted hello logs nothing here.
+func TestHandshakeClientVersionGateLogsRejection(t *testing.T) {
+	setServerVersion(t, "1.7.40")
+	cap := captureLogs(t)
+	ts := newVersionGateServer(t, nil)
+	if m := dialHello(t, ts, "1.7.40"); m["type"] != "welcome" {
+		t.Fatalf("1.7.40: want welcome, got %v", m)
+	}
+	if m := dialHello(t, ts, "1.7.30"); m["code"] != protocol.ErrCodeClientOutdated {
+		t.Fatalf("1.7.30: want client_outdated, got %v", m)
+	}
+	lines := cap.all()
+	var rejected []string
+	for _, l := range lines {
+		if strings.Contains(l, "client_outdated") {
+			rejected = append(rejected, l)
+		}
+	}
+	if len(rejected) != 1 {
+		t.Fatalf("want exactly one client_outdated log line (admitted hellos log none), got %d: %v", len(rejected), lines)
+	}
+	for _, sub := range []string{`version="1.7.30"`, `floor 1.7.35`} {
+		if !strings.Contains(rejected[0], sub) {
+			t.Errorf("log line misses %s: %s", sub, rejected[0])
+		}
+	}
+}
+
 // -client-version-lag -1 (or a dev build) keeps the gate open.
 func TestHandshakeClientVersionGateDisabled(t *testing.T) {
 	setServerVersion(t, "1.7.40")
