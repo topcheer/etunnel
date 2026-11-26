@@ -7,7 +7,7 @@ import (
 
 func TestLandingHasSocialMeta(t *testing.T) {
 	cfg := Config{Domain: "t.example.com", WSPath: "/tunnel"}
-	html := landingHTML(cfg, "en")
+	html := landingHTML(cfg, "en", "/")
 	for _, want := range []string{
 		`<meta property="og:image" content="https://t.example.com/assets/og-image.png">`,
 		`<meta property="og:title" content="etunnel - your localhost, on the internet">`,
@@ -29,7 +29,7 @@ func TestLandingHasSocialMeta(t *testing.T) {
 
 func TestSocialMetaEscapesAttributesAndPinsBaseDomain(t *testing.T) {
 	cfg := Config{Domain: "t.example.com"}
-	out := socialMetaHTML(cfg, `a "quoted" <title>`, "desc & more")
+	out := socialMetaHTML(cfg, "en", "/", `a "quoted" <title>`, "desc & more")
 	if !strings.Contains(out, `og:title" content="a &#34;quoted&#34; &lt;title&gt;"`) {
 		t.Errorf("og:title not attribute-escaped: %s", out)
 	}

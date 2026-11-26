@@ -318,9 +318,12 @@ rules: [PROTOCOL.md](PROTOCOL.md#1-handshake).
 | `GET/POST /auth/cli/grant` | browser approval page (session required); allow -> 303 back to the loopback port with a one-time code (5-min TTL) |
 | `POST /auth/cli/exchange` | `{device_code, code}` -> `{api_token, subdomains, plan, expires_at}`; free tier gets the token with an empty domain list |
 | `GET /api/tiers` | plan catalog |
-| `/` | landing page (quickstart, pricing) |
+| `/` | landing page (quickstart, FAQ, pricing); language chosen by the `et_lang` cookie, then `Accept-Language` |
+| `/zh/`, `/ja/`, `/ko/`, `/de/`, `/fr/`, `/es/`, `/pt-br/`, `/it/`, `/ru/`, `/ar/` | the same landing in one explicit language - crawlable URLs with `hreflang` alternates (`/` is `x-default`) |
+| `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/favicon.ico` | crawler files (text/plain, application/xml, the LLM doc index, a redirect to `/assets/icon.svg`) |
 | `/pricing`, `/login`, `/me` | subscription flow and account dashboard |
-| `/setlang` | UI language switch (sets the `et_lang` cookie, redirects back) |
+| `/setlang` | legacy cookie switch (`?l=`, redirects back); the language switcher links to the language landings above |
+| any other base-domain path | 404 (noindex) - the landing is no longer served for unknown paths |
 | `GET /me/domain-check?d=<sub>` | subdomain availability probe for the `/me` page (session); custom subdomains are 1-63 chars, cross-account duplicates rejected |
 | `POST /me/<action>`, `POST /auth/passkey/remove` | account state changes (`reset`/`close`/`cancel`/`domain`, passkey removal; session). Same-origin enforced (#293): the browser `Origin` or `Referer` must be the portal base domain (tunnel-subdomain origins are rejected), the body must be `application/json`, and a request with neither header is refused |
 | `POST /api/billing/checkout` | tier checkout, or premium short subdomains (`tier: "short-domain-1/2/3"`, one-time $3/$2/$1 per 30-day period; crypto floors at $2; Free accounts may buy) |

@@ -17,7 +17,7 @@ func TestAnalyticsSnippetOnOfficialPagesOnly(t *testing.T) {
 	const marker = "analytics.ggcode.dev/script.js"
 	const websiteID = `data-website-id="34638151-6e32-421d-bfe0-a364824539b9"`
 
-	landing := landingHTML(cfg, "en")
+	landing := landingHTML(cfg, "en", "/")
 	if n := strings.Count(landing, marker); n != 1 || !strings.Contains(landing, websiteID) {
 		t.Fatalf("landing analytics marker count=%d id=%v", n, strings.Contains(landing, websiteID))
 	}

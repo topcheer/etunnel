@@ -22,6 +22,17 @@ var enDict = map[string]string{
 	"btn.copied":     "copied",
 
 	// --- landing ------------------------------------------------------------
+	"land.faq.h":            "Frequently asked questions",
+	"land.faq.q1":           "What is etunnel?",
+	"land.faq.a1":           "etunnel is a reverse-tunnel service: one command gives a service running on your machine - localhost:3000, a laptop, a CI runner, a container behind NAT - a public HTTPS URL. The SDK opens one outbound WebSocket, the server relays visitor requests to you, and TLS is automatic.",
+	"land.faq.q2":           "Do I need an account?",
+	"land.faq.a2":           "No. Anonymous tunnels get a random subdomain for 4 hours with no signup. A free API key gives you a static subdomain; paid plans add a longer lifetime and more bandwidth.",
+	"land.faq.q3":           "Which languages have an SDK?",
+	"land.faq.a3":           "22 SDKs share one wire protocol: Go, Node, TypeScript, Deno, Python, Java, Kotlin, Scala, C#, Rust, Swift, Dart, Ruby, PHP, Perl, Lua, Clojure, Elixir, C, C++, Android and HarmonyOS.",
+	"land.faq.q4":           "Does it support WebSockets or streaming responses?",
+	"land.faq.a4":           "Only the Go SDK streams bodies and passes WebSocket (101) upgrades through. The other SDKs buffer each request and response, which suits webhooks, JSON APIs and dashboards but not SSE, large uploads or WebSockets.",
+	"land.faq.q5":           "Can I run my own server?",
+	"land.faq.a5":           "Yes. etunneld is a single Go binary with ACME built in; point any SDK at it with ETUNNEL_SERVER or -server, or embed it in your app with the Go SDK.",
 	"land.meta.desc":        "etunnel - expose any local service to the internet with one command. Instant public HTTPS URLs, automatic TLS, zero signup. 22 language SDKs.",
 	"land.title":            "etunnel - your localhost, on the internet",
 	"land.badge":            "zero signup &middot; automatic TLS &middot; 22 language SDKs",

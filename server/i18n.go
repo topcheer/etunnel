@@ -155,7 +155,9 @@ func T(lang, key string) string {
 }
 
 // langSwitchHTML renders the compact language switcher shared by the pages:
-// the current language bold, the rest as cookie-setting links.
+// the current language bold, the rest as links to the crawlable language
+// landings (/zh/, /ja/, ...). /setlang stays as the cookie-based fallback for
+// pages that have no language URL.
 func langSwitchHTML(current string) string {
 	var b strings.Builder
 	b.WriteString(`<div class="langsw" title="language">`)
@@ -164,7 +166,7 @@ func langSwitchHTML(current string) string {
 		if l == current {
 			b.WriteString(sep + `<b>` + uiLangNames[l] + `</b>`)
 		} else {
-			b.WriteString(sep + `<a href="/setlang?l=` + l + `">` + uiLangNames[l] + `</a>`)
+			b.WriteString(sep + `<a href="` + langPath(l) + `" hreflang="` + l + `">` + uiLangNames[l] + `</a>`)
 		}
 		sep = ` `
 	}
