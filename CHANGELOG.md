@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.52 — 2026-11-27
+
+- **fix (server, telegram)**: the admin bot's token can no longer reach the journal (net/http quotes the full `/bot<token>/...` URL in `*url.Error`; every Telegram error is now redacted), and a failing `getUpdates` poll loop is visible: first failure logged, then at most one line per 5 minutes, one `recovered` line when it clears, shutdown cancellation not logged. Root cause of the 14 h silent outage (2026-11-26): warp-svc leaked ~28k UDP sockets and exhausted the box's ephemeral ports, so every DNS lookup failed (PR #448)
+
+## v1.7.52 — 2026-11-27
+
+- (fill in)
+
 ## v1.7.51 — 2026-11-26
 
 - **fix (server, SDKs)**: the `client_outdated` handshake error now points at `https://etun.uk` (product site) instead of the GitHub repo page - the text is produced by the server and relayed verbatim by every SDK, so already-published old clients get the new URL too; every rejection is logged server-side (client string, announced version, floor); all 22 SDKs' error-page footer links to etun.uk; hello_version tests compare against the registry manifest instead of a frozen `1.7.39` literal (PR #447)

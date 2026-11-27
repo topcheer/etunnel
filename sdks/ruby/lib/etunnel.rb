@@ -32,7 +32,7 @@ HOP = %w[connection transfer-encoding keep-alive upgrade proxy-connection te tra
 
 module Etunnel
   # SDK version reported in hello.version (stamped by scripts/bump-release.py).
-  VERSION = '1.7.51'.freeze
+  VERSION = '1.7.52'.freeze
 
   def self.frame(kind, sid, payload)
     [kind].pack('C') + [sid].pack('N') + [payload.bytesize].pack('N') + payload

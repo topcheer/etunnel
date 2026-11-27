@@ -14,7 +14,7 @@
        same scala3-library_3. CI: sdk-packages.yml publish-central-kotlin-scala. -->
   <groupId>dev.ggcode</groupId>
   <artifactId>etunnel_3</artifactId>
-  <version>1.7.51</version>
+  <version>1.7.52</version>
   <!-- packaging pom: the pom itself is the main artifact; the prebuilt jar is
        attached (type jar, no classifier) by build-helper below - build-helper
        refuses a classifier-less attachment under packaging jar ("same ID as
