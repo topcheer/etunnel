@@ -1,13 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -283,5 +287,122 @@ func TestNotifyTunnelOpenDisabled(t *testing.T) {
 	fake.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("disabled bot sent %d messages (#notify tunnel-open)", n)
+	}
+}
+
+// The poll loop must make a dead bot visible: one journal line on the first
+// getUpdates failure, then rate-limited; and the bot token (which net/http
+// embeds in *url.Error) must never reach the log.
+func TestTelegramPollLoopLogsFailuresAndRedactsToken(t *testing.T) {
+	// apiBase that cannot be connected: the *url.Error carries /bot<token>/.
+	s := newBillingTestServer(t)
+	s.tg = telegramConfig{token: "12345:SECRETTOKEN", chatID: 1, apiBase: "http://127.0.0.1:1"}
+	cap := captureLogs(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); s.telegramPollLoop(ctx) }()
+	// The loop fails fast, logs once, sleeps 5 s. Two seconds is enough for
+	// the first line and proves the retry does not log again inside the window.
+	time.Sleep(2 * time.Second)
+	cancel()
+	<-done // the loop must be gone before captureLogs restores logPrintf
+	var fails []string
+	for _, l := range cap.all() {
+		if strings.Contains(l, "getUpdates failed") {
+			fails = append(fails, l)
+		}
+		if strings.Contains(l, "SECRETTOKEN") {
+			t.Fatalf("bot token leaked into the journal: %s", l)
+		}
+	}
+	if len(fails) != 1 {
+		t.Fatalf("want exactly one getUpdates failed line in 2 s (first failure, then rate-limited), got %d: %v", len(fails), cap.all())
+	}
+	if !strings.Contains(fails[0], "/bot***/getUpdates") {
+		t.Errorf("failure line should name the redacted URL: %s", fails[0])
+	}
+}
+
+// The loop logs "recovered" exactly once when a failing poll starts working.
+// The endpoint flips from dropping connections to serving getUpdates behind an
+// atomic flag (no field swap under the loop).
+func TestTelegramPollLoopLogsRecovery(t *testing.T) {
+	var healthy atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !healthy.Load() {
+			// Drop the connection mid-request: the client sees an error.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "down", http.StatusBadGateway)
+				return
+			}
+			c, _, err := hj.Hijack()
+			if err == nil {
+				_ = c.Close()
+			}
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	t.Cleanup(srv.Close)
+	s := newTGTestServer(t, srv, 1)
+	cap := captureLogs(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); s.telegramPollLoop(ctx) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if l := cap.all(); len(l) > 0 && strings.Contains(l[0], "getUpdates failed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	healthy.Store(true)
+	// The loop is inside its 5 s retry sleep; wait for the recovery line
+	// instead of a fixed sleep so -race and a loaded CI runner cannot skew it.
+	count := func() (int, int) {
+		var fails, recovers int
+		for _, l := range cap.all() {
+			switch {
+			case strings.Contains(l, "getUpdates failed"):
+				fails++
+			case strings.Contains(l, "getUpdates recovered"):
+				recovers++
+			}
+		}
+		return fails, recovers
+	}
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, r := count(); r >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	fails, recovers := count()
+	if fails != 1 || recovers != 1 {
+		t.Fatalf("want 1 failure + 1 recovery line, got %d/%d: %v", fails, recovers, cap.all())
+	}
+}
+
+func TestRedactTGErrors(t *testing.T) {
+	err := fmt.Errorf(`Post "https://api.telegram.org/bot12:ABC/getMe": dial tcp: lookup api.telegram.org`)
+	got := redactTG(err, "12:ABC")
+	if got.Error() != `Post "https://api.telegram.org/bot***/getMe": dial tcp: lookup api.telegram.org` {
+		t.Fatalf("redaction failed: %s", got.Error())
+	}
+	if errors.Is(got, err) {
+		t.Fatal("redacted wrapper must not unwrap to the token-bearing error")
+	}
+	if redactTG(err, "") != err || redactTG(nil, "x") != nil {
+		t.Fatal("redactTG must pass through when there is nothing to redact")
 	}
 }
