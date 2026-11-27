@@ -65,18 +65,45 @@ func (s *Server) telegramAPI(ctx context.Context, method string, payload any) (m
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 40 * time.Second}).Do(req)
 	if err != nil {
-		return nil, err
+		// *url.Error embeds the full request URL - with the bot token in it.
+		// Callers log these errors (#353), so the token must never reach the
+		// journal: every error leaving this function goes through redactTG.
+		return nil, redactTG(fmt.Errorf("telegram %s: %w", method, err), s.tg.token)
 	}
 	defer resp.Body.Close()
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		return nil, redactTG(fmt.Errorf("telegram %s: %w", method, err), s.tg.token)
 	}
 	if ok, _ := out["ok"].(bool); !ok {
 		return nil, fmt.Errorf("telegram %s: %v", method, out["description"])
 	}
 	return out, nil
 }
+
+// redactTG removes the bot token from an error text. The Telegram API URL
+// carries it in the path (/bot<token>/method); net/http quotes that URL
+// verbatim in *url.Error, so a connection failure would otherwise log the
+// credential (seen in production: "sendMessage failed: Post \"https://api.telegram.org/bot<token>/...\"").
+func redactTG(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, token) {
+		return err
+	}
+	return &tgRedactedError{msg: strings.ReplaceAll(msg, token, "***")}
+}
+
+type tgRedactedError struct {
+	msg string
+}
+
+func (e *tgRedactedError) Error() string { return e.msg }
+
+// Deliberately no Unwrap: the wrapped error still carries the token, and no
+// caller inspects Telegram errors with errors.Is/As - only logs them.
 
 func (s *Server) tgSend(ctx context.Context, text string) {
 	s.tgSendKB(ctx, text, nil)
@@ -123,8 +150,14 @@ var menuAliases = map[string]string{
 	"❓ Help": "/help",
 }
 
+// telegramPollFailureLogEvery bounds how often a failing poll loop writes to
+// the journal: the first failure, then at most one line per interval.
+var telegramPollFailureLogEvery = 5 * time.Minute
+
 func (s *Server) telegramPollLoop(ctx context.Context) {
 	offset := 0
+	failing := false
+	var lastLog time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,12 +170,28 @@ func (s *Server) telegramPollLoop(ctx context.Context) {
 			"allowed_updates": []string{"message"},
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				return // shutdown cancelled the in-flight poll: not an outage
+			}
+			// A silent retry loop made a dead bot indistinguishable from a quiet
+			// one (2026-11-26: DNS broke box-wide for 14 h, every admin command
+			// went unanswered, nothing in the journal). Log the first failure and
+			// then one line per interval; one "recovered" line when it clears.
+			if !failing || time.Since(lastLog) >= telegramPollFailureLogEvery {
+				s.logf("telegram: getUpdates failed (bot commands unanswered until it clears): %v", err)
+				lastLog = time.Now()
+			}
+			failing = true
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(5 * time.Second):
 			}
 			continue
+		}
+		if failing {
+			s.logf("telegram: getUpdates recovered - admin commands answered again")
+			failing = false
 		}
 		updates, _ := out["result"].([]any)
 		for _, u := range updates {
